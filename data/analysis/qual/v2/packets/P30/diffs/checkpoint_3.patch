@@ -1,0 +1,107 @@
+### industry.py (modified)
+--- industry.py
++++ industry.py
+@@ -8,6 +8,7 @@
+ import os
+ import sys
+ from decimal import Decimal, InvalidOperation
++from fractions import Fraction
+ 
+ try:
+     import yaml
+@@ -512,7 +513,29 @@
+     return "\n".join(lines)
+ 
+ 
+-def render(sde, product, bp, aid):
++MAX_ME = 10
++
++
++def material_amount(qty, me, runs=1):
++    """Amount needed = ceil(max(1, qty * (1 - ME/100) * runs)), computed exactly."""
++    return math.ceil(max(1, Fraction(qty) * (100 - me) / 100 * runs))
++
++
++def efficiency_arg(name, upper, even=False):
++    def parse(value):
++        try:
++            num = int(value)
++        except ValueError:
++            raise argparse.ArgumentTypeError(f"{name} must be an integer, got '{value}'")
++        if not 0 <= num <= upper:
++            raise argparse.ArgumentTypeError(f"{name} must be in range [0,{upper}], got {num}")
++        if even and num % 2:
++            raise argparse.ArgumentTypeError(f"{name} must be an even integer, got {num}")
++        return num
++    return parse
++
++
++def render(sde, product, bp, aid, me=0, te=0, waste=False):
+     t = sde.types[product]
+     category, group = sde.category_group(product)
+     qty = 1
+@@ -520,8 +543,10 @@
+         if pid == product:
+             qty = q
+             break
++    if aid != MANUFACTURING:
++        me = te = 0
+     seconds = sde.activity_time.get((bp, aid), 0) or 0
+-    minutes = math.ceil(seconds / 60)
++    minutes = math.ceil(Fraction(seconds) * (100 - te) / 100 / 60)
+ 
+     lines = [
+         f"ITEM: {t['name']} ({product})",
+@@ -534,9 +559,11 @@
+         f"Activity: {ACTIVITY_NAMES[aid]}",
+         f"Output Quantity: {qty}",
+         f"Run Time: {minutes}",
+-        "| Item | Quantity | Buildable |",
+-        "|:-:|:---:|---:|",
+     ]
++    if waste:
++        lines += ["| Item | Quantity | Waste | Buildable |", "|:-:|:---:|:---:|---:|"]
++    else:
++        lines += ["| Item | Quantity | Buildable |", "|:-:|:---:|---:|"]
+     rows = []
+     for mid, mqty in sde.materials.get((bp, aid), {}).items():
+         mt = sde.types.get(mid)
+@@ -545,7 +572,12 @@
+     rows.sort(key=lambda r: (r[0], r[1], r[2]))
+     for _, mname, mid, mqty in rows:
+         buildable = "Yes" if sde.is_buildable(mid) else "No"
+-        lines.append(f"| {mname} | {mqty} | {buildable} |")
++        needed = material_amount(mqty, me)
++        if waste:
++            extra = needed - material_amount(mqty, MAX_ME if aid == MANUFACTURING else 0)
++            lines.append(f"| {mname} | {needed} | {extra} | {buildable} |")
++        else:
++            lines.append(f"| {mname} | {needed} | {buildable} |")
+     return "\n".join(lines)
+ 
+ 
+@@ -555,6 +587,14 @@
+     rp = sub.add_parser("recipe", help="Show the recipe for a product or blueprint")
+     rp.add_argument("name", nargs="+", help="Exact product or blueprint typeName")
+     rp.add_argument("--sde", required=True, help="Path to SDE directory")
++    rp.add_argument("--material-efficiency", "-me", dest="me", default=0, metavar="ME",
++                    type=efficiency_arg("Material efficiency", 10),
++                    help="Material efficiency, integer in [0,10] (default 0)")
++    rp.add_argument("--time-efficiency", "-te", dest="te", default=0, metavar="TE",
++                    type=efficiency_arg("Time efficiency", 20, even=True),
++                    help="Time efficiency, even integer in [0,20] (default 0)")
++    rp.add_argument("--display-waste", "-waste", dest="waste", action="store_true",
++                    help="Display material waste due to ME not being max")
+     ip = sub.add_parser("invention", help="Plan invention / reverse engineering for a product or blueprint")
+     ip.add_argument("name", nargs="+", help="Exact product or blueprint typeName")
+     ip.add_argument("--sde", required=True, help="Path to SDE directory")
+@@ -588,7 +628,7 @@
+         except LookupError as exc:
+             print(f"Error: {exc}", file=sys.stderr)
+             return 1
+-        sys.stdout.write(render(sde, product, bp, aid) + "\n")
++        sys.stdout.write(render(sde, product, bp, aid, args.me, args.te, args.waste) + "\n")
+         return 0
+     return 1
+ 
+

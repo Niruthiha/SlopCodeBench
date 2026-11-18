@@ -1,0 +1,392 @@
+### eve_industry/cli.py (modified)
+--- eve_industry/cli.py
++++ eve_industry/cli.py
+@@ -9,7 +9,7 @@
+ from .invention import InventionData, InventionError, InventionPlanner, render_invention
+ from .inventory import Inventory
+ from .item_info import describe
+-from .plan import BuildPlanner, PlanError, load_config, write_plan
++from .plan import BuildPlanner, PlanError, load_config, load_quantities, write_plan
+ from .recipe import MAX_MATERIAL_EFFICIENCY, MAX_TIME_EFFICIENCY, RecipeError, RecipeResolver
+ from .report import render
+ from .sde_loader import SDEFileError
+@@ -68,6 +68,8 @@
+     plan.add_argument("--output", required=True, help="Directory to write the CSV files to")
+     plan.add_argument("--build-all", dest="build_all", action="store_true",
+                       help="Also build every buildable component in the tree")
++    plan.add_argument("--stocks", help="Text file of '{Item Name} {Quantity}' lines already on hand")
++    plan.add_argument("--targets", help="Text file of '{Item Name} {Quantity}' stock levels to maintain")
+     return parser
+ 
+ 
+@@ -89,14 +91,18 @@
+ 
+ 
+ def run_plan(build: str, config_path: Path, sde_dir: Path, output_dir: Path,
+-             build_all: bool = False) -> None:
++             build_all: bool = False, stocks_path: Optional[Path] = None,
++             targets_path: Optional[Path] = None) -> None:
+     config = load_config(config_path)
+     inventory = Inventory(sde_dir)
++    stocks = load_quantities(stocks_path, inventory, "Stocks") if stocks_path else {}
++    targets = load_quantities(targets_path, inventory, "Targets") if targets_path else {}
+     published = {t.type_id for t in inventory.types.values() if t.published}
+     industry = IndustryData(sde_dir, published)
+     invention = InventionData(sde_dir, published)
+     planner = BuildPlanner(inventory, industry, invention)
+-    plan = planner.plan(planner.parse(build), config, build_all=build_all)
++    plan = planner.plan(planner.parse(build), config, build_all=build_all,
++                        stocks=stocks, targets=targets)
+     write_plan(plan, inventory, output_dir)
+ 
+ 
+@@ -113,7 +119,9 @@
+         elif args.command == "invention":
+             print(run_invention(name, sde_dir, args.skill))
+         elif args.command == "plan":
+-            run_plan(name, Path(args.config), sde_dir, Path(args.output), args.build_all)
++            run_plan(name, Path(args.config), sde_dir, Path(args.output), args.build_all,
++                     Path(args.stocks) if args.stocks else None,
++                     Path(args.targets) if args.targets else None)
+         else:
+             return 2
+     except (RecipeError, InventionError, PlanError, SDEFileError) as exc:
+
+### eve_industry/plan.py (modified)
+--- eve_industry/plan.py
++++ eve_industry/plan.py
+@@ -6,7 +6,7 @@
+ from collections import defaultdict
+ from dataclasses import dataclass, field
+ from pathlib import Path
+-from typing import Dict, List, Optional, Tuple
++from typing import Callable, Dict, List, Optional, Tuple
+ 
+ from . import constants as C
+ from .industry_data import ActivityKey, IndustryData
+@@ -30,6 +30,7 @@
+ 
+ _JOBS_RE = re.compile(r"^[xX](\d+)$")
+ _INT_RE = re.compile(r"^\d+$")
++_QUANTITY_RE = re.compile(r"^(\d[\d,_]*)(?:\.0*)?[,;:]?$")
+ 
+ 
+ class PlanError(Exception):
+@@ -69,13 +70,18 @@
+     count: int
+ 
+ 
++@dataclass(frozen=True)
++class MaterialRow:
++    to_buy: int
++    start_amount: int
++    end_amount: int
++
++
+ @dataclass
+ class BuildPlan:
+     jobs: List[Job] = field(default_factory=list)
+-    # typeID -> quantity to buy
+-    purchases: Dict[int, int] = field(default_factory=dict)
+-    # typeID -> surplus left over after the build
+-    leftovers: Dict[int, int] = field(default_factory=dict)
++    # typeID -> purchase and stock levels before / after the build
++    materials: Dict[int, MaterialRow] = field(default_factory=dict)
+ 
+ 
+ def load_config(path: Path) -> PlanConfig:
+@@ -215,45 +221,53 @@
+ 
+     # --- planning ----------------------------------------------------------
+ 
+-    def plan(self, spec: BuildSpec, config: PlanConfig, build_all: bool = False) -> BuildPlan:
+-        purchases: Dict[int, int] = defaultdict(int)
++    def plan(self, spec: BuildSpec, config: PlanConfig, build_all: bool = False,
++             stocks: Optional[Dict[int, int]] = None,
++             targets: Optional[Dict[int, int]] = None) -> BuildPlan:
++        stocks = dict(stocks or {})
++        targets = dict(targets or {})
++        # typeID -> quantity consumed by jobs / invention
++        demand: Dict[int, int] = defaultdict(int)
++        # typeID -> quantity produced for stock (the build string's output is excluded)
++        produced: Dict[int, int] = defaultdict(int)
++        jobs: Dict[Tuple[str, int], Job] = {}
++
+         me, te = spec.me, spec.te
+         if spec.invented:
+-            me, te = self._plan_invention(spec, config, purchases)
+-
+-        blueprint_id, activity_id = spec.blueprint_key
+-        if activity_id != C.MANUFACTURING:
++            me, te = self._plan_invention(spec, config, demand)
++
++        if spec.blueprint_key[1] != C.MANUFACTURING:
+             me = te = 0
+ 
+-        if not build_all:
+-            for material_id, qty in self.industry.materials.get(spec.blueprint_key, {}).items():
+-                purchases[material_id] += _job_material(qty, me, spec.runs) * spec.jobs
+-            job = self._job(spec.blueprint_key, spec.runs, te, spec.jobs, config)
+-            return BuildPlan(jobs=[job], purchases=dict(purchases))
+-
+-        demand: Dict[int, int] = defaultdict(int)
+-        jobs: Dict[Tuple[str, int], Job] = {}
+-
+-        def schedule(key: ActivityKey, runs: int, count: int, me: int, te: int) -> None:
++        def should_build(type_id: int) -> bool:
++            if not self.industry.is_buildable(type_id):
++                return False
++            return build_all or type_id in targets
++
++        def add_job(job: Job) -> None:
++            previous = jobs.get((job.name, job.runs))
++            if previous is not None:
++                job = Job(job.name, job.runs, job.days, previous.count + job.count)
++            jobs[(job.name, job.runs)] = job
++
++        def schedule(key: ActivityKey, chunks: List[Tuple[int, int]], me: int, te: int,
++                     split: bool = True) -> None:
+             days_per_run = self._days_per_run(key, te, config)
+-            for job_runs, job_count in split_runs(runs, days_per_run, config.split_days):
+-                job = self._job(key, job_runs, te, job_count * count, config)
+-                previous = jobs.get((job.name, job.runs))
+-                if previous is not None:
+-                    job = Job(job.name, job.runs, job.days, previous.count + job.count)
+-                jobs[(job.name, job.runs)] = job
+-                for material_id, qty in self.industry.materials.get(key, {}).items():
+-                    amount = _job_material(qty, me, job_runs) * job_count * count
+-                    if self.industry.is_buildable(material_id):
+-                        demand[material_id] += amount
+-                    else:
+-                        purchases[material_id] += amount
+-
+-        schedule(spec.blueprint_key, spec.runs, spec.jobs, me, te)
+-
+-        leftovers: Dict[int, int] = {}
+-        for type_id in self._consumer_order(spec.blueprint_key):
+-            needed = demand.get(type_id, 0)
++            for runs, count in chunks:
++                parts = split_runs(runs, days_per_run, config.split_days) if split else [(runs, 1)]
++                for job_runs, job_count in parts:
++                    add_job(self._job(key, job_runs, te, job_count * count, config))
++                    for material_id, qty in self.industry.materials.get(key, {}).items():
++                        demand[material_id] += _job_material(qty, me, job_runs) * job_count * count
++
++        schedule(spec.blueprint_key, [(spec.runs, spec.jobs)], me, te, split=build_all)
++
++        roots = sorted(m for m in self.industry.materials.get(spec.blueprint_key, {})
++                       if should_build(m))
++        roots += sorted(t for t in targets if should_build(t))
++        for type_id in self._consumer_order(roots, should_build):
++            needed = (demand.get(type_id, 0) + targets.get(type_id, 0)
++                      - stocks.get(type_id, 0) - produced.get(type_id, 0))
+             if needed <= 0:
+                 continue
+             key = self.industry.sources_of(type_id)[0]
+@@ -261,13 +275,26 @@
+             if per_run <= 0:
+                 raise PlanError(f"'{self.inventory.type_name(type_id)}' cannot be built")
+             runs = -(-needed // per_run)
+-            surplus = runs * per_run - needed
+-            if surplus:
+-                leftovers[type_id] = surplus
+-            component_me, component_te = self._component_efficiency(type_id, key, config)
+-            schedule(key, runs, 1, component_me, component_te)
+-
+-        return BuildPlan(jobs=list(jobs.values()), purchases=dict(purchases), leftovers=leftovers)
++            produced[type_id] += runs * per_run
++            if type_id in targets and self._is_invented(key):
++                bpc_runs, inv_me, inv_te = self._plan_target_invention(type_id, runs, config, demand)
++                chunks = [(r, c) for r, c in ((bpc_runs, runs // bpc_runs), (runs % bpc_runs, 1))
++                          if r > 0 and c > 0]
++                schedule(key, chunks, inv_me, inv_te)
++            else:
++                component_me, component_te = self._component_efficiency(type_id, key, config)
++                schedule(key, [(runs, 1)], component_me, component_te)
++
++        materials: Dict[int, MaterialRow] = {}
++        for type_id in set(demand) | set(targets) | set(produced):
++            consumed = demand.get(type_id, 0)
++            start = stocks.get(type_id, 0)
++            made = produced.get(type_id, 0)
++            to_buy = max(0, consumed + targets.get(type_id, 0) - start - made)
++            end = start + made + to_buy - consumed
++            if to_buy > 0 or (start > 0 and consumed > 0) or (made > 0 and end > 0):
++                materials[type_id] = MaterialRow(to_buy, start, end)
++        return BuildPlan(jobs=list(jobs.values()), materials=materials)
+ 
+     def _job(self, key: ActivityKey, runs: int, te: int, count: int, config: PlanConfig) -> Job:
+         seconds = self.industry.times.get(key, 0) * runs
+@@ -299,21 +326,21 @@
+             return True
+         return CAPITAL_MARKET_GROUP in (self.inventory.market_group_path(item) or [])
+ 
+-    def _consumer_order(self, root: ActivityKey) -> List[int]:
+-        """Buildable materials reachable from ``root``, each listed after all of its consumers."""
++    def _consumer_order(self, roots: List[int], expand: Callable[[int], bool]) -> List[int]:
++        """Items in ``roots`` and their materials passing ``expand``, each after all of its consumers."""
+         order: List[int] = []
+         state: Dict[int, int] = {}  # 1 = in progress, 2 = done
+ 
+-        def materials_of(key: ActivityKey) -> List[int]:
+-            return sorted(m for m in self.industry.materials.get(key, {})
+-                          if self.industry.is_buildable(m))
++        def materials_of(type_id: int) -> List[int]:
++            key = self.industry.sources_of(type_id)[0]
++            return sorted(m for m in self.industry.materials.get(key, {}) if expand(m))
+ 
+         stack: List[Tuple[int, List[int]]] = []
+-        for material_id in materials_of(root):
++        for material_id in roots:
+             if material_id in state:
+                 continue
+             state[material_id] = 1
+-            stack.append((material_id, materials_of(self.industry.sources_of(material_id)[0])))
++            stack.append((material_id, materials_of(material_id)))
+             while stack:
+                 type_id, pending = stack[-1]
+                 if pending:
+@@ -324,7 +351,7 @@
+                             f"Circular recipe involving '{self.inventory.type_name(child)}'")
+                     if seen is None:
+                         state[child] = 1
+-                        stack.append((child, materials_of(self.industry.sources_of(child)[0])))
++                        stack.append((child, materials_of(child)))
+                     continue
+                 stack.pop()
+                 state[type_id] = 2
+@@ -332,9 +359,40 @@
+         order.reverse()
+         return order
+ 
++    def _is_invented(self, key: ActivityKey) -> bool:
++        return key[1] == C.MANUFACTURING and bool(self.invention.sources_of(key[0]))
++
++    def _plan_target_invention(self, type_id: int, runs: int, config: PlanConfig,
++                               demand: Dict[int, int]) -> Tuple[int, int, int]:
++        """Invent blueprints (no decryptor) for ``runs`` runs of a stock target.
++
++        Adds the invention inputs to ``demand``; returns (runs per blueprint, ME, TE).
++        """
++        name = self.inventory.type_name(type_id)
++        planner = InventionPlanner(self.inventory, self.industry, self.invention)
++        try:
++            invention = planner.plan(name, config.invention_skill)
++        except InventionError as exc:
++            raise PlanError(str(exc))
++        row = next((r for r in invention.rows
++                    if r.decryptor == NO_DECRYPTOR and r.probability > 0 and r.runs > 0), None)
++        if row is None:
++            raise PlanError(f"'{name}' cannot be invented with these inputs")
++        is_t3 = invention.tech_level == "Tech III"
++        blueprints = math.ceil(runs / row.runs)
++        attempts = math.ceil(blueprints / row.probability - 1e-9)
++        sources = self.invention.sources_of(self.industry.sources_of(type_id)[0][0])
++        source = sources[0]
++        if is_t3:
++            source = next(k for k in sources if self.inventory.type_name(k[0]) == row.invented_from)
++            demand[source[0]] += attempts
++        for material_id, qty in self.invention.materials.get(source, {}).items():
++            demand[material_id] += qty * attempts
++        return row.runs, row.me, row.te
++
+     def _plan_invention(self, spec: BuildSpec, config: PlanConfig,
+-                        purchases: Dict[int, int]) -> Tuple[int, int]:
+-        """Add invention inputs to ``purchases``; return the invented blueprint's (ME, TE)."""
++                        demand: Dict[int, int]) -> Tuple[int, int]:
++        """Add invention inputs to ``demand``; return the invented blueprint's (ME, TE)."""
+         planner = InventionPlanner(self.inventory, self.industry, self.invention)
+         try:
+             invention = planner.plan(spec.product.name, config.invention_skill)
+@@ -361,11 +419,11 @@
+ 
+         source = self._invention_source(spec, is_t3)
+         for material_id, qty in self.invention.materials.get(source, {}).items():
+-            purchases[material_id] += qty * attempts
++            demand[material_id] += qty * attempts
+         if spec.decryptor != NO_DECRYPTOR:
+-            purchases[self._type_id(spec.decryptor)] += attempts
++            demand[self._type_id(spec.decryptor)] += attempts
+         if is_t3:
+-            purchases[source[0]] += attempts
++            demand[source[0]] += attempts
+         return row.me, row.te
+ 
+     def _invention_source(self, spec: BuildSpec, is_t3: bool) -> ActivityKey:
+@@ -382,6 +440,45 @@
+         if not candidates:
+             raise PlanError(f"No published item named '{name}' found in the SDE")
+         return candidates[0].type_id
++
++
++def load_quantities(path: Path, inventory: Inventory, what: str) -> Dict[int, int]:
++    """Parse a '{Item Name} {Quantity} ...' file into typeID -> quantity.
++
++    Anything after the quantity is ignored; blank lines and '#' comments are skipped.
++    """
++    if not path.is_file():
++        raise PlanError(f"{what} file not found: {path}")
++    folded: Dict[str, List[InvType]] = defaultdict(list)
++    for name, items in inventory.types_by_name.items():
++        folded[name.lower()].extend(items)
++    quantities: Dict[int, int] = defaultdict(int)
++    with open(path, "r", encoding="utf-8-sig") as fh:
++        for number, line in enumerate(fh, 1):
++            tokens = line.split()
++            if not tokens or tokens[0].startswith("#"):
++                continue
++            parsed = _parse_quantity_line(tokens, inventory, folded)
++            if parsed is None:
++                raise PlanError(f"{what} file {path}, line {number}: cannot parse '{line.strip()}'")
++            type_id, quantity = parsed
++            quantities[type_id] += quantity
++    return dict(quantities)
++
++
++def _parse_quantity_line(tokens: List[str], inventory: Inventory,
++                         folded: Dict[str, List[InvType]]) -> Optional[Tuple[int, int]]:
++    # Longest item name first, so names containing numbers still resolve.
++    for split in range(len(tokens) - 1, 0, -1):
++        match = _QUANTITY_RE.match(tokens[split])
++        if not match:
++            continue
++        name = " ".join(tokens[:split])
++        items = inventory.published_by_name(name) or sorted(
++            folded.get(name.lower(), []), key=lambda t: t.type_id)
++        if items:
++            return items[0].type_id, int(match.group(1).replace(",", "").replace("_", ""))
++    return None
+ 
+ 
+ def _job_material(per_run: int, me: int, runs: int) -> int:
+@@ -410,12 +507,13 @@
+     output_dir.mkdir(parents=True, exist_ok=True)
+ 
+     rows = []
+-    for type_id in set(plan.purchases) | set(plan.leftovers):
+-        quantity = plan.purchases.get(type_id, 0)
++    for type_id, material in plan.materials.items():
++        quantity = material.to_buy
+         item = inventory.types.get(type_id)
+         name = inventory.type_name(type_id)
+         volume = inventory.packaged_volume(item) if item else 0.0
+-        rows.append((name, quantity, round(quantity * volume, 2), 0, plan.leftovers.get(type_id, 0)))
++        rows.append((name, quantity, round(quantity * volume, 2),
++                     material.start_amount, material.end_amount))
+     rows.sort(key=lambda r: r[0])
+     with open(output_dir / "materials.csv", "w", newline="", encoding="utf-8") as fh:
+         writer = csv.writer(fh, lineterminator="\n")
+
+### industry.py (modified)
+--- industry.py
++++ industry.py
+@@ -4,7 +4,7 @@
+         [--material-efficiency/-me <0-10>] [--time-efficiency/-te <even 0-20>] [--display-waste/-waste]
+     python industry.py invention <Product or Blueprint name> --sde <SDE directory> [--skill <1-5>]
+     python industry.py plan <Build string> --config <YAML config> --sde <SDE directory> --output <dir>
+-        [--build-all]
++        [--build-all] [--stocks <file>] [--targets <file>]
+ """
+ 
+ import sys
+

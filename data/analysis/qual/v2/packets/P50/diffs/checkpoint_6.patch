@@ -1,0 +1,426 @@
+### catalog.py (modified)
+--- catalog.py
++++ catalog.py
+@@ -38,6 +38,10 @@
+         """Published type IDs whose name matches exactly, ascending."""
+         return sorted(self._ids_by_name.get(name, []))
+ 
++    def names(self):
++        """Every published item name, sorted."""
++        return sorted(self._ids_by_name)
++
+     def is_valid(self, type_id):
+         return type_id in self._types
+ 
+
+### industry.py (modified)
+--- industry.py
++++ industry.py
+@@ -5,7 +5,7 @@
+       [-me <0-10>] [-te <0-20, even>] [-waste]
+   python industry.py invention <Product or Blueprint name> --sde <SDE directory> [--skill <1-5>]
+   python industry.py plan <Build string> --config <YAML file> --sde <SDE directory>
+-      --output <output directory> [--build-all]
++      --output <output directory> [--build-all] [--stocks <file>] [--targets <file>]
+ 
+ This module only parses arguments and wires the other modules together.
+ """
+@@ -23,6 +23,7 @@
+ import plan_report
+ import planner
+ import report
++import stock_list
+ import volumes
+ 
+ 
+@@ -117,7 +118,8 @@
+     return defaults.get("me", 10), defaults.get("te", 20)
+ 
+ 
+-def _build_plan(text, config_path, sde_dir, output_dir, build_all=False):
++def _build_plan(text, config_path, sde_dir, output_dir, build_all=False,
++                stocks_path=None, targets_path=None):
+     with open(config_path, encoding="utf-8") as handle:
+         config = yaml.safe_load(handle) or {}
+     if not isinstance(config, dict):
+@@ -134,7 +136,11 @@
+     request = build_string.parse(
+         text, invention.decryptor_names(), builder.is_item, builder.is_relic
+     )
+-    plan_report.write(builder.plan(request, build_all=build_all), output_dir)
++    stocks = stock_list.read(stocks_path, builder.canonical_name) if stocks_path else {}
++    targets = stock_list.read(targets_path, builder.canonical_name) if targets_path else {}
++    plan_report.write(
++        builder.plan(request, build_all=build_all, stocks=stocks, targets=targets), output_dir
++    )
+ 
+ 
+ def _efficiency(low, high, step, label):
+@@ -178,12 +184,15 @@
+     plan.add_argument("--output", required=True, help="output directory for the CSV files")
+     plan.add_argument("--build-all", dest="build_all", action="store_true",
+                       help="also build every buildable component in the tree")
++    plan.add_argument("--stocks", help="file listing items on hand, '{Item Name} {Quantity}'")
++    plan.add_argument("--targets", help="file listing stock levels to maintain, "
++                                        "'{Item Name} {Quantity}'")
+     args = parser.parse_args(argv)
+ 
+     try:
+         if args.command == "plan":
+             _build_plan(" ".join(args.build), args.config, args.sde, args.output,
+-                        args.build_all)
++                        args.build_all, args.stocks, args.targets)
+             return 0
+         if args.command == "invention":
+             text = _build_invention_report(" ".join(args.name), args.sde, args.skill)
+
+### planner.py (modified)
+--- planner.py
++++ planner.py
+@@ -5,7 +5,9 @@
+ expected, which inputs are consumed per job or attempt, and how time and
+ material efficiency bonuses combine; with build-all, how the whole
+ buildable tree below the product is resolved into component jobs, which
+-efficiencies components use, and how long jobs are split.
++efficiencies components use, and how long jobs are split; how stock on
++hand is drawn on before building or buying, and how stock targets are
++met by building (inventing without a decryptor) or buying.
+ """
+ 
+ import math
+@@ -88,9 +90,20 @@
+         self._industry = blueprints.Industry(sde_dir, self._items)
+         self._invention = invention.Invention(sde_dir, self._items)
+         self._volumes = volumes.VolumeResolver(sde_dir, self._items)
++        self._names_by_lower = None
+ 
+     def is_item(self, name):
+         return bool(self._items.ids_named(name))
++
++    def canonical_name(self, name):
++        """The published item name matching `name` (exactly, else ignoring case)."""
++        if self._items.ids_named(name):
++            return name
++        if self._names_by_lower is None:
++            self._names_by_lower = {}
++            for known in self._items.names():
++                self._names_by_lower.setdefault(known.lower(), known)
++        return self._names_by_lower.get(name.lower())
+ 
+     def is_relic(self, name):
+         return any(
+@@ -159,12 +172,13 @@
+             return 0, 0
+         return self._component_me, self._component_te
+ 
+-    def _build_order(self, recipe):
+-        """(buildable items below a recipe, every item before its inputs;
+-        (consumer, material) edges closing a cycle, whose material is bought)."""
++    def _build_order(self, product_id, materials, roots=(), recursive=True):
++        """(buildable items below a product and below each root, every item
++        before its inputs; (consumer, material) edges closing a cycle, whose
++        material is bought).  The roots themselves are included."""
+         order = []
+         cut = set()
+-        state = {recipe.product_id: "active"}
++        state = {product_id: "active"}
+ 
+         def visit(consumer, materials):
+             for material, _ in materials:
+@@ -180,10 +194,20 @@
+                 state[material] = "done"
+                 order.append(material)
+ 
+-        visit(recipe.product_id, recipe.materials)
++        if recursive:
++            visit(product_id, materials)
++        del state[product_id]
++        for root in roots:
++            if state.get(root) == "done" or not self._industry.is_buildable(root):
++                continue
++            state[root] = "active"
++            if recursive:
++                visit(root, self._industry.recipe_for(root).materials)
++            state[root] = "done"
++            order.append(root)
+         return list(reversed(order)), cut
+ 
+-    def _consume(self, recipe, me, groups, buy, demand, cut=()):
++    def _consume(self, recipe, me, groups, buy, demand, consumed, cut=()):
+         for runs, count in groups:
+             for material, quantity in recipe.materials:
+                 needed = blueprints.material_amount(quantity, me, runs) * count
+@@ -191,39 +215,82 @@
+                          and (recipe.product_id, material) not in cut)
+                 target = demand if built else buy
+                 target[material] = target.get(material, 0) + needed
++                consumed[material] = consumed.get(material, 0) + needed
+ 
+     def _job_rows(self, recipe, groups, te):
+         name = self._items.name(recipe.blueprint_id)
+         return [Job(name, runs, self._days(recipe.seconds, runs, te), count)
+                 for runs, count in groups]
+ 
+-    def plan(self, request, build_all=False):
++    def _invent(self, name, outcome, runs, jobs, buy, consumed):
++        """Job groups for `jobs` jobs of `runs` runs built from invented copies;
++        the expected invention inputs are added to `buy`."""
++        max_runs = outcome.runs
++        full, rest = divmod(runs, max_runs)
++        groups = [(max_runs, full * jobs)] if full else []
++        copies = full * jobs
++        if rest:
++            groups.append((rest, jobs))
++            copies += math.ceil(Fraction(jobs, max_runs // rest))
++        chance = outcome.probability / 100
++        if chance <= 0:
++            raise LookupError("Invention of %r cannot succeed" % name)
++        attempts = math.ceil(round(copies / chance, 9))
++        inputs = list(outcome.materials)
++        if outcome.decryptor != "None":
++            decryptors = self._items.ids_named(outcome.decryptor)
++            if decryptors:
++                inputs.append((decryptors[0], 1))
++        if outcome.invented_from is not None:
++            inputs.append((outcome.source_id, 1))
++        for material, quantity in inputs:
++            buy[material] = buy.get(material, 0) + quantity * attempts
++            consumed[material] = consumed.get(material, 0) + quantity * attempts
++        return groups
++
++    def _target_outcome(self, type_id):
++        """Invention outcome without a decryptor for an inventable item; None otherwise."""
++        plan = self._invention.plan(type_id, self._skill)
++        if plan is None:
++            return None
++        return next((o for o in plan.outcomes if o.decryptor == "None"), None)
++
++    def resolve_amounts(self, amounts):
++        """{type_id: quantity} for {item name: quantity}, preferring buildable types."""
++        resolved = {}
++        for name, quantity in amounts.items():
++            candidates = self._items.ids_named(name)
++            if not candidates:
++                raise LookupError("No published item named %r" % name)
++            type_id = next(
++                (t for t in candidates if self._industry.is_buildable(t)), candidates[0]
++            )
++            resolved[type_id] = resolved.get(type_id, 0) + quantity
++        return resolved
++
++    def plan(self, request, build_all=False, stocks=None, targets=None):
++        """Jobs and purchases for a request.
++
++        stocks: {item name: quantity} on hand and usable; targets: {item
++        name: quantity} that must be left over once everything is built.
++        """
+         _check(request.runs, 1, 10 ** 9, "runs per job")
+         _check(request.jobs, 1, 10 ** 9, "number of jobs")
+         type_id, recipe = self._recipe(request.name)
++        pool = {}
++        for name, quantity in (stocks or {}).items():
++            pool[name] = pool.get(name, 0) + _check(quantity, 0, 10 ** 15, "stock of " + name)
++        start = dict(pool)
++        targets = self.resolve_amounts(targets or {})
++        for target_id, quantity in targets.items():
++            _check(quantity, 0, 10 ** 15, "target of " + self._items.name(target_id))
+         buy = {}
++        consumed = {}
+ 
+         if request.invented:
+             outcome = self._outcome(request, type_id)
+-            me, te, max_runs = outcome.me, outcome.te, outcome.runs
+-            full, rest = divmod(request.runs, max_runs)
+-            groups = [(max_runs, full * request.jobs)] if full else []
+-            copies = full * request.jobs
+-            if rest:
+-                groups.append((rest, request.jobs))
+-                copies += math.ceil(Fraction(request.jobs, max_runs // rest))
+-            chance = outcome.probability / 100
+-            if chance <= 0:
+-                raise LookupError("Invention of %r cannot succeed" % request.name)
+-            attempts = math.ceil(round(copies / chance, 9))
+-            for material, quantity in outcome.materials:
+-                buy[material] = buy.get(material, 0) + quantity * attempts
+-            if outcome.decryptor != "None":
+-                decryptors = self._items.ids_named(outcome.decryptor)
+-                if decryptors:
+-                    buy[decryptors[0]] = buy.get(decryptors[0], 0) + attempts
+-            if outcome.invented_from is not None:
+-                buy[outcome.source_id] = buy.get(outcome.source_id, 0) + attempts
++            me, te = outcome.me, outcome.te
++            groups = self._invent(request.name, outcome, request.runs, request.jobs, buy, consumed)
+         else:
+             me = _check(request.me, 0, 10, "material efficiency")
+             te = _check(request.te, 0, 20, "time efficiency")
+@@ -231,47 +298,80 @@
+ 
+         if not blueprints.material_efficiency_applies(recipe.activity):
+             me = 0
+-        if not build_all:
+-            self._consume(recipe, me, groups, buy, None)
+-            jobs = self._job_rows(recipe, groups, te)
+-            return BuildPlan(jobs=tuple(jobs), purchases=self._purchases(buy))
+-
+-        groups = self._split(groups, recipe.seconds, te)
+-        order, cut = self._build_order(recipe)
+-        demand = {}
+-        self._consume(recipe, me, groups, buy, demand, cut)
++        if build_all:
++            groups = self._split(groups, recipe.seconds, te)
++        order, cut = self._build_order(recipe.product_id, recipe.materials,
++                                       sorted(targets), recursive=build_all)
++        demand = {} if build_all else None
++        self._consume(recipe, me, groups, buy, demand, consumed, cut)
+         jobs = self._job_rows(recipe, groups, te)
+-        left_over = {}
+-        for type_id in order:
+-            component = self._industry.recipe_for(type_id)
+-            needed = demand.pop(type_id, 0)
+-            runs = math.ceil(Fraction(needed, component.output_quantity or 1))
++        built = {}
++        for item in order:
++            component = self._industry.recipe_for(item)
++            needed = (demand.pop(item, 0) if demand is not None else 0) + targets.get(item, 0)
++            needed -= _take(pool, self._items.name(item), needed)
++            output = component.output_quantity or 1
++            runs = math.ceil(Fraction(needed, output))
+             if runs <= 0:
+                 continue
+-            left_over[type_id] = runs * component.output_quantity - needed
+-            c_me, c_te = self._component_efficiency(type_id, component)
+-            c_groups = self._split([(runs, 1)], component.seconds, c_te)
+-            self._consume(component, c_me, c_groups, buy, demand, cut)
++            built[item] = built.get(item, 0) + runs * output
++            outcome = self._target_outcome(item) if item in targets else None
++            if outcome is not None:
++                c_me, c_te = outcome.me, outcome.te
++                c_groups = self._invent(self._items.name(item), outcome, runs, 1, buy, consumed)
++            else:
++                c_me, c_te = self._component_efficiency(item, component)
++                c_groups = [(runs, 1)]
++            if not blueprints.material_efficiency_applies(component.activity):
++                c_me = 0
++            if build_all:
++                c_groups = self._split(c_groups, component.seconds, c_te)
++            self._consume(component, c_me, c_groups, buy, demand, consumed, cut)
+             jobs.extend(self._job_rows(component, c_groups, c_te))
+-        return BuildPlan(jobs=tuple(jobs), purchases=self._purchases(buy, left_over))
+-
+-    def _purchases(self, buy, left_over=None):
+-        totals = {}
+-        ends = {}
+-        for type_id, quantity in (left_over or {}).items():
+-            if quantity > 0:
+-                name = self._items.name(type_id)
+-                ends[name] = ends.get(name, 0) + quantity
+-                totals.setdefault(name, (0, Decimal(0)))
+-        for type_id, quantity in buy.items():
+-            name = self._items.name(type_id) if self._items.is_valid(type_id) else str(type_id)
++        processed = set(order)
++        for item, quantity in targets.items():
++            if item not in processed:
++                buy[item] = buy.get(item, 0) + quantity
++        bought = {}
++        for item, quantity in buy.items():
++            name = self._items.name(item) if self._items.is_valid(item) else str(item)
++            bought[item] = quantity - _take(pool, name, quantity)
++        return BuildPlan(jobs=tuple(jobs),
++                         purchases=self._purchases(bought, start, built, consumed))
++
++    def _purchases(self, bought, start, built, consumed):
++        rows = {}  # name -> [to_buy, volume, start, end]
++
++        def row(name):
++            return rows.setdefault(name, [0, Decimal(0), start.get(name, 0), start.get(name, 0)])
++
++        for type_id, quantity in bought.items():
+             if self._items.is_valid(type_id):
+                 volume, _ = self._volumes.volume(type_id)
+                 unit = Decimal(repr(float(volume)))
++                name = self._items.name(type_id)
+             else:
+                 unit = Decimal(0)
+-            old_quantity, old_volume = totals.get(name, (0, Decimal(0)))
+-            totals[name] = (old_quantity + quantity, old_volume + unit * quantity)
++                name = str(type_id)
++            entry = row(name)
++            entry[0] += quantity
++            entry[1] += unit * quantity
++            entry[3] += quantity
++        for type_id, quantity in built.items():
++            row(self._items.name(type_id))[3] += quantity
++        for type_id, quantity in consumed.items():
++            name = self._items.name(type_id) if self._items.is_valid(type_id) else str(type_id)
++            row(name)[3] -= quantity
+         return tuple(
+-            Purchase(name, q, v, end_amount=ends.get(name, 0)) for name, (q, v) in totals.items()
++            Purchase(name, q, v, start_amount=s, end_amount=e)
++            for name, (q, v, s, e) in rows.items()
++            if q > 0 or s != e
+         )
++
++
++def _take(pool, name, wanted):
++    """Remove up to `wanted` of `name` from the pool; return how many were taken."""
++    taken = min(pool.get(name, 0), max(wanted, 0))
++    if taken:
++        pool[name] -= taken
++    return taken
+
+### stock_list.py (created)
+--- stock_list.py
++++ stock_list.py
+@@ -0,0 +1,51 @@
++"""Parsing of stockpile and stock target lists.
++
++Secret: the textual format of a list -- one "{Item Name} {Quantity}" entry
++per line with anything allowed after it, blank and comment lines, how the
++item name is told apart from the quantity when names contain numbers, and
++how repeated entries combine.
++"""
++
++import re
++
++_QUANTITY = re.compile(r"^\d[\d,_]*$")
++
++
++def _quantity(token):
++    if not _QUANTITY.match(token):
++        return None
++    return int(token.replace(",", "").replace("_", ""))
++
++
++def parse_line(line, canonical_name):
++    """(item name, quantity) for one entry, or None for a blank/comment line.
++
++    canonical_name maps a candidate name to the known item name, or None.
++    The longest known item name followed by a quantity wins.
++    """
++    tokens = line.split()
++    if not tokens or tokens[0].startswith("#"):
++        return None
++    found = None
++    for end in range(1, len(tokens)):
++        quantity = _quantity(tokens[end])
++        if quantity is None:
++            continue
++        name = canonical_name(" ".join(tokens[:end]))
++        if name is not None:
++            found = (name, quantity)
++    if found is None:
++        raise LookupError("Cannot parse stock entry %r" % line.strip())
++    return found
++
++
++def read(path, canonical_name):
++    """{item name: quantity} from a list file; repeated items are summed."""
++    amounts = {}
++    with open(path, encoding="utf-8-sig") as handle:
++        for line in handle:
++            entry = parse_line(line, canonical_name)
++            if entry is not None:
++                name, quantity = entry
++                amounts[name] = amounts.get(name, 0) + quantity
++    return amounts
+

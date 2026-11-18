@@ -1,0 +1,909 @@
+### mtl.py (modified)
+--- mtl.py
++++ mtl.py
+@@ -1,13 +1,18 @@
+ #!/usr/bin/env python3
+-"""MTL: run a small pipeline DSL (schemas, params, calcs, filter/apply/group_by/window/aggregate) over a CSV of sales events."""
++"""MTL: run a small pipeline DSL (schemas, params, calcs, filter/apply/group_by/window/aggregate) over sales events
++read from CSV, TSV (optionally gzipped) and Parquet files."""
+ 
+ import argparse
+ import csv
++import glob
++import gzip
+ import io
+ import json
+ import math
++import os
+ import re
+ import sys
++import zlib
+ from datetime import datetime, timedelta, timezone
+ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
+ 
+@@ -1071,10 +1076,53 @@
+                 raise dsl_error(f"calc '{calc.name}' references '{ref}' before it is defined")
+ 
+ 
+-# --------------------------------------------------------------------------- CSV loading
++# --------------------------------------------------------------------------- input discovery & loading
+ 
+ NUMBER_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|[+-]?(?:inf|infinity|nan)", re.IGNORECASE)
+ INT_RE = re.compile(r"[+-]?\d+")
++
++DEFAULT_NULLS = ("null", "NULL", "NaN")
++FORMATS = ("csv", "tsv", "parquet")
++FORMAT_EXTENSIONS = (
++    (".csv.gz", "csv"),
++    (".tsv.gz", "tsv"),
++    (".csv", "csv"),
++    (".tsv", "tsv"),
++    (".parquet", "parquet"),
++)
++AMBIGUOUS_EXTENSIONS = ("", ".gz", ".txt", ".dat")
++GLOB_CHARS = "*?["
++
++# bad record classifications
++PARSE_TYPE_MISMATCH = "PARSE_TYPE_MISMATCH"
++TIMESTAMP_PARSE_ERROR = "TIMESTAMP_PARSE_ERROR"
++RUNTIME_ERROR = "RUNTIME_ERROR"
++TYPE_ERROR = "TYPE_ERROR"
++MISSING_REQUIRED_FIELD = "MISSING_REQUIRED_FIELD"
++PARQUET_TYPE_MISMATCH = "PARQUET_TYPE_MISMATCH"
++
++NAIVE_EPOCH = datetime(1970, 1, 1)
++
++
++class RowError(Exception):
++    """A record that cannot be processed; becomes a bad record (or aborts in strict mode)."""
++
++    def __init__(self, kind, message, column=None, value=None):
++        super().__init__(message)
++        self.kind = kind
++        self.message = message
++        self.column = column
++        self.value = value
++
++
++class LoadOptions:
++    def __init__(self, tz, parse_ts, nulls, strict):
++        self.tz = tz
++        self.parse_ts = parse_ts  # textual timestamps (honours --timestamp-format)
++        self.parse_iso = make_ts_parser(tz, None)  # string-typed Parquet timestamps
++        self.nulls = nulls
++        self.strict = strict
++        self.legacy = False
+ 
+ 
+ def parse_number(s):
+@@ -1099,10 +1147,438 @@
+     return parse
+ 
+ 
+-def infer_type(values, parse_ts):
+-    present = [v.strip() for v in values if v.strip() != ""]
++def parse_null_markers(text):
++    if text is None:
++        return frozenset(DEFAULT_NULLS)
++    return frozenset(m.strip() for m in text.split(",") if m.strip())
++
++
++def detect_format(path, forced):
++    low = os.path.basename(path).lower()
++    for ext, fmt in FORMAT_EXTENSIONS:
++        if low.endswith(ext):
++            return fmt
++    return None if forced == "auto" else forced
++
++
++def scan_format(path, forced):
++    """Format of a file found by directory traversal or glob; None means skip it."""
++    fmt = detect_format(path, "auto")
++    if fmt is not None:
++        return fmt
++    if forced != "auto" and os.path.splitext(os.path.basename(path).lower())[1] in AMBIGUOUS_EXTENSIONS:
++        return forced
++    return None
++
++
++def resolve_inputs(patterns, recursive, forced):
++    """Expand --input values into a sorted, de-duplicated list of (display_path, format)."""
++    found = {}
++
++    def add(path, fmt):
++        key = os.path.realpath(path)
++        disp = os.path.normpath(path)
++        prev = found.get(key)
++        if prev is None or disp < prev[0]:
++            found[key] = (disp, fmt)
++
++    def add_dir(top):
++        for root, dirs, files in os.walk(top):
++            dirs[:] = sorted(d for d in dirs if not d.startswith(".")) if recursive else []
++            for name in sorted(files):
++                if name.startswith("."):
++                    continue
++                path = os.path.join(root, name)
++                fmt = scan_format(path, forced)
++                if fmt is not None and os.path.isfile(path):
++                    add(path, fmt)
++
++    for pattern in patterns:
++        if os.path.isdir(pattern):
++            add_dir(pattern)
++        elif os.path.exists(pattern):
++            fmt = detect_format(pattern, forced)
++            if fmt is None:
++                raise io_error(f"cannot determine the format of input file {pattern}; use --format")
++            add(pattern, fmt)
++        elif any(ch in pattern for ch in GLOB_CHARS):
++            for match in sorted(glob.glob(pattern, recursive=True)):
++                if os.path.isdir(match):
++                    add_dir(match)
++                elif os.path.isfile(match):
++                    fmt = scan_format(match, forced)
++                    if fmt is not None:
++                        add(match, fmt)
++        else:
++            raise io_error(f"input not found: {pattern}")
++    if not found:
++        raise io_error("no input files matched " + ", ".join(patterns))
++    return sorted(found.values())
++
++
++def read_bytes(path):
++    try:
++        with open(path, "rb") as f:
++            return f.read()
++    except FileNotFoundError:
++        raise io_error(f"input file not found: {path}")
++    except IsADirectoryError:
++        raise io_error(f"input path is a directory: {path}")
++    except OSError as e:
++        raise io_error(f"cannot read input file {path}: {e.strerror or e}")
++
++
++def is_blank(rec):
++    return not rec or (len(rec) == 1 and rec[0].strip() == "")
++
++
++class TextSource:
++    def __init__(self, path, fmt):
++        self.path = path
++        self.fmt = fmt
++        data = read_bytes(path)
++        if data[:2] == b"\x1f\x8b" or path.lower().endswith(".gz"):
++            try:
++                data = gzip.decompress(data)
++            except (OSError, EOFError, zlib.error) as e:
++                raise io_error(f"cannot decompress gzip file {path}: {e}")
++        try:
++            text = data.decode("utf-8-sig")
++        except UnicodeDecodeError:
++            raise io_error(f"input file is not valid UTF-8: {path}")
++        reader = csv.reader(
++            io.StringIO(text, newline=""),
++            delimiter="," if fmt == "csv" else "\t",
++            quotechar='"',
++            doublequote=True,
++        )
++        records = []
++        prev = 0
++        try:
++            for rec in reader:
++                records.append((prev + 1, rec))
++                prev = reader.line_num
++        except csv.Error as e:
++            raise io_error(f"malformed {fmt.upper()} file {path}: {e}")
++        while records and is_blank(records[0][1]):
++            records.pop(0)
++        if not records:
++            raise io_error(f"{fmt.upper()} file {path} is empty; a header row is required")
++        self.header = [h.strip() for h in records[0][1]]
++        named = [h for h in self.header if h]
++        if len(set(named)) != len(named):
++            raise io_error(f"{fmt.upper()} header in {path} contains duplicate column names")
++        self.body = [(line, rec) for line, rec in records[1:] if not is_blank(rec)]
++        self.index = {}
++        for i, name in enumerate(self.header):
++            if name:
++                self.index[name] = i
++
++    def columns(self):
++        return set(self.index)
++
++    def column_text(self, name):
++        i = self.index[name]
++        return [rec[i] for _, rec in self.body if i < len(rec)]
++
++    def records(self, fields, required, opts):
++        check_columns(self, fields, required, opts)
++        width = len(self.header)
++        for n, (line, rec) in enumerate(self.body, 1):
++            try:
++                if len(rec) > width:
++                    raise RowError(PARSE_TYPE_MISMATCH, f"record has {len(rec)} fields, expected {width}")
++                row = {}
++                for name, typ in fields.items():
++                    i = self.index.get(name)
++                    if i is None:
++                        row[name] = None
++                    elif i >= len(rec):
++                        raise RowError(
++                            MISSING_REQUIRED_FIELD,
++                            f"record has {len(rec)} fields, expected {width}; field '{name}' is missing",
++                            name,
++                        )
++                    else:
++                        row[name] = convert_text(rec[i], typ, name, opts)
++                yield line, n, row, None, rec
++            except RowError as e:
++                yield line, n, None, e, rec
++
++    def context(self, rec):
++        record = {}
++        for i, value in enumerate(rec):
++            key = self.header[i] if i < len(self.header) and self.header[i] else f"_{i + 1}"
++            record[key] = value
++        return record
++
++
++def convert_text(raw, typ, name, opts):
++    s = raw.strip()
++    if s == "" or raw in opts.nulls or s in opts.nulls:
++        return None
++    if typ == STR:
++        return raw
++    if typ == FLOAT:
++        try:
++            x = parse_number(s)
++        except ValueError:
++            raise RowError(PARSE_TYPE_MISMATCH, f"column '{name}' has invalid float value {raw!r}", name, raw)
++        return None if math.isnan(x) else x
++    if typ == INT:
++        if INT_RE.fullmatch(s):
++            try:
++                return int(s)
++            except ValueError:
++                pass
++        elif s.lower().lstrip("+-") == "nan":
++            return None
++        raise RowError(PARSE_TYPE_MISMATCH, f"column '{name}' has invalid int value {raw!r}", name, raw)
++    if typ == BOOL:
++        low = s.lower()
++        if low not in ("true", "false"):
++            raise RowError(PARSE_TYPE_MISMATCH, f"column '{name}' has invalid bool value {raw!r}", name, raw)
++        return low == "true"
++    try:
++        return opts.parse_ts(s)
++    except (ValueError, OverflowError):
++        raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has invalid timestamp value {raw!r}", name, raw)
++
++
++def check_columns(src, fields, required, opts):
++    available = src.columns()
++    missing = [n for n in fields if n in required and n not in available]
++    if missing and opts.strict:
++        raise type_error(f"{src.path}: missing required column(s): {', '.join(missing)}")
++
++
++# -- Parquet
++
++def require_pyarrow():
++    try:
++        import pyarrow
++        import pyarrow.parquet
++    except ImportError:
++        raise io_error("reading Parquet files requires the 'pyarrow' package")
++    return pyarrow
++
++
++def arrow_kind(t):
++    pa = require_pyarrow()
++    if pa.types.is_dictionary(t):
++        return arrow_kind(t.value_type)
++    if pa.types.is_null(t):
++        return "null"
++    if pa.types.is_boolean(t):
++        return BOOL
++    if pa.types.is_integer(t):
++        return INT
++    if pa.types.is_floating(t):
++        return FLOAT
++    if pa.types.is_decimal(t):
++        return "decimal"
++    if pa.types.is_string(t) or pa.types.is_large_string(t) or getattr(pa.types, "is_string_view", lambda _: False)(t):
++        return STR
++    if pa.types.is_binary(t) or pa.types.is_large_binary(t) or pa.types.is_fixed_size_binary(t):
++        return "binary"
++    if pa.types.is_timestamp(t):
++        return TS
++    if pa.types.is_date(t):
++        return "date"
++    return None
++
++
++ARROW_KIND_TO_TYPE = {INT: INT, FLOAT: FLOAT, "decimal": FLOAT, BOOL: BOOL, STR: STR, "binary": STR, TS: TS, "date": TS}
++
++
++def jsonable(v):
++    if v is None or isinstance(v, (bool, int, str)):
++        return v
++    if isinstance(v, float):
++        return v if math.isfinite(v) else repr(v)
++    if isinstance(v, datetime):
++        return format_ts(v) if v.tzinfo is not None else v.isoformat()
++    if isinstance(v, bytes):
++        return v.decode("utf-8", errors="replace")
++    return str(v)
++
++
++class ParquetSource:
++    def __init__(self, path):
++        pa = require_pyarrow()
++        self.path = path
++        self.fmt = "parquet"
++        read_bytes(path)  # uniform not-found / permission errors
++        try:
++            self.table = pa.parquet.read_table(path)
++        except Exception as e:  # pyarrow raises a variety of error types for corrupt files
++            raise io_error(f"cannot read Parquet file {path}: {' '.join(str(e).split())}")
++        names = self.table.column_names
++        if len(set(names)) != len(names):
++            raise io_error(f"Parquet file {path} contains duplicate column names")
++        self.num_rows = self.table.num_rows
++
++    def columns(self):
++        return set(self.table.column_names)
++
++    def column_type(self, name):
++        return self.table.schema.field(name).type
++
++    def records(self, fields, required, opts):
++        check_columns(self, fields, required, opts)
++        available = self.columns()
++        decoded = {}
++        for name, typ in fields.items():
++            if name in available:
++                decoded[name] = self.decode_column(name, typ, opts)
++        for i in range(self.num_rows):
++            row = {}
++            err = None
++            for name in fields:
++                col = decoded.get(name)
++                if col is None:
++                    row[name] = None
++                    continue
++                v = col[0][i]
++                if isinstance(v, RowError):
++                    err = v
++                    break
++                row[name] = v
++            ctx = (decoded, i)
++            if err is None:
++                yield None, i + 1, row, None, ctx
++            else:
++                yield None, i + 1, None, err, ctx
++
++    def context(self, ctx):
++        decoded, i = ctx
++        return {name: col[1][i] for name, col in decoded.items()}
++
++    def decode_column(self, name, typ, opts):
++        """Return (values, display) lists; a value is a Python value, None, or a RowError."""
++        pa = require_pyarrow()
++        col = self.table.column(name)
++        t = col.type
++        if pa.types.is_dictionary(t):
++            col = pa.chunked_array([c.dictionary_decode() for c in col.chunks], type=t.value_type)
++            t = t.value_type
++        kind = arrow_kind(t)
++        if kind == TS:
++            raw = col.cast(pa.int64()).to_pylist()
++            factor = {"s": 1_000_000, "ms": 1000, "us": 1, "ns": None}[t.unit]
++            items = []
++            for v in raw:
++                if v is None:
++                    items.append(None)
++                    continue
++                us = v // 1000 if factor is None else v * factor
++                try:
++                    if t.tz is not None:
++                        items.append(EPOCH + timedelta(microseconds=us))
++                    else:
++                        local = (NAIVE_EPOCH + timedelta(microseconds=us)).replace(tzinfo=opts.tz)
++                        items.append(local.astimezone(timezone.utc))
++                except (OverflowError, ValueError):
++                    items.append(f"{v} ({t})")
++        else:
++            try:
++                items = col.to_pylist()
++            except Exception:  # e.g. dates outside Python's range
++                items = [None if v is None else str(v) for v in col.cast(pa.string()).to_pylist()]
++                kind = "unreadable"
++
++        display = [jsonable(v) for v in items]
++        values = []
++        for v, shown in zip(items, display):
++            if v is None:
++                values.append(None)
++                continue
++            try:
++                values.append(self.convert(v, kind, t, typ, name, opts))
++            except RowError as e:
++                e.value = shown
++                values.append(e)
++        return values, display
++
++    def convert(self, v, kind, t, typ, name, opts):
++        def mismatch():
++            return RowError(
++                PARQUET_TYPE_MISMATCH,
++                f"column '{name}' has Parquet type {t} which cannot be read as {typ}",
++                name,
++            )
++
++        if kind == "binary" and typ in (STR, TS):
++            if isinstance(v, str):
++                raise mismatch()
++            try:
++                v = v.decode("utf-8")
++            except UnicodeDecodeError:
++                raise mismatch()
++            kind = STR
++        if kind == STR and (v.strip() == "" or v in opts.nulls or v.strip() in opts.nulls):
++            return None
++        if typ == STR:
++            if kind == STR:
++                return v
++            if opts.legacy and kind in (INT, FLOAT, BOOL, "decimal", TS, "date"):
++                if kind == BOOL:
++                    return "true" if v else "false"
++                if kind == TS:
++                    return format_ts(v)
++                if kind == FLOAT:
++                    return repr(v)
++                return str(v)
++            raise mismatch()
++        if typ == INT:
++            if kind == INT:
++                return v
++            if kind == "decimal" and t.scale <= 0:
++                return int(v)
++            raise mismatch()
++        if typ == FLOAT:
++            if kind in (INT, FLOAT, "decimal"):
++                x = float(v)
++                return None if math.isnan(x) else x
++            raise mismatch()
++        if typ == BOOL:
++            if kind == BOOL:
++                return v
++            raise mismatch()
++        # timestamp
++        if kind == TS:
++            if isinstance(v, str):
++                raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has out-of-range timestamp {v}", name)
++            return v
++        if kind == "date":
++            try:
++                return datetime(v.year, v.month, v.day, tzinfo=opts.tz).astimezone(timezone.utc)
++            except (OverflowError, ValueError):
++                raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has out-of-range date {v}", name)
++        if kind == STR:
++            try:
++                return opts.parse_iso(v)
++            except (ValueError, OverflowError):
++                raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has invalid timestamp value {v!r}", name)
++        raise mismatch()
++
++
++def load_sources(files):
++    sources = []
++    for path, fmt in files:
++        if fmt == "parquet":
++            sources.append(ParquetSource(path))
++        else:
++            sources.append(TextSource(path, fmt))
++    return sources
++
++
++# -- legacy (schema-less DSL) column typing
++
++def infer_type(values, opts):
++    present = [v.strip() for v in values if v.strip() != "" and v not in opts.nulls and v.strip() not in opts.nulls]
+     if not present:
+-        return STR
++        return None
+     if all(INT_RE.fullmatch(v) for v in present):
+         return INT
+     if all(NUMBER_RE.fullmatch(v) for v in present):
+@@ -1112,80 +1588,40 @@
+     if all(":" in v for v in present):
+         try:
+             for v in present:
+-                parse_ts(v)
++                opts.parse_ts(v)
+             return TS
+         except (ValueError, OverflowError):
+             pass
+     return STR
+ 
+ 
+-def convert(value, typ, parse_ts):
+-    if typ == STR:
+-        return value
+-    v = value.strip()
+-    if v == "":
+-        return None
+-    if typ == FLOAT:
+-        return parse_number(v)
+-    if typ == INT:
+-        return int(v)
+-    if typ == BOOL:
+-        low = v.lower()
+-        if low not in ("true", "false"):
+-            raise ValueError(v)
+-        return low == "true"
+-    return parse_ts(v)
+-
+-
+-def load_csv(path, parse_ts, required=REQUIRED_COLUMNS, keep_extra=True):
+-    try:
+-        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+-            data = f.read()
+-    except FileNotFoundError:
+-        raise io_error(f"CSV file not found: {path}")
+-    except IsADirectoryError:
+-        raise io_error(f"CSV path is a directory: {path}")
+-    except UnicodeDecodeError:
+-        raise io_error(f"CSV file is not valid UTF-8: {path}")
+-    except OSError as e:
+-        raise io_error(f"cannot read CSV file {path}: {e.strerror or e}")
+-    try:
+-        records = list(csv.reader(io.StringIO(data, newline="")))
+-    except csv.Error as e:
+-        raise io_error(f"malformed CSV: {e}")
+-    if not records:
+-        raise io_error("CSV file is empty; a header row is required")
+-    header = [h.strip() for h in records[0]]
+-    if len(set(header)) != len(header):
+-        raise io_error("CSV header contains duplicate column names")
+-    missing = [c for c in required if c not in header]
+-    if missing:
+-        raise io_error(f"CSV is missing required column(s): {', '.join(missing)}")
+-    body = []
+-    for lineno, rec in enumerate(records[1:], 2):
+-        if not rec or (len(rec) == 1 and rec[0].strip() == ""):
+-            continue
+-        if len(rec) != len(header):
+-            raise io_error(f"CSV row {lineno} has {len(rec)} fields, expected {len(header)}")
+-        body.append(rec)
+-
+-    schema = {}
+-    columns = {}
+-    for idx, name in enumerate(header):
+-        if name not in required and not keep_extra:
+-            continue
+-        raw = [rec[idx] for rec in body]
+-        typ = required.get(name) or infer_type(raw, parse_ts)
+-        schema[name] = typ
+-        converted = []
+-        for value in raw:
+-            try:
+-                converted.append(convert(value, typ, parse_ts))
+-            except (ValueError, OverflowError):
+-                raise type_error(f"column '{name}' has invalid {typ} value {value!r}")
+-        columns[name] = converted
+-    rows = [{name: columns[name][i] for name in schema} for i in range(len(body))]
+-    return schema, rows
++def infer_legacy_schema(sources, opts):
++    """Required columns plus every extra column, typed consistently across all files."""
++    found = {}
++    for src in sources:
++        for name in src.columns():
++            if name in REQUIRED_COLUMNS:
++                continue
++            if isinstance(src, ParquetSource):
++                kind = arrow_kind(src.column_type(name))
++                if kind is None:
++                    continue
++                typ = ARROW_KIND_TO_TYPE.get(kind)
++            else:
++                typ = infer_type(src.column_text(name), opts)
++            types = found.setdefault(name, set())
++            if typ is not None:
++                types.add(typ)
++    schema = dict(REQUIRED_COLUMNS)
++    for name in sorted(found):
++        types = found[name]
++        if len(types) == 1:
++            schema[name] = next(iter(types))
++        elif types and types <= {INT, FLOAT}:
++            schema[name] = FLOAT
++        else:
++            schema[name] = STR
++    return schema
+ 
+ 
+ # --------------------------------------------------------------------------- compile (type check + evaluator)
+@@ -1310,7 +1746,12 @@
+         if node.op == "!":
+             if t != BOOL:
+                 raise type_error(f"'!' requires a boolean operand, got {type_name(t)}")
+-            return BOOL, lambda row: not f(row)
++
++            def negate(row):
++                v = f(row)
++                return None if v is None else not v
++
++            return BOOL, negate
+         if t not in NUMERIC:
+             raise type_error(f"unary '-' requires a numeric operand, got {type_name(t)}")
+ 
+@@ -1337,7 +1778,9 @@
+         def contains(row):
+             v = rf(row)
+             needle = lf(row)
+-            return v is not None and needle is not None and needle in v
++            if v is None or needle is None:
++                return None
++            return needle in v
+ 
+         return BOOL, contains
+ 
+@@ -1350,9 +1793,21 @@
+     if op in ("&", "|"):
+         if lt != BOOL or rt != BOOL:
+             raise type_error(f"'{op}' requires boolean operands, got {type_name(lt)} and {type_name(rt)}")
+-        if op == "&":
+-            return BOOL, lambda row: bool(lf(row)) and bool(rf(row))
+-        return BOOL, lambda row: bool(lf(row)) or bool(rf(row))
++        # Kleene three-valued logic: a known operand can decide the result even when the other is null.
++        decisive = op == "|"
++
++        def logical(row):
++            a = lf(row)
++            if a is decisive:
++                return decisive
++            b = rf(row)
++            if b is decisive:
++                return decisive
++            if a is None or b is None:
++                return None
++            return not decisive
++
++        return BOOL, logical
+ 
+     if op in COMPARISON_OPS:
+         ok = (
+@@ -1367,10 +1822,10 @@
+         def compare(row):
+             a = lf(row)
+             if a is None:
+-                return False
++                return None
+             b = rf(row)
+             if b is None:
+-                return False
++                return None
+             return cmp(a, b)
+ 
+         return BOOL, compare
+@@ -1402,10 +1857,10 @@
+     def evaluate(row):
+         s = lf(row)
+         if s is None:
+-            return False
++            return None
+         x = rf(row)
+         if x is None:
+-            return False
++            return None
+         return test(s, x)
+ 
+     return BOOL, evaluate
+@@ -1592,13 +2047,15 @@
+ # --------------------------------------------------------------------------- aggregation
+ 
+ def agg_sum(vals):
++    # Integers sum exactly; floats use math.fsum (correctly rounded), so results never depend on row order.
++    if all(isinstance(v, int) for v in vals):
++        return sum(vals)
+     try:
+-        total = 0
+-        for v in vals:
+-            total += v
++        return math.fsum(vals)
+     except OverflowError:
+         raise runtime_error("numeric overflow in sum")
+-    return total
++    except ValueError:
++        raise runtime_error("sum produced a non-finite number")
+ 
+ 
+ def agg_mean(vals):
+@@ -1607,11 +2064,7 @@
+ 
+ def agg_var(vals):
+     mean = agg_mean(vals)
+-    acc = 0.0
+-    for v in vals:
+-        d = v - mean
+-        acc += d * d
+-    return acc / len(vals)
++    return agg_sum([(v - mean) * (v - mean) for v in vals]) / len(vals)
+ 
+ 
+ def agg_median(vals):
+@@ -1654,7 +2107,7 @@
+         return None
+     try:
+         result = AGG_IMPL[fn](vals)
+-    except OverflowError:
++    except (OverflowError, ValueError):
+         raise runtime_error(f"numeric overflow in {fn}({col})")
+     if isinstance(result, float) and not math.isfinite(result):
+         raise runtime_error(f"{fn}({col}) produced a non-finite number")
+@@ -1827,20 +2280,85 @@
+     return (1, value)
+ 
+ 
++def run_row(plan, row):
++    """Evaluate schema calcs and pre-stage steps on one row; False when a filter drops it."""
++    label = None
++    try:
++        for name, f, conv in plan.prelude:
++            label = f"calculated field '{name}'"
++            v = f(row)
++            row[name] = conv(v) if conv else v
++        for kind, f, name, conv in plan.steps:
++            if kind == "filter":
++                label = "filter"
++                if f(row) is not True:  # null counts as false
++                    return False
++            else:
++                label = f"'{name}'"
++                v = f(row)
++                row[name] = conv(v) if conv else v
++    except MTLError as e:
++        raise RowError(TYPE_ERROR if e.kind == "type_error" else RUNTIME_ERROR, f"{label}: {e.message}")
++    except TypeError as e:
++        raise RowError(TYPE_ERROR, f"{label}: {e}")
++    except (ArithmeticError, ValueError) as e:
++        raise RowError(RUNTIME_ERROR, f"{label}: {type(e).__name__}: {e}")
++    return True
++
++
++STRICT_EXIT_KIND = {RUNTIME_ERROR: "runtime_error"}  # every other classification exits as a type error
++
++
++def bad_record(src, line, rownum, err, raw):
++    return {
++        "file": src.path,
++        "line": line,
++        "row": rownum,
++        "format": src.fmt,
++        "error_type": err.kind,
++        "classification": err.kind,
++        "message": err.message,
++        "column": err.column,
++        "value": err.value,
++        "context": {"record": src.context(raw)},
++    }
++
++
++def process_sources(plan, sources, fields, required, opts, bad):
++    """Load, validate and evaluate every record in a deterministic (file, line) order."""
++    kept = []
++    for src in sources:
++        for line, rownum, row, err, raw in src.records(fields, required, opts):
++            if err is None:
++                try:
++                    if run_row(plan, row):
++                        kept.append(row)
++                    continue
++                except RowError as e:
++                    err = e
++            bad.append(bad_record(src, line, rownum, err, raw))
++            if opts.strict:
++                where = f"{src.path}:{line}" if line is not None else f"{src.path} row {rownum}"
++                raise MTLError(STRICT_EXIT_KIND.get(err.kind, "type_error"), f"{where}: {err.kind}: {err.message}")
++    return kept
++
++
++def write_bad_records(path, bad):
++    if not path or not bad:
++        return
++    entries = sorted(bad, key=lambda b: (b["file"], b["line"] if b["line"] is not None else 0, b["row"]))
++    text = "".join(json.dumps(b, sort_keys=True, ensure_ascii=False) + "\n" for b in entries)
++    try:
++        parent = os.path.dirname(path)
++        if parent:
++            os.makedirs(parent, exist_ok=True)
++        with open(path, "w", encoding="utf-8") as f:
++            f.write(text)
++    except OSError as e:
++        raise io_error(f"cannot write bad records file {path}: {e.strerror or e}")
++
++
+ def execute(plan, rows):
+-    for r in rows:
+-        for name, f, conv in plan.prelude:
+-            v = f(r)
+-            r[name] = conv(v) if conv else v
+-
+-    for kind, f, name, conv in plan.steps:
+-        if kind == "filter":
+-            rows = [r for r in rows if f(r)]
+-        else:
+-            for r in rows:
+-                v = f(r)
+-                r[name] = conv(v) if conv else v
+-
+     group_cols = plan.group_cols
+     width = plan.window
+     windowed = width is not None
+@@ -1951,18 +2469,26 @@
+ 
+ 
+ def main(argv=None):
+-    parser = ArgParser(prog="mtl.py", description="Run an MTL pipeline over a CSV of sales events.")
+-    parser.add_argument("--csv", required=True)
++    parser = ArgParser(prog="mtl.py", description="Run an MTL pipeline over CSV/TSV/Parquet files of sales events.")
++    parser.add_argument("--input", "--csv", dest="input", action="append", nargs="+", default=[], metavar="PATH")
+     parser.add_argument("--dsl", required=True)
+     parser.add_argument("--out", default=None)
+     parser.add_argument("--tz", default="UTC")
+     parser.add_argument("--timestamp-format", dest="timestamp_format", default=None)
+     parser.add_argument("--strict", action="store_true")
+     parser.add_argument("--param", action="append", nargs="+", default=[], metavar="KEY=VALUE")
++    parser.add_argument("--recursive", action="store_true")
++    parser.add_argument("--format", dest="format", default="auto", choices=("auto",) + FORMATS)
++    parser.add_argument("--nulls", default=None)
++    parser.add_argument("--bad-records-out", dest="bad_records_out", default=None)
+     args = parser.parse_args(argv)
++    inputs = [p for group in args.input for p in group]
++    if not inputs:
++        raise io_error("invalid arguments: the following arguments are required: --input")
+ 
+     tz = resolve_tz(args.tz)
+     parse_ts = make_ts_parser(tz, args.timestamp_format)
++    opts = LoadOptions(tz, parse_ts, parse_null_markers(args.nulls), args.strict)
+     cli_params = parse_cli_params(args.param)
+     program = parse_program(read_dsl(args.dsl), cli_params)
+     ctx = Context(tz, parse_ts, {}, args.strict)
+@@ -1970,11 +2496,21 @@
+         ctx.params = resolve_params(program, cli_params, parse_ts)
+         env = {name: f.typ for name, f in program.schema_fields.items()}
+         plan = compile_plan(program, env, ctx)
+-        physical = {name: f.typ for name, f in program.schema_fields.items() if f.expr is None}
+-        _, rows = load_csv(args.csv, parse_ts, required=physical, keep_extra=False)
++        fields = {name: f.typ for name, f in program.schema_fields.items() if f.expr is None}
++        required = set(fields)
++        sources = load_sources(resolve_inputs(inputs, args.recursive, args.format))
+     else:
+-        schema, rows = load_csv(args.csv, parse_ts)
+-        plan = compile_plan(program, schema, ctx)
++        opts.legacy = True
++        sources = load_sources(resolve_inputs(inputs, args.recursive, args.format))
++        fields = infer_legacy_schema(sources, opts)
++        required = set(REQUIRED_COLUMNS)
++        plan = compile_plan(program, fields, ctx)
++
++    bad = []
++    try:
++        rows = process_sources(plan, sources, fields, required, opts, bad)
++    finally:
++        write_bad_records(args.bad_records_out, bad)
+     result = execute(plan, rows)
+     try:
+         text = json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+
+### requirements.txt (modified)
+--- requirements.txt
++++ requirements.txt
+@@ -1 +1,2 @@
+ tzdata>=2024.1
++pyarrow>=14.0
+

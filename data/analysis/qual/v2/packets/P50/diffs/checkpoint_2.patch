@@ -1,0 +1,411 @@
+### industry.py (modified)
+--- industry.py
++++ industry.py
+@@ -1,6 +1,8 @@
+ """EVE Online industry planner CLI.
+ 
+-Usage: python industry.py recipe <Product or Blueprint name> --sde <SDE directory>
++Usage:
++  python industry.py recipe <Product or Blueprint name> --sde <SDE directory>
++  python industry.py invention <Product or Blueprint name> --sde <SDE directory> [--skill <1-5>]
+ 
+ This module only parses arguments and wires the other modules together.
+ """
+@@ -10,6 +12,8 @@
+ 
+ import blueprints
+ import catalog
++import invention
++import invention_report
+ import report
+ import volumes
+ 
+@@ -52,16 +56,63 @@
+     )
+ 
+ 
++def _build_invention_report(name, sde_dir, skill_level):
++    items = catalog.Catalog(sde_dir)
++    planner = invention.Invention(sde_dir, items)
++
++    candidates = items.ids_named(name)
++    if not candidates:
++        raise LookupError("No published item named %r" % name)
++    plan = next(
++        (p for p in (planner.plan(t, skill_level) for t in candidates) if p is not None), None
++    )
++    if plan is None:
++        raise LookupError("%r cannot be invented or reverse engineered" % name)
++
++    product = plan.product_id
++    tech_level = items.tech_level(product)
++    if tech_level not in ("Tech II", "Tech III"):
++        tech_level = "Tech III" if plan.from_relics else "Tech II"
++    return invention_report.render(
++        invention_report.InventionReportInput(
++            item_name=items.name(product),
++            type_id=product,
++            category=items.category_name(product),
++            group=items.group_name(product),
++            market_path=tuple(items.market_path(product)),
++            tech_level=tech_level,
++            base_blueprint=plan.base_blueprint,
++            datacores=plan.datacores,
++            quantity_per_run=plan.quantity_per_run,
++            skills=plan.skills,
++            seconds=plan.seconds,
++            with_source=plan.from_relics,
++            rows=tuple(
++                (o.invented_from, o.decryptor, o.probability, o.runs, o.me, o.te)
++                for o in plan.outcomes
++            ),
++        )
++    )
++
++
+ def main(argv=None):
+     parser = argparse.ArgumentParser(description="EVE Online industry planner")
+     commands = parser.add_subparsers(dest="command", required=True)
+     recipe = commands.add_parser("recipe", help="show the recipe for a product or blueprint")
+     recipe.add_argument("name", nargs="+", help="exact product or blueprint typeName")
+     recipe.add_argument("--sde", required=True, help="SDE directory")
++    invent = commands.add_parser("invention", help="plan invention for a Tech II/III product")
++    invent.add_argument("name", nargs="+", help="exact product or blueprint typeName")
++    invent.add_argument("--sde", required=True, help="SDE directory")
++    invent.add_argument("--skill", type=int, default=5, choices=range(1, 6), metavar="{1-5}",
++                        help="level of every relevant skill (default 5)")
+     args = parser.parse_args(argv)
+ 
+     try:
+-        text = _build_report(" ".join(args.name), args.sde)
++        if args.command == "invention":
++            text = _build_invention_report(" ".join(args.name), args.sde, args.skill)
++        else:
++            text = _build_report(" ".join(args.name), args.sde)
+     except (LookupError, OSError) as exc:
+         print("error: %s" % exc, file=sys.stderr)
+         return 1
+
+### invention.py (created)
+--- invention.py
++++ invention.py
+@@ -0,0 +1,204 @@
++"""Invention and reverse engineering plans: what a Tech II/III blueprint is
++invented from, what the job consumes, and the odds and outcome per decryptor.
++
++Secret: how the industry activity tables link a product to the blueprint it
++is built from and that blueprint to its invention inputs; which source is
++used when several can invent the same blueprint; which skills count as
++"science" and "encryption" skills; how relics are recognised and ranked;
++the decryptor and relic modifier tables; and the success chance formula.
++"""
++
++from dataclasses import dataclass
++
++import sde_source
++
++_MANUFACTURING = "Manufacturing"
++_MANUFACTURING_FALLBACK_ID = 1
++_INVENTION_ACTIVITIES = (8, 7)  # Invention, Reverse Engineering
++
++_SCIENCE_GROUP = "Science"
++_ENCRYPTION_SUFFIX = "Encryption Methods"
++
++_BASE_ME = 2
++_BASE_TE = 4
++
++# name -> (probability multiplier in % from 100%, runs, ME, TE); None first.
++_DECRYPTORS = (
++    ("None", 0, 0, 0, 0),
++    ("Accelerant Decryptor", 20, 1, 2, 10),
++    ("Attainment Decryptor", 80, 4, -1, 4),
++    ("Augmentation Decryptor", -40, 9, -2, 2),
++    ("Optimized Attainment Decryptor", 90, 2, 1, -2),
++    ("Optimized Augmentation Decryptor", -10, 7, 2, 0),
++    ("Parity Decryptor", 50, 3, 1, -2),
++    ("Process Decryptor", 10, 0, 3, 6),
++    ("Symmetry Decryptor", 0, 2, 1, 8),
++)
++
++# Relic quality word, in display order -> (base chance, base runs).
++_RELICS = (
++    ("Intact", 0.26, 20),
++    ("Malfunctioning", 0.21, 10),
++    ("Wrecked", 0.14, 3),
++)
++
++
++@dataclass(frozen=True)
++class Outcome:
++    invented_from: str  # relic name; None for Tech II
++    decryptor: str
++    probability: float  # percent, 0-100, unrounded
++    runs: int
++    me: int
++    te: int
++
++
++@dataclass(frozen=True)
++class Plan:
++    product_id: int
++    from_relics: bool
++    base_blueprint: tuple  # (name, type_id) for Tech II; None for relics
++    datacores: tuple  # of names
++    quantity_per_run: int
++    skills: tuple  # of names
++    seconds: int
++    outcomes: tuple  # of Outcome, in display order
++
++
++def _relic_rank(name):
++    words = name.split()
++    for rank, (quality, _, _) in enumerate(_RELICS):
++        if quality in words:
++            return rank
++    return None
++
++
++def _decryptor_order(row):
++    name = row[0]
++    return (name != "None", name.lower(), name)
++
++
++def _chance_percent(base, science_levels, encryption_levels, multiplier):
++    skill_factor = 1 + science_levels / 30 + encryption_levels / 40
++    percent = (1 + multiplier / 100) * 100 * base * skill_factor
++    return min(100.0, max(0.0, percent))
++
++
++class Invention:
++    def __init__(self, sde_dir, catalog):
++        self._catalog = catalog
++        manufacturing = {
++            aid for aid, name in sde_source.activities(sde_dir) if name == _MANUFACTURING
++        } or {_MANUFACTURING_FALLBACK_ID}
++
++        # blueprint -> product it manufactures; product -> [blueprints]
++        self._builds = {}
++        self._built_by = {}
++        # invented blueprint -> [(source, activity, runs)]
++        self._sources = {}
++        for bp, act, product, qty in sde_source.activity_products(sde_dir):
++            if not (catalog.is_valid(bp) and catalog.is_valid(product)):
++                continue
++            if act in manufacturing and bp not in self._builds:
++                self._builds[bp] = product
++                self._built_by.setdefault(product, []).append(bp)
++            elif act in _INVENTION_ACTIVITIES:
++                self._sources.setdefault(product, []).append((bp, act, qty or 0))
++
++        jobs = {(src, act) for found in self._sources.values() for src, act, _ in found}
++        self._times = {}
++        for bp, act, seconds in sde_source.activity_times(sde_dir):
++            if (bp, act) in jobs:
++                self._times[(bp, act)] = seconds or 0
++        self._materials = {}
++        for bp, act, material, qty in sde_source.activity_materials(sde_dir):
++            if (bp, act) in jobs:
++                self._materials.setdefault((bp, act), []).append((material, qty or 0))
++        self._skills = {}
++        for bp, act, skill, _ in sde_source.activity_skills(sde_dir):
++            if (bp, act) in jobs and catalog.is_valid(skill):
++                self._skills.setdefault((bp, act), set()).add(skill)
++        self._chances = {}
++        for bp, act, product, chance in sde_source.activity_probabilities(sde_dir):
++            if (bp, act) in jobs and chance is not None:
++                self._chances.setdefault((bp, act, product), chance)
++
++    def _invented_blueprint(self, type_id):
++        """(product, invented blueprint) for a product or its blueprint, or None."""
++        if type_id in self._builds and type_id in self._sources:
++            return self._builds[type_id], type_id
++        for bp in sorted(self._built_by.get(type_id, [])):
++            if bp in self._sources:
++                return type_id, bp
++        return None
++
++    def _material_name(self, type_id):
++        return self._catalog.name(type_id) if self._catalog.is_valid(type_id) else str(type_id)
++
++    def _is_encryption(self, skill):
++        return self._catalog.name(skill).endswith(_ENCRYPTION_SUFFIX)
++
++    def _is_science(self, skill):
++        return self._catalog.group_name(skill) == _SCIENCE_GROUP and not self._is_encryption(skill)
++
++    def plan(self, type_id, skill_level):
++        """Invention plan for a product or its blueprint; None if not inventable."""
++        found = self._invented_blueprint(type_id)
++        if found is None:
++            return None
++        product, target = found
++        sources = self._sources[target]
++        relics = [s for s in sources if _relic_rank(self._catalog.name(s[0])) is not None]
++
++        if relics:
++            jobs = sorted(
++                relics,
++                key=lambda s: (
++                    _relic_rank(self._catalog.name(s[0])),
++                    self._catalog.name(s[0]).lower(),
++                    s[0],
++                ),
++            )
++        else:
++            jobs = [min(sources, key=lambda s: ((s[0], s[1], target) not in self._chances, s[0]))]
++
++        keys = [(src, act) for src, act, _ in jobs]
++        materials = [m for key in keys for m in self._materials.get(key, ())]
++        skills = set().union(*(self._skills.get(key, set()) for key in keys))
++        science = sum(skill_level for s in skills if self._is_science(s))
++        encryption = sum(skill_level for s in skills if self._is_encryption(s))
++
++        outcomes = []
++        for src, act, runs in jobs:
++            if relics:
++                _, base, base_runs = _RELICS[_relic_rank(self._catalog.name(src))]
++                invented_from = self._catalog.name(src)
++            else:
++                base = self._chances.get((src, act, target), 0.0)
++                base_runs = runs
++                invented_from = None
++            for name, multiplier, d_runs, d_me, d_te in sorted(_DECRYPTORS, key=_decryptor_order):
++                outcomes.append(
++                    Outcome(
++                        invented_from=invented_from,
++                        decryptor=name,
++                        probability=_chance_percent(base, science, encryption, multiplier),
++                        runs=base_runs + d_runs,
++                        me=_BASE_ME + d_me,
++                        te=_BASE_TE + d_te,
++                    )
++                )
++
++        base_bp = None
++        if not relics:
++            base_bp = (self._catalog.name(jobs[0][0]), jobs[0][0])
++        return Plan(
++            product_id=product,
++            from_relics=bool(relics),
++            base_blueprint=base_bp,
++            datacores=tuple(sorted({self._material_name(m) for m, _ in materials}, key=lambda n: (n.lower(), n))),
++            quantity_per_run=max((q for _, q in materials), default=0),
++            skills=tuple(sorted({self._catalog.name(s) for s in skills}, key=lambda n: (n.lower(), n))),
++            seconds=self._times.get(keys[0], 0),
++            outcomes=tuple(outcomes),
++        )
+
+### invention_report.py (created)
+--- invention_report.py
++++ invention_report.py
+@@ -0,0 +1,78 @@
++"""Canonical invention report text.
++
++Secret: the exact layout of the invention report -- labels, ordering,
++number formatting, time and probability rounding, and how the
++probabilities table is drawn.
++"""
++
++import math
++from dataclasses import dataclass
++from decimal import ROUND_HALF_UP, Decimal
++
++
++@dataclass(frozen=True)
++class InventionReportInput:
++    item_name: str
++    type_id: int
++    category: str
++    group: str
++    market_path: tuple  # market group names, root to leaf
++    tech_level: str
++    base_blueprint: tuple  # (name, type_id), or None to omit the line
++    datacores: tuple  # of names, display order
++    quantity_per_run: int
++    skills: tuple  # of names, display order
++    seconds: int
++    with_source: bool  # show the "Invented From" column
++    rows: tuple  # of (invented_from, decryptor, percent, runs, me, te), display order
++
++
++_SOURCE_COLUMN = ("Invented From", 30)
++_COLUMNS = (
++    ("Decryptor", 33),
++    ("Probability", 13),
++    ("Runs", 6),
++    ("ME", 4),
++    ("TE", 4),
++)
++
++
++def _percent_text(percent):
++    return str(Decimal(repr(percent)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
++
++
++def _table_line(cells, widths):
++    return "|" + "".join(" " + str(c).ljust(w - 1) + "|" for c, w in zip(cells, widths))
++
++
++def render(data):
++    market = " > ".join(data.market_path) if data.market_path else "None"
++    lines = [
++        "ITEM: %s (%d)" % (data.item_name, data.type_id),
++        "Group: %s > %s" % (data.category, data.group),
++        "Market Group: %s" % market,
++        "Tech Level: %s" % data.tech_level,
++        "",
++        "Invention:",
++    ]
++    if data.base_blueprint is not None:
++        lines.append("Base: %s (%d)" % data.base_blueprint)
++    lines += [
++        "Datacores: %s" % ", ".join(data.datacores),
++        "Required Per Run: %d" % data.quantity_per_run,
++        "Skills: %s" % ", ".join(data.skills),
++        "Time: %d" % math.ceil(data.seconds / 60),
++        "Probabilities:",
++    ]
++
++    columns = ((_SOURCE_COLUMN,) if data.with_source else ()) + _COLUMNS
++    titles = [title for title, _ in columns]
++    widths = [width for _, width in columns]
++    lines.append(_table_line(titles, widths))
++    lines.append("|" + "".join("-" * w + "|" for w in widths))
++    for source, decryptor, percent, runs, me, te in data.rows:
++        cells = [decryptor, _percent_text(percent), runs, me, te]
++        if data.with_source:
++            cells.insert(0, source)
++        lines.append(_table_line(cells, widths))
++    return "\n".join(lines)
+
+### sde_source.py (modified)
+--- sde_source.py
++++ sde_source.py
+@@ -138,3 +138,26 @@
+     for name, volume in data.items():
+         if volume is not None:
+             yield (str(name), float(volume))
++
++
++def activity_skills(sde_dir):
++    """Yield (blueprint_type_id, activity_id, skill_type_id, level)."""
++    for row in _rows(sde_dir, "industryActivitySkills.csv.bz2"):
++        yield (
++            _int(row["typeID"]),
++            _int(row["activityID"]),
++            _int(row["skillID"]),
++            _int(row["level"]),
++        )
++
++
++def activity_probabilities(sde_dir):
++    """Yield (blueprint_type_id, activity_id, product_type_id, probability_0_to_1)."""
++    for row in _rows(sde_dir, "industryActivityProbabilities.csv.bz2"):
++        value = _text(row["probability"])
++        yield (
++            _int(row["typeID"]),
++            _int(row["activityID"]),
++            _int(row["productTypeID"]),
++            float(value) if value is not None else None,
++        )
+

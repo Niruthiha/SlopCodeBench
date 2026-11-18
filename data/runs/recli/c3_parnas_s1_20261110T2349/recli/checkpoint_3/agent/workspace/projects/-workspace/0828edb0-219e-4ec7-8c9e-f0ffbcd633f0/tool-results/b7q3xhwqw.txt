@@ -1,0 +1,1421 @@
+=== command_tree
+     1	"""Command storage.
+     2	
+     3	Secret: how commands are stored as a tree, how names and aliases are
+     4	matched, and how children are ordered for display.
+     5	"""
+     6	
+     7	from .synopsis import Synopsis
+     8	
+     9	
+    10	def _sort_key(name):
+    11	    return (name.casefold(), name)
+    12	
+    13	
+    14	class CommandNode:
+    15	    """One command (or the root) in the command tree."""
+    16	
+    17	    def __init__(self, name, parent=None):
+    18	        self._name = name
+    19	        self._parent = parent
+    20	        self._children = {}
+    21	        self._aliases = {}
+    22	        self._handler = None
+    23	        self._synopsis_text = ""
+    24	        self._synopsis = Synopsis("")
+    25	        self._description = ""
+    26	        self._alias = None
+    27	        self._defaults = {}
+    28	
+    29	    def _configure(self, handler, synopsis, description, alias, defaults):
+    30	        self._handler = handler
+    31	        self._synopsis_text = synopsis or ""
+    32	        self._synopsis = Synopsis(self._synopsis_text)
+    33	        self._description = description or ""
+    34	        self._alias = alias
+    35	        self._defaults = dict(defaults or {})
+    36	
+    37	    @property
+    38	    def name(self):
+    39	        return self._name
+    40	
+    41	    @property
+    42	    def path(self):
+    43	        """Full space-separated command path ('' for the root)."""
+    44	        words = []
+    45	        node = self
+    46	        while node._parent is not None:
+    47	            words.append(node._name)
+    48	            node = node._parent
+    49	        return " ".join(reversed(words))
+    50	
+    51	    @property
+    52	    def parent(self):
+    53	        return self._parent
+    54	
+    55	    @property
+    56	    def description(self):
+    57	        return self._description
+    58	
+    59	    @property
+    60	    def alias(self):
+    61	        return self._alias
+    62	
+    63	    @property
+    64	    def synopsis(self):
+    65	        return self._synopsis
+    66	
+    67	    def defaults(self):
+    68	        return dict(self._defaults)
+    69	
+    70	    def is_root(self):
+    71	        return self._parent is None
+    72	
+    73	    def is_runnable(self):
+    74	        return self._handler is not None
+    75	
+    76	    def has_children(self):
+    77	        return bool(self._children)
+    78	
+    79	    def children(self):
+    80	        return [self._children[n] for n in sorted(self._children, key=_sort_key)]
+    81	
+    82	    def child_names(self):
+    83	        return sorted(self._children, key=_sort_key)
+    84	
+    85	    def find_child(self, word):
+    86	        """Match ``word`` against child names, then child aliases."""
+    87	        if word in self._children:
+    88	            return self._children[word]
+    89	        canonical = self._aliases.get(word)
+    90	        return self._children.get(canonical) if canonical else None
+    91	
+    92	    def run(self, context):
+    93	        return self._handler(context)
+    94	
+    95	    def _child(self, name, create):
+    96	        if name not in self._children and create:
+    97	            if name in self._aliases:
+    98	                raise ValueError(f"'{name}' is already an alias under '{self.path}'")
+    99	            self._children[name] = CommandNode(name, self)
+   100	        return self._children.get(name)
+   101	
+   102	    def _add_alias(self, alias, canonical):
+   103	        if alias in self._children or self._aliases.get(alias, canonical) != canonical:
+   104	            raise ValueError(f"alias '{alias}' conflicts under '{self.path}'")
+   105	        self._aliases[alias] = canonical
+   106	
+   107	
+   108	class CommandTree:
+   109	    """Registry of all commands."""
+   110	
+   111	    def __init__(self):
+   112	        self._root = CommandNode("")
+   113	
+   114	    @property
+   115	    def root(self):
+   116	        return self._root
+   117	
+   118	    def register(self, path, handler=None, *, synopsis="", description="",
+   119	                 alias=None, defaults=None):
+   120	        """Register (or update) the command at space-separated ``path``.
+   121	
+   122	        Missing parent commands are created as non-runnable groups.
+   123	        """
+   124	        words = path.split()
+   125	        if not words:
+   126	            raise ValueError("command path must not be empty")
+   127	        node = self._root
+   128	        for word in words:
+   129	            node = node._child(word, create=True)
+   130	        node._configure(handler, synopsis, description, alias, defaults)
+   131	        if alias:
+   132	            node.parent._add_alias(alias, node.name)
+   133	        return node
+   134	
+   135	    def find(self, words):
+   136	        """Return the node at exactly ``words`` (aliases allowed) or ``None``."""
+   137	        node = self._root
+   138	        for word in words:
+   139	            node = node.find_child(word)
+   140	            if node is None:
+   141	                return None
+   142	        return None if node is self._root else node
+=== synopsis
+     1	"""Synopsis grammar.
+     2	
+     3	Secret: the textual grammar of synopsis strings and how each part is
+     4	classified (positional, keyed parameter, flag, negatable flag, generic keyed
+     5	field, malformed; optional and repeating modifiers).
+     6	"""
+     7	
+     8	import re
+     9	
+    10	_NAME = r"[A-Za-z0-9][\w-]*"
+    11	_PLACEHOLDER = r"[\w|.-]+"
+    12	
+    13	_POSITIONAL = re.compile(rf"^<({_PLACEHOLDER})>$")
+    14	_GENERIC = re.compile(rf"^--<({_PLACEHOLDER})>=<({_PLACEHOLDER})>$")
+    15	_KEYED = re.compile(rf"^--({_NAME})=<({_PLACEHOLDER})>$")
+    16	_KEYED_OPTIONAL_VALUE = re.compile(rf"^--({_NAME})\[=<({_PLACEHOLDER})>\]$")
+    17	_FLAG = re.compile(rf"^--({_NAME})$")
+    18	_NEGATABLE_FLAG = re.compile(rf"^--\[no-\]({_NAME})$")
+    19	
+    20	_POSITIONAL_KIND = "positional"
+    21	_KEYED_KIND = "keyed"
+    22	_FLAG_KIND = "flag"
+    23	_GENERIC_KIND = "generic"
+    24	_MALFORMED_KIND = "malformed"
+    25	
+    26	_REPEAT = "..."
+    27	
+    28	
+    29	class _Part:
+    30	    __slots__ = ("text", "kind", "name", "optional", "repeating", "value_optional")
+    31	
+    32	    def __init__(self, text, kind, name=None, optional=False, repeating=False,
+    33	                 value_optional=False):
+    34	        self.text = text
+    35	        self.kind = kind
+    36	        self.name = name
+    37	        self.optional = optional
+    38	        self.repeating = repeating
+    39	        self.value_optional = value_optional
+    40	
+    41	
+    42	def _outer_brackets(text):
+    43	    """True when the leading '[' is closed by the trailing ']'."""
+    44	    if not (text.startswith("[") and text.endswith("]")):
+    45	        return False
+    46	    depth = 0
+    47	    for index, char in enumerate(text):
+    48	        if char == "[":
+    49	            depth += 1
+    50	        elif char == "]":
+    51	            depth -= 1
+    52	            if depth == 0 and index != len(text) - 1:
+    53	                return False
+    54	    return depth == 0
+    55	
+    56	
+    57	def _parse_part(text):
+    58	    core = text
+    59	    optional = repeating = False
+    60	    if core.endswith(_REPEAT):
+    61	        repeating, core = True, core[: -len(_REPEAT)]
+    62	    if _outer_brackets(core):
+    63	        optional, core = True, core[1:-1]
+    64	        if core.endswith(_REPEAT):
+    65	            repeating, core = True, core[: -len(_REPEAT)]
+    66	
+    67	    def part(kind, name=None, value_optional=False):
+    68	        return _Part(text, kind, name, optional, repeating, value_optional)
+    69	
+    70	    match = _POSITIONAL.match(core)
+    71	    if match:
+    72	        return part(_POSITIONAL_KIND, match.group(1))
+    73	    match = _GENERIC.match(core)
+    74	    if match:
+    75	        return part(_GENERIC_KIND, match.group(1))
+    76	    match = _KEYED.match(core)
+    77	    if match:
+    78	        return part(_KEYED_KIND, match.group(1))
+    79	    match = _KEYED_OPTIONAL_VALUE.match(core)
+    80	    if match:
+    81	        return part(_KEYED_KIND, match.group(1), value_optional=True)
+    82	    match = _FLAG.match(core) or _NEGATABLE_FLAG.match(core)
+    83	    if match:
+    84	        return part(_FLAG_KIND, match.group(1))
+    85	    return _Part(text, _MALFORMED_KIND)
+    86	
+    87	
+    88	class Synopsis:
+    89	    """A parsed synopsis that answers questions about accepted arguments."""
+    90	
+    91	    OK = "ok"
+    92	    UNKNOWN = "unknown"
+    93	    NEEDS_VALUE = "needs-value"
+    94	    TAKES_NO_VALUE = "takes-no-value"
+    95	
+    96	    def __init__(self, text=""):
+    97	        self._parts = [_parse_part(p) for p in (text or "").split()]
+    98	        self._options = {}
+    99	        for part in self._parts:
+   100	            if part.kind in (_KEYED_KIND, _FLAG_KIND):
+   101	                self._options[part.name] = part
+   102	
+   103	    def text(self):
+   104	        return " ".join(part.text for part in self._parts)
+   105	
+   106	    def malformed_parts(self):
+   107	        return [p.text for p in self._parts if p.kind == _MALFORMED_KIND]
+   108	
+   109	    def _positionals(self):
+   110	        return [p for p in self._parts if p.kind == _POSITIONAL_KIND]
+   111	
+   112	    def required_positional_count(self):
+   113	        return sum(1 for p in self._positionals() if not p.optional)
+   114	
+   115	    def positional_limit(self):
+   116	        """Maximum number of positional words, or ``None`` if unbounded."""
+   117	        positionals = self._positionals()
+   118	        if any(p.repeating for p in positionals):
+   119	            return None
+   120	        return len(positionals)
+   121	
+   122	    def positional_names(self):
+   123	        return [p.name for p in self._positionals()]
+   124	
+   125	    def option_names(self):
+   126	        """Declared keyed-parameter and flag names, in declaration order."""
+   127	        return list(self._options)
+   128	
+   129	    def required_option_names(self):
+   130	        return [name for name, p in self._options.items() if not p.optional]
+   131	
+   132	    def accepts_any_option(self):
+   133	        return any(p.kind == _GENERIC_KIND for p in self._parts)
+   134	
+   135	    def requires_generic_option(self):
+   136	        """Name of a mandatory generic field placeholder, or ``None``."""
+   137	        for p in self._parts:
+   138	            if p.kind == _GENERIC_KIND and not p.optional:
+   139	                return p.name
+   140	        return None
+   141	
+   142	    def interpret(self, name, value):
+   143	        """Interpret a supplied option.
+   144	
+   145	        ``value`` is the supplied string or ``None`` when no ``=`` was given.
+   146	        Returns ``(key, value, status)`` where status is one of the class
+   147	        constants. Flags yield booleans; keyed parameters yield strings.
+   148	        """
+   149	        part = self._options.get(name)
+   150	        if part is not None:
+   151	            if part.kind == _FLAG_KIND:
+   152	                if value is None:
+   153	                    return name, True, self.OK
+   154	                return name, None, self.TAKES_NO_VALUE
+   155	            if value is None and part.value_optional:
+   156	                return name, True, self.OK
+   157	            if value is None or value == "":
+   158	                return name, None, self.NEEDS_VALUE
+   159	            return name, value, self.OK
+   160	        if name.startswith("no-") and value is None:
+   161	            negated = self._options.get(name[3:])
+   162	            if negated is not None and negated.kind == _FLAG_KIND:
+   163	                return negated.name, False, self.OK
+   164	        if self.accepts_any_option():
+   165	            return name, (True if value is None else value), self.OK
+   166	        return name, None, self.UNKNOWN
+=== config_files
+     1	"""Configuration sources.
+     2	
+     3	Secret: where the global and project config files live, how YAML
+     4	inheritance (``_: {inherit, merge}``) and array merging work, how alias
+     5	definitions are collected from files, and how missing global defaults are
+     6	written back to the global config file.
+     7	"""
+     8	
+     9	import errno
+    10	import os
+    11	
+    12	from . import config_spec, messages, yaml_lite
+    13	from .aliases import is_alias_name
+    14	from .errors import CliError
+    15	
+    16	_PROJECT_FILES = ("appctl.local.yml", "appctl.yml")
+    17	_AUTO_DEFAULTS = (("locale", "en_US"), ("installer_version", "stable"))
+    18	_META_KEY = "_"
+    19	
+    20	
+    21	class Locations:
+    22	    """Filesystem locations derived from the environment."""
+    23	
+    24	    def __init__(self, env):
+    25	        root = env.get("APPCTL_ROOT_DIR") or ""
+    26	        config = env.get("APPCTL_CONFIG_PATH") or ""
+    27	        self.explicit = bool(root or config)
+    28	        if not root:
+    29	            home = env.get("HOME") or os.path.expanduser("~")
+    30	            root = os.path.join(home, ".appctl")
+    31	        self.root_dir = _clean(root)
+    32	        self.global_config_path = (_clean(config) if config else
+    33	                                   os.path.join(self.root_dir, "config", "config.yml"))
+    34	        packages = env.get("APPCTL_PACKAGES_DIR") or ""
+    35	        self.packages_dir = (_clean(packages) if packages else
+    36	                             os.path.join(self.root_dir, "packages"))
+    37	
+    38	
+    39	def _clean(path):
+    40	    path = os.path.expanduser(path)
+    41	    stripped = path.rstrip(os.sep)
+    42	    return stripped or path
+    43	
+    44	
+    45	def find_project_config(cwd):
+    46	    """Search upward from ``cwd`` for a project config file."""
+    47	    directory = os.path.abspath(cwd)
+    48	    while True:
+    49	        for name in _PROJECT_FILES:
+    50	            candidate = os.path.join(directory, name)
+    51	            if os.path.isfile(candidate):
+    52	                return candidate
+    53	        parent = os.path.dirname(directory)
+    54	        if parent == directory:
+    55	            return None
+    56	        directory = parent
+    57	
+    58	
+    59	def _absolutize(path, base):
+    60	    path = os.path.expanduser(path)
+    61	    if os.path.isabs(path):
+    62	        return path
+    63	    return os.path.normpath(os.path.join(base, path))
+    64	
+    65	
+    66	def _arrayify(value):
+    67	    if value is None:
+    68	        return []
+    69	    if isinstance(value, (list, tuple)):
+    70	        return list(value)
+    71	    return [value]
+    72	
+    73	
+    74	def _combine(old, new, merge):
+    75	    if merge and isinstance(old, list) and isinstance(new, list):
+    76	        return old + new
+    77	    return new
+    78	
+    79	
+    80	def _parse(path, text):
+    81	    try:
+    82	        data = yaml_lite.load(text)
+    83	    except yaml_lite.YamlError as exc:
+    84	        raise CliError(messages.config_unparsable(path, exc)) from None
+    85	    return data if isinstance(data, dict) else ({} if data is None else None)
+    86	
+    87	
+    88	def _read(path, tolerant=False):
+    89	    """Return the mapping stored at ``path`` or ``None`` if absent."""
+    90	    if not os.path.exists(path):
+    91	        return None
+    92	    try:
+    93	        with open(path, encoding="utf-8") as handle:
+    94	            text = handle.read()
+    95	    except OSError as exc:
+    96	        if tolerant:
+    97	            return None
+    98	        raise CliError(messages.config_unreadable(path, exc)) from None
+    99	    data = _parse(path, text)
+   100	    return {} if data is None else data
+   101	
+   102	
+   103	class LoadedConfig:
+   104	    """Values, aliases and other keys collected from config files."""
+   105	
+   106	    def __init__(self):
+   107	        self.values = {}
+   108	        self.aliases = {}
+   109	        self.extra = {}
+   110	        self.global_config_path = None
+   111	        self.project_config_path = None
+   112	        self.files = []
+   113	
+   114	    def merge_file(self, path, tolerant=False, chain=()):
+   115	        real = os.path.realpath(path)
+   116	        if real in chain:
+   117	            return
+   118	        data = _read(path, tolerant)
+   119	        if data is None:
+   120	            return
+   121	        meta = data.get(_META_KEY)
+   122	        meta = meta if isinstance(meta, dict) else {}
+   123	        base = os.path.dirname(os.path.abspath(path))
+   124	        inherit = meta.get("inherit")
+   125	        if isinstance(inherit, str) and inherit:
+   126	            self.merge_file(_inherit_path(inherit, base), tolerant, chain + (real,))
+   127	        merge = bool(meta.get("merge"))
+   128	        self.files.append(path)
+   129	        for key, value in data.items():
+   130	            if key == _META_KEY:
+   131	                continue
+   132	            key = str(key)
+   133	            if is_alias_name(key):
+   134	                self._merge_alias(key, value, base, merge)
+   135	            elif config_spec.file_param(key) is not None:
+   136	                self._merge_param(key, value, base, merge)
+   137	            else:
+   138	                self.extra[key] = _combine(self.extra.get(key), value, merge)
+   139	
+   140	    def _merge_alias(self, name, value, base, merge):
+   141	        if isinstance(value, list):
+   142	            definition = [str(v) for v in value if v is not None]
+   143	        elif isinstance(value, dict):
+   144	            definition = {str(k): v for k, v in value.items()}
+   145	            path = definition.get("path")
+   146	            if isinstance(path, str) and path and "ssh" not in definition:
+   147	                definition["path"] = _absolutize(path, base)
+   148	        elif value is None:
+   149	            definition = {}
+   150	        else:
+   151	            return
+   152	        self.aliases[name] = _combine(self.aliases.get(name), definition, merge)
+   153	
+   154	    def _merge_param(self, key, value, base, merge):
+   155	        param = config_spec.file_param(key)
+   156	        if param.kind == "list":
+   157	            value = _arrayify(value)
+   158	        if key == "path" and isinstance(value, str) and value:
+   159	            value = _absolutize(value, base)
+   160	        self.values[key] = _combine(self.values.get(key), value, merge)
+   161	
+   162	
+   163	def _inherit_path(inherit, base):
+   164	    inherit = os.path.expanduser(inherit)
+   165	    if os.path.isabs(inherit):
+   166	        return inherit
+   167	    relative = os.path.join(base, inherit)
+   168	    if not os.path.exists(relative) and os.path.exists(inherit):
+   169	        return os.path.abspath(inherit)
+   170	    return os.path.normpath(relative)
+   171	
+   172	
+   173	def ensure_global_defaults(locations):
+   174	    """Write missing auto-created keys into the global config file."""
+   175	    path = locations.global_config_path
+   176	    try:
+   177	        text = ""
+   178	        if os.path.exists(path):
+   179	            if not os.path.isfile(path):
+   180	                raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), path)
+   181	            with open(path, encoding="utf-8") as handle:
+   182	                text = handle.read()
+   183	        data = _parse(path, text)
+   184	        if data is None:
+   185	            return
+   186	        missing = [(k, v) for k, v in _AUTO_DEFAULTS if k not in data]
+   187	        if not missing:
+   188	            return
+   189	        expected = dict(data, **dict(missing))
+   190	        separator = "\n" if text and not text.endswith("\n") else ""
+   191	        updated = text + separator + "".join(
+   192	            yaml_lite.scalar_line(k, v) for k, v in missing)
+   193	        try:
+   194	            if yaml_lite.load(updated) != expected:
+   195	                raise yaml_lite.YamlError("append changed meaning")
+   196	        except yaml_lite.YamlError:
+   197	            updated = yaml_lite.dump(expected)
+   198	        directory = os.path.dirname(path)
+   199	        if directory:
+   200	            os.makedirs(directory, exist_ok=True)
+   201	        with open(path, "w", encoding="utf-8") as handle:
+   202	            handle.write(updated)
+   203	    except OSError as exc:
+   204	        if locations.explicit:
+   205	            raise CliError(messages.config_unwritable(path, exc)) from None
+   206	
+   207	
+   208	def load(locations, cwd):
+   209	    """Load the global config file then the project config file."""
+   210	    loaded = LoadedConfig()
+   211	    ensure_global_defaults(locations)
+   212	    global_path = locations.global_config_path
+   213	    if os.path.isfile(global_path):
+   214	        loaded.global_config_path = global_path
+   215	        loaded.merge_file(global_path, tolerant=not locations.explicit)
+   216	    project = find_project_config(cwd)
+   217	    if project and not (loaded.global_config_path and
+   218	                        os.path.realpath(project) == os.path.realpath(global_path)):
+   219	        loaded.project_config_path = project
+   220	        loaded.merge_file(project)
+   221	    return loaded
+=== remote
+     1	"""Remote execution.
+     2	
+     3	Secret: the syntax of ``ssh`` connection strings, how each transport
+     4	(ssh, docker, docker-compose, docker-compose-run, vagrant) builds its
+     5	command line, how the remote appctl command is assembled (pre-command,
+     6	working directory, forwarded arguments) and how transport failures are
+     7	reported.
+     8	"""
+     9	
+    10	import re
+    11	import shlex
+    12	import shutil
+    13	import subprocess
+    14	
+    15	from . import messages as _messages
+    16	
+    17	_REMOTE_BINARY = "appctl"
+    18	_PRE_CMD_ENV = "APPCTL_SSH_PRE_CMD"
+    19	_STRICT_ENV = "APPCTL_STRICT_ARGS_MODE"
+    20	_CONNECT_FAILURE = 255
+    21	_SSH_URL = re.compile(
+    22	    r"^((?P<scheme>docker|docker-compose|docker-compose-run|ssh|vagrant):)?"
+    23	    r"(//)?((?P<user>[^@:]+)@)?(?P<host>[^:/~]+)(:(?P<port>\d*))?"
+    24	    r"(?P<path>[/~].*)?$")
+    25	# Connection keys forwarded to the remote invocation as runtime flags.
+    26	_FORWARDED = ("path", "url", "user")
+    27	
+    28	
+    29	def parse(url):
+    30	    """Split a connection string into its parts (missing parts are None)."""
+    31	    match = _SSH_URL.match(url or "")
+    32	    if not match:
+    33	        return {"scheme": None, "user": None, "host": url, "port": None, "path": None}
+    34	    bits = match.groupdict()
+    35	    return {key: (value or None) for key, value in bits.items()}
+    36	
+    37	
+    38	def _quote_path(path):
+    39	    if path == "~":
+    40	        return path
+    41	    if path.startswith("~/"):
+    42	        return "~/" + shlex.quote(path[2:])
+    43	    return shlex.quote(path)
+    44	
+    45	
+    46	def remote_command(args, bits, env):
+    47	    """The shell command run on the remote side."""
+    48	    parts = []
+    49	    pre = (env.get(_PRE_CMD_ENV) or "").strip().rstrip(";").strip()
+    50	    if pre:
+    51	        parts.append(pre + ";")
+    52	    if bits.get("path"):
+    53	        parts.append(f"cd {_quote_path(bits['path'])};")
+    54	    if env.get(_STRICT_ENV):
+    55	        parts.append(f"{_STRICT_ENV}=1")
+    56	    parts.append(_REMOTE_BINARY)
+    57	    parts.extend(shlex.quote(a) for a in args)
+    58	    return " ".join(parts)
+    59	
+    60	
+    61	def transport_argv(bits, command, args, tty, debug):
+    62	    """The local command line that runs ``command`` remotely."""
+    63	    scheme = bits.get("scheme") or "ssh"
+    64	    host, user, port = bits.get("host") or "", bits.get("user"), bits.get("port")
+    65	    if scheme == "docker":
+    66	        argv = ["docker", "exec"]
+    67	        if user:
+    68	            argv += ["--user", user]
+    69	        if tty:
+    70	            argv.append("-t")
+    71	        return argv + [host, "sh", "-c", command]
+    72	    if scheme == "docker-compose":
+    73	        argv = ["docker-compose", "exec"]
+    74	        if user:
+    75	            argv += ["--user", user]
+    76	        if not tty:
+    77	            argv.append("-T")
+    78	        return argv + [host, "sh", "-c", command]
+    79	    if scheme == "docker-compose-run":
+    80	        argv = ["docker-compose", "run"]
+    81	        if user:
+    82	            argv += ["--user", user]
+    83	        if not tty:
+    84	            argv.append("-T")
+    85	        return argv + [host] + list(args)
+    86	    if scheme == "vagrant":
+    87	        return ["vagrant", "ssh", "-c", command, host]
+    88	    argv = ["ssh"]
+    89	    if port:
+    90	        argv += ["-p", str(int(port))]
+    91	    argv.append("-t" if tty else "-T")
+    92	    argv.append("-vvv" if debug else "-q")
+    93	    argv.append(f"{user}@{host}" if user else host)
+    94	    return argv + [command]
+    95	
+    96	
+    97	def _fileno(stream):
+    98	    try:
+    99	        return stream.fileno()
+   100	    except (AttributeError, OSError, ValueError):
+   101	        return None
+   102	
+   103	
+   104	def _isatty(stream):
+   105	    try:
+   106	        return stream.isatty()
+   107	    except (AttributeError, ValueError):
+   108	        return False
+   109	
+   110	
+   111	def forwarded_args(raw_args, connection, runtime_values):
+   112	    """Arguments for the remote appctl: the local ones minus ``--ssh``, plus
+   113	    connection parameters that were not given at runtime."""
+   114	    args = [a for a in raw_args if not (a == "--ssh" or a.startswith("--ssh="))]
+   115	    for key in _FORWARDED:
+   116	        value = connection.get(key)
+   117	        if value not in (None, "") and key not in runtime_values:
+   118	            args.append(f"--{key}={value}")
+   119	    return args
+   120	
+   121	
+   122	def run(ssh, raw_args, connection, runtime_values, config, env, out, stdout, stderr):
+   123	    """Run the command through the configured transport; return exit code."""
+   124	    bits = parse(ssh)
+   125	    args = forwarded_args(raw_args, connection, runtime_values)
+   126	    tty = not config.get("skip-tty") and _isatty(stdout)
+   127	    command = remote_command(args, bits, env)
+   128	    argv = transport_argv(bits, command, args, tty, config.debug())
+   129	    out.debug(f"Running remote command: {shlex.join(argv)}")
+   130	    for stream in (stdout, stderr):
+   131	        if hasattr(stream, "flush"):
+   132	            stream.flush()
+   133	    executable = shutil.which(argv[0], path=env.get("PATH"))
+   134	    if executable is None:
+   135	        out.error(_messages.ssh_connection_failed())
+   136	        return _CONNECT_FAILURE
+   137	    out_fd, err_fd = _fileno(stdout), _fileno(stderr)
+   138	    try:
+   139	        proc = subprocess.run(
+   140	            [executable] + argv[1:], env=dict(env),
+   141	            stdout=out_fd if out_fd is not None else subprocess.PIPE,
+   142	            stderr=err_fd if err_fd is not None else subprocess.PIPE)
+   143	    except OSError:
+   144	        out.error(_messages.ssh_connection_failed())
+   145	        return _CONNECT_FAILURE
+   146	    if out_fd is None and proc.stdout:
+   147	        stdout.write(proc.stdout.decode(errors="replace"))
+   148	    if err_fd is None and proc.stderr:
+   149	        stderr.write(proc.stderr.decode(errors="replace"))
+   150	    if proc.returncode == _CONNECT_FAILURE:
+   151	        out.error(_messages.ssh_connection_failed())
+   152	    return proc.returncode
+=== aliases
+     1	"""Alias registry.
+     2	
+     3	Secret: the alias name syntax, how runtime aliases override file aliases,
+     4	when ``@all`` is registered automatically, how groups are expanded and
+     5	validated, and the order in which broadcast targets run.
+     6	"""
+     7	
+     8	import json
+     9	import re
+    10	
+    11	from . import messages as _messages
+    12	from .errors import CliError
+    13	from .suggest import suggest
+    14	
+    15	_ALIAS_NAME = re.compile(r"^@[A-Za-z0-9_.\-]+$")
+    16	_RUNTIME_ENV = "APPCTL_RUNTIME_ALIAS"
+    17	ALL = "@all"
+    18	_AUTO_ALL = "Run command against every registered alias."
+    19	
+    20	
+    21	def is_alias_name(text):
+    22	    return isinstance(text, str) and bool(_ALIAS_NAME.match(text))
+    23	
+    24	
+    25	def _sort_key(name):
+    26	    return (name.casefold(), name)
+    27	
+    28	
+    29	def runtime_aliases(env):
+    30	    """Alias definitions from the runtime environment variable."""
+    31	    raw = env.get(_RUNTIME_ENV)
+    32	    if not raw:
+    33	        return {}
+    34	    try:
+    35	        decoded = json.loads(raw)
+    36	    except ValueError:
+    37	        return {}
+    38	    if not isinstance(decoded, dict):
+    39	        return {}
+    40	    result = {}
+    41	    for name, value in decoded.items():
+    42	        if not is_alias_name(name):
+    43	            continue
+    44	        if isinstance(value, list):
+    45	            result[name] = [str(v) for v in value if v is not None]
+    46	        elif isinstance(value, dict):
+    47	            result[name] = dict(value)
+    48	        elif value is None:
+    49	            result[name] = {}
+    50	    return result
+    51	
+    52	
+    53	class Target:
+    54	    """Resolution of an alias: either a connection or a group of aliases."""
+    55	
+    56	    def __init__(self, name, connection=None, members=None):
+    57	        self.name = name
+    58	        self.connection = connection
+    59	        self.members = members
+    60	
+    61	    def is_group(self):
+    62	        return self.members is not None
+    63	
+    64	
+    65	class AliasRegistry:
+    66	    def __init__(self, file_aliases, runtime=None):
+    67	        self._defs = dict(file_aliases)
+    68	        self._defs.update(runtime or {})
+    69	        if self._defs and ALL not in self._defs:
+    70	            self._defs[ALL] = _AUTO_ALL
+    71	
+    72	    def names(self):
+    73	        return sorted(self._defs, key=_sort_key)
+    74	
+    75	    def is_registered(self, name):
+    76	        return name in self._defs
+    77	
+    78	    def definitions(self):
+    79	        return dict(self._defs)
+    80	
+    81	    def definition(self, name):
+    82	        return self._defs.get(name)
+    83	
+    84	    def _broadcast_members(self):
+    85	        return [name for name in self.names()
+    86	                if name != ALL and isinstance(self._defs[name], dict)]
+    87	
+    88	    def resolve(self, name):
+    89	        """Return the ``Target`` for alias ``name`` or raise ``CliError``."""
+    90	        if name == ALL and not self._defs:
+    91	            raise CliError(_messages.alias_all_without_aliases())
+    92	        if name not in self._defs:
+    93	            raise CliError(_messages.alias_not_found(
+    94	                name, suggest(name, list(self._defs))))
+    95	        value = self._defs[name]
+    96	        if name == ALL and value == _AUTO_ALL:
+    97	            return Target(name, members=self._broadcast_members())
+    98	        if isinstance(value, list):
+    99	            members = list(dict.fromkeys(value))
+   100	            invalid = [m for m in members if m not in self._defs]
+   101	            if invalid:
+   102	                raise CliError(_messages.alias_group_invalid(name, invalid))
+   103	            return Target(name, members=members)
+   104	        return Target(name, connection=dict(value) if isinstance(value, dict) else {})
+=== rewrites
+     1	"""Convenience rewrites applied before dispatch.
+     2	
+     3	Secret: which shortcut spellings are rewritten into canonical commands and
+     4	how — currently ``<command> --help`` becomes ``help <command>`` and a bare
+     5	``--version`` becomes ``cli version``.
+     6	"""
+     7	
+     8	from . import tokens as _tokens
+     9	
+    10	
+    11	def _is_bare_flag(token, name):
+    12	    return token.is_option() and token.name == name and token.value is None
+    13	
+    14	
+    15	def _rewrite_version(items):
+    16	    if any(not t.is_option() for t in items):
+    17	        return items
+    18	    if not any(_is_bare_flag(t, "version") for t in items):
+    19	        return items
+    20	    kept = [t for t in items if not _is_bare_flag(t, "version")]
+    21	    return kept + [_tokens.positional("cli"), _tokens.positional("version")]
+    22	
+    23	
+    24	def _rewrite_help(items):
+    25	    if not any(_is_bare_flag(t, "help") for t in items):
+    26	        return items
+    27	    kept = [t for t in items if not _is_bare_flag(t, "help")]
+    28	    help_word = _tokens.positional("help")
+    29	    for index, token in enumerate(kept):
+    30	        if not token.is_option():
+    31	            return kept[:index] + [help_word] + kept[index:]
+    32	    return kept + [help_word]
+    33	
+    34	
+    35	def apply(items):
+    36	    """Return a new token list with all rewrites applied."""
+    37	    return _rewrite_help(_rewrite_version(list(items)))
+=== help_text
+     1	"""Help and usage layout.
+     2	
+     3	Secret: how help listings, command help pages and usage lines are laid out:
+     4	section order, column alignment and wording of the surrounding text.
+     5	"""
+     6	
+     7	from .messages import program_name
+     8	
+     9	
+    10	def _columns(nodes):
+    11	    width = max((len(n.name) for n in nodes), default=0)
+    12	    return "\n".join(f"  {n.name.ljust(width)}  {n.description}".rstrip()
+    13	                     for n in nodes)
+    14	
+    15	
+    16	def _invocation(node):
+    17	    """``appctl <path> <synopsis>`` for one command."""
+    18	    words = [program_name(), node.path]
+    19	    if node.has_children() and not node.is_runnable():
+    20	        words.append("<command>")
+    21	    else:
+    22	        words.append(node.synopsis.text())
+    23	    return " ".join(w for w in words if w)
+    24	
+    25	
+    26	def top_level_help(tree):
+    27	    prog = program_name()
+    28	    return (
+    29	        f"usage: {prog} <command> [<subcommand>] [<args>] [--<flags>]\n"
+    30	        "\n"
+    31	        "Available commands:\n"
+    32	        "\n"
+    33	        f"{_columns(tree.root.children())}\n"
+    34	        "\n"
+    35	        f"See '{prog} help <command>' for more information on a specific command."
+    36	    )
+    37	
+    38	
+    39	def usage_line(node):
+    40	    return f"usage: {_invocation(node)}"
+    41	
+    42	
+    43	def composite_usage(node):
+    44	    lines = []
+    45	    for index, child in enumerate(node.children()):
+    46	        lead = "usage:" if index == 0 else "   or:"
+    47	        lines.append(f"{lead} {_invocation(child)}")
+    48	    lines.append("")
+    49	    lines.append(f"See '{program_name()} help {node.path} <command>' "
+    50	                 "for more information on a specific command.")
+    51	    return "\n".join(lines)
+    52	
+    53	
+    54	def command_help(node):
+    55	    sections = [("NAME", f"  {program_name()} {node.path}")]
+    56	    if node.description:
+    57	        sections.append(("DESCRIPTION", f"  {node.description}"))
+    58	    synopses = []
+    59	    if node.is_runnable():
+    60	        synopses.append(" ".join(
+    61	            w for w in (program_name(), node.path, node.synopsis.text()) if w))
+    62	    if node.has_children():
+    63	        synopses.append(f"{program_name()} {node.path} <command>")
+    64	    sections.append(("SYNOPSIS", "\n".join(f"  {s}" for s in synopses)))
+    65	    if node.alias:
+    66	        sections.append(("ALIAS", f"  {node.alias}"))
+    67	    defaults = node.defaults()
+    68	    if defaults:
+    69	        positional = set(node.synopsis.positional_names())
+    70	        sections.append(("DEFAULTS", "\n".join(
+    71	            f"  <{key}>: {value}" if key in positional else f"  --{key}: {value}"
+    72	            for key, value in defaults.items())))
+    73	    if node.has_children():
+    74	        sections.append(("SUBCOMMANDS", _columns(node.children())))
+    75	    return "\n\n".join(f"{title}\n\n{body}" for title, body in sections)
+=== yaml_lite
+     1	"""YAML reading and writing.
+     2	
+     3	Secret: whether PyYAML is used or the built-in parser for the subset of
+     4	YAML that config files need (block mappings and sequences, flow
+     5	collections, quoted and plain scalars, comments).
+     6	"""
+     7	
+     8	import json
+     9	import re
+    10	
+    11	try:  # pragma: no cover - depends on the environment
+    12	    import yaml as _yaml
+    13	except ImportError:  # pragma: no cover
+    14	    _yaml = None
+    15	
+    16	
+    17	class YamlError(ValueError):
+    18	    pass
+    19	
+    20	
+    21	def load(text):
+    22	    """Parse ``text`` and return the resulting Python value."""
+    23	    if _yaml is not None:
+    24	        try:
+    25	            return _yaml.safe_load(text)
+    26	        except _yaml.YAMLError as exc:
+    27	            raise YamlError(str(exc).replace("\n", " ")) from None
+    28	    return _Parser(text).parse()
+    29	
+    30	
+    31	def dump(data):
+    32	    """Serialise a mapping as YAML text."""
+    33	    if _yaml is not None:
+    34	        return _yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
+    35	    return json.dumps(data, indent=2) + "\n"
+    36	
+    37	
+    38	def scalar_line(key, value):
+    39	    """A single ``key: value`` line for plain string scalars."""
+    40	    return f"{key}: {value}\n"
+    41	
+    42	
+    43	# --- fallback parser ------------------------------------------------------
+    44	
+    45	_NULLS = {"", "~", "null", "Null", "NULL"}
+    46	_TRUES = {"true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"}
+    47	_FALSES = {"false", "False", "FALSE", "no", "No", "NO", "off", "Off", "OFF"}
+    48	_INT = re.compile(r"^[-+]?(0|[1-9][0-9_]*)$")
+    49	_FLOAT = re.compile(r"^[-+]?(\d[\d_]*\.\d*|\.\d+)([eE][-+]?\d+)?$")
+    50	_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "a": "\a", "b": "\b",
+    51	            "e": "\x1b", "f": "\f", "v": "\v", " ": " ", "/": "/"}
+    52	
+    53	
+    54	def _resolve(text):
+    55	    text = text.strip()
+    56	    if text in _NULLS:
+    57	        return None
+    58	    if text in _TRUES:
+    59	        return True
+    60	    if text in _FALSES:
+    61	        return False
+    62	    if _INT.match(text):
+    63	        return int(text.replace("_", ""))
+    64	    if _FLOAT.match(text):
+    65	        return float(text.replace("_", ""))
+    66	    return text
+    67	
+    68	
+    69	def _strip_comment(line):
+    70	    quote = None
+    71	    for index, char in enumerate(line):
+    72	        if quote:
+    73	            if char == quote:
+    74	                quote = None
+    75	            elif char == "\\" and quote == '"':
+    76	                continue
+    77	        elif char in "\"'" and (index == 0 or line[index - 1] in " \t[{,:-"):
+    78	            quote = char
+    79	        elif char == "#" and (index == 0 or line[index - 1] in " \t"):
+    80	            return line[:index].rstrip()
+    81	    return line.rstrip()
+    82	
+    83	
+    84	def _read_quoted(text, start):
+    85	    """Parse a quoted string starting at ``start``; return (value, end)."""
+    86	    quote = text[start]
+    87	    index = start + 1
+    88	    chars = []
+    89	    while index < len(text):
+    90	        char = text[index]
+    91	        if quote == "'" and char == "'":
+    92	            if text[index + 1:index + 2] == "'":
+    93	                chars.append("'")
+    94	                index += 2
+    95	                continue
+    96	            return "".join(chars), index + 1
+    97	        if quote == '"' and char == "\\":
+    98	            code = text[index + 1:index + 2]
+    99	            width = {"x": 2, "u": 4, "U": 8}.get(code)
+   100	            if width:
+   101	                try:
+   102	                    chars.append(chr(int(text[index + 2:index + 2 + width], 16)))
+   103	                except ValueError:
+   104	                    raise YamlError("invalid escape sequence") from None
+   105	                index += 2 + width
+   106	                continue
+   107	            chars.append(_ESCAPES.get(code, code))
+   108	            index += 2
+   109	            continue
+   110	        if quote == '"' and char == '"':
+   111	            return "".join(chars), index + 1
+   112	        chars.append(char)
+   113	        index += 1
+   114	    raise YamlError("unterminated quoted string")
+   115	
+   116	
+   117	def _is_seq_item(content):
+   118	    return content == "-" or content.startswith("- ")
+   119	
+   120	
+   121	def _split_key(content):
+   122	    """Split a ``key: rest`` line; return (key, rest) or None."""
+   123	    if content[:1] in "\"'":
+   124	        key, end = _read_quoted(content, 0)
+   125	        rest = content[end:].lstrip()
+   126	        if not rest.startswith(":"):
+   127	            return None
+   128	        return key, rest[1:].strip()
+   129	    depth = 0
+   130	    for index, char in enumerate(content):
+   131	        if char in "[{":
+   132	            depth += 1
+   133	        elif char in "]}":
+   134	            depth -= 1
+   135	        elif char == ":" and depth == 0 and (
+   136	                index + 1 == len(content) or content[index + 1] in " \t"):
+   137	            return _resolve_key(content[:index]), content[index + 1:].strip()
+   138	    return None
+   139	
+   140	
+   141	def _resolve_key(text):
+   142	    value = _resolve(text)
+   143	    return text.strip() if value is None or isinstance(value, bool) else value
+   144	
+   145	
+   146	class _Flow:
+   147	    def __init__(self, text):
+   148	        self.text = text
+   149	        self.pos = 0
+   150	
+   151	    def skip(self):
+   152	        while self.pos < len(self.text) and self.text[self.pos] in " \t":
+   153	            self.pos += 1
+   154	
+   155	    def peek(self):
+   156	        self.skip()
+   157	        return self.text[self.pos] if self.pos < len(self.text) else ""
+   158	
+   159	    def value(self, stops):
+   160	        char = self.peek()
+   161	        if char == "[":
+   162	            return self.sequence()
+   163	        if char == "{":
+   164	            return self.mapping()
+   165	        if char in "\"'":
+   166	            value, self.pos = _read_quoted(self.text, self.pos)
+   167	            return value
+   168	        start = self.pos
+   169	        while self.pos < len(self.text):
+   170	            char = self.text[self.pos]
+   171	            if char in stops:
+   172	                break
+   173	            if char == ":" and ":" in stops and (
+   174	                    self.pos + 1 == len(self.text) or self.text[self.pos + 1] in " ,]}"):
+   175	                break
+   176	            self.pos += 1
+   177	        return _resolve(self.text[start:self.pos])
+   178	
+   179	    def expect(self, char):
+   180	        if self.peek() != char:
+   181	            raise YamlError(f"expected '{char}' in flow collection")
+   182	        self.pos += 1
+   183	
+   184	    def sequence(self):
+   185	        self.expect("[")
+   186	        items = []
+   187	        while self.peek() != "]":
+   188	            if not self.peek():
+   189	                raise YamlError("unterminated flow sequence")
+   190	            items.append(self.value(",]"))
+   191	            if self.peek() == ",":
+   192	                self.pos += 1
+   193	        self.pos += 1
+   194	        return items
+   195	
+   196	    def mapping(self):
+   197	        self.expect("{")
+   198	        result = {}
+   199	        while self.peek() != "}":
+   200	            if not self.peek():
+   201	                raise YamlError("unterminated flow mapping")
+   202	            key = self.value(":,}")
+   203	            value = None
+   204	            if self.peek() == ":":
+   205	                self.pos += 1
+   206	                value = self.value(",}")
+   207	            result[key] = value
+   208	            if self.peek() == ",":
+   209	                self.pos += 1
+   210	        self.pos += 1
+   211	        return result
+   212	
+   213	
+   214	def _inline(text):
+   215	    text = text.strip()
+   216	    if text[:1] in "[{\"'":
+   217	        flow = _Flow(text)
+   218	        value = flow.value("")
+   219	        if flow.peek():
+   220	            raise YamlError(f"unexpected content after value: {text!r}")
+   221	        return value
+   222	    if text[:1] in "|>&*!%@`":
+   223	        if text[:1] != "@":
+   224	            raise YamlError(f"unsupported YAML construct: {text!r}")
+   225	    return _resolve(text)
+   226	
+   227	
+   228	class _Parser:
+   229	    def __init__(self, text):
+   230	        self.lines = []
+   231	        for raw in text.splitlines():
+   232	            if raw.strip() in ("---", "..."):
+   233	                continue
+   234	            content = _strip_comment(raw)
+   235	            if not content.strip():
+   236	                continue
+   237	            if "\t" in content[:len(content) - len(content.lstrip())]:
+   238	                raise YamlError("tabs are not allowed for indentation")
+   239	            stripped = content.lstrip(" ")
+   240	            self.lines.append([len(content) - len(stripped), stripped])
+   241	
+   242	    def parse(self):
+   243	        if not self.lines:
+   244	            return None
+   245	        if len(self.lines) == 1 and _split_key(self.lines[0][1]) is None \
+   246	                and not _is_seq_item(self.lines[0][1]):
+   247	            return _inline(self.lines[0][1])
+   248	        value, index = self.block(0, self.lines[0][0])
+   249	        if index < len(self.lines):
+   250	            raise YamlError(f"unexpected content: {self.lines[index][1]!r}")
+   251	        return value
+   252	
+   253	    def block(self, index, indent):
+   254	        if _is_seq_item(self.lines[index][1]):
+   255	            return self.sequence(index, indent)
+   256	        return self.mapping(index, indent)
+   257	
+   258	    def nested(self, index, indent, allow_same_indent_seq):
+   259	        """Parse the block following a line ending in ':' or '-'."""
+   260	        if index < len(self.lines):
+   261	            next_indent, content = self.lines[index]
+   262	            if next_indent > indent or (
+   263	                    allow_same_indent_seq and next_indent == indent
+   264	                    and _is_seq_item(content)):
+   265	                return self.block(index, next_indent)
+   266	        return None, index
+   267	
+   268	    def sequence(self, index, indent):
+   269	        items = []
+   270	        while index < len(self.lines):
+   271	            line_indent, content = self.lines[index]
+   272	            if line_indent != indent or not _is_seq_item(content):
+   273	                break
+   274	            rest = content[1:].lstrip(" ")
+   275	            if not rest:
+   276	                value, index = self.nested(index + 1, indent, False)
+   277	            elif _split_key(rest) is not None or _is_seq_item(rest):
+   278	                self.lines[index] = [indent + len(content) - len(rest), rest]
+   279	                value, index = self.block(index, self.lines[index][0])
+   280	            else:
+   281	                value, index = _inline(rest), index + 1
+   282	            items.append(value)
+   283	        return items, index
+   284	
+   285	    def mapping(self, index, indent):
+   286	        result = {}
+   287	        while index < len(self.lines):
+   288	            line_indent, content = self.lines[index]
+   289	            if line_indent < indent:
+   290	                break
+   291	            if line_indent > indent:
+   292	                raise YamlError(f"bad indentation: {content!r}")
+   293	            if _is_seq_item(content):
+   294	                break
+   295	            pair = _split_key(content)
+   296	            if pair is None:
+   297	                raise YamlError(f"expected 'key: value', got {content!r}")
+   298	            key, rest = pair
+   299	            if rest:
+   300	                value, index = _inline(rest), index + 1
+   301	            else:
+   302	                value, index = self.nested(index + 1, indent, True)
+   303	            result[key] = value
+   304	        return result, index
+=== suggest
+     1	"""Similarity-based suggestions.
+     2	
+     3	Secret: the distance metric (case-insensitive Levenshtein), the acceptance threshold, the
+     4	tie-breaking order and the precedence of curated synonyms used to pick a
+     5	single deterministic "Did you mean" candidate.
+     6	"""
+     7	
+     8	from . import synonyms as _synonyms
+     9	
+    10	_THRESHOLD = 2
+    11	
+    12	
+    13	def _distance(a, b):
+    14	    previous = list(range(len(b) + 1))
+    15	    for i, char_a in enumerate(a, 1):
+    16	        current = [i]
+    17	        for j, char_b in enumerate(b, 1):
+    18	            current.append(min(
+    19	                previous[j] + 1,
+    20	                current[j - 1] + 1,
+    21	                previous[j - 1] + (char_a != char_b),
+    22	            ))
+    23	        previous = current
+    24	    return previous[-1]
+    25	
+    26	
+    27	def suggest(target, candidates):
+    28	    """Return the best candidate for a mistyped ``target``, or ``None``."""
+    29	    pool = sorted(set(candidates), key=lambda c: (c.casefold(), c))
+    30	    if not pool:
+    31	        return None
+    32	    synonym = _synonyms.synonym_for(target)
+    33	    if synonym is not None and synonym in pool:
+    34	        return synonym
+    35	    folded = target.casefold()
+    36	    best = min(pool, key=lambda c: _distance(folded, c.casefold()))
+    37	    if best != target and _distance(folded, best.casefold()) <= _THRESHOLD:
+    38	        return best
+    39	    return None
+=== synonyms
+     1	"""Curated synonym table.
+     2	
+     3	Secret: which common command-name variants map to which canonical names.
+     4	"""
+     5	
+     6	_SYNONYMS = {
+     7	    "add": "create",
+     8	    "new": "create",
+     9	    "make": "create",
+    10	    "check": "check-update",
+    11	    "clear": "flush",
+    12	    "purge": "flush",
+    13	    "decrement": "decr",
+    14	    "increment": "incr",
+    15	    "del": "delete",
+    16	    "remove": "delete",
+    17	    "rm": "delete",
+    18	    "trash": "delete",
+    19	    "ls": "list",
+    20	    "show": "get",
+    21	    "fetch": "get",
+    22	    "edit": "update",
+    23	    "modify": "update",
+    24	    "ver": "version",
+    25	    "v": "version",
+    26	}
+    27	
+    28	
+    29	def synonym_for(word):
+    30	    """Return the canonical name commonly meant by ``word``, or ``None``."""
+    31	    return _SYNONYMS.get(word)
+import io
+import os
+import subprocess
+import sys
+
+import pytest
+
+from appctl_core.app import run
+from appctl_core.command_tree import CommandTree
+from appctl_core.suggest import suggest
+from appctl_core.synopsis import Synopsis
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def call(*argv, env=None, tree=None):
+    out, err = io.StringIO(), io.StringIO()
+    code = run(list(argv), env or {}, out, err, tree=tree)
+    return code, out.getvalue(), err.getvalue()
+
+
+# --- entry point ---------------------------------------------------------
+
+def test_script_runs_as_subprocess():
+    proc = subprocess.run([sys.executable, os.path.join(ROOT, "appctl.py"), "sit"],
+                          capture_output=True, text=True)
+    assert proc.returncode == 1
+    assert proc.stderr == ("Error: 'sit' is not a registered appctl command. "
+                           "See 'appctl help' for available commands.\n"
+                           "Did you mean 'site'?\n")
+
+
+def test_no_arguments_lists_sorted_aligned_commands():
+    code, out, err = call()
+    assert code == 0 and err == ""
+    lines = [l for l in out.splitlines() if l.startswith("  ")]
+    names = [l.split()[0] for l in lines]
+    assert names == sorted(names, key=str.casefold)
+    assert {"site", "cli", "help"} <= set(names)
+    desc_cols = {len(l) - len(l[2:].split(None, 1)[1]) for l in lines}
+    assert len(desc_cols) == 1
+
+
+def test_help_command_matches_no_args():
+    assert call("help")[1] == call()[1]
+
+
+# --- rewrites ----------------------------------------------------------------
+
+def test_version_rewrite():
+    assert call("--version") == call("cli", "version")
+    assert call("--version")[1].startswith("appctl ")
+
+
+def test_help_flag_rewrite():
+    assert call("site", "create", "--help") == call("help", "site", "create")
+    code, out, _ = call("site", "--help")
+    assert code == 0 and "SUBCOMMANDS" in out and "create" in out
+
+
+def test_help_flag_on_unknown_command():
+    code, _, err = call("sitez", "--help")
+    assert code == 1 and "'sitez' is not a registered appctl command" in err
+
+
+# --- dispatch ----------------------------------------------------------------
+
+def test_group_without_handler_prints_usage_with_subcommands():
+    code, out, _ = call("site")
+    assert code == 0
+    assert out.startswith("usage: appctl site archive")
+    assert "   or: appctl site create <site-name>" in out
+
+
+def test_unknown_subcommand_with_suggestion():
+    code, out, err = call("site", "creat", "foo")
+    assert code == 1 and out == ""
+    assert err == ("Error: 'creat' is not a registered subcommand of 'site'. "
+                   "See 'appctl help site' for available subcommands.\n"
+                   "Did you mean 'create'?\n")
+import io
+import json
+import os
+import stat
+import subprocess
+import sys
+
+import pytest
+
+from appctl_core import yaml_lite
+from appctl_core.app import run
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+@pytest.fixture
+def home(tmp_path):
+    root = tmp_path / "root"
+    project = tmp_path / "project"
+    project.mkdir()
+    return root, project
+
+
+def call(*argv, root, cwd, env=None):
+    out, err = io.StringIO(), io.StringIO()
+    full_env = {"APPCTL_ROOT_DIR": str(root), "PATH": os.environ.get("PATH", "")}
+    full_env.update(env or {})
+    code = run(list(argv), full_env, out, err, cwd=str(cwd))
+    return code, out.getvalue(), err.getvalue()
+
+
+def info(root, cwd, *extra, env=None):
+    code, out, err = call("cli", "info", "--format=json", *extra,
+                          root=root, cwd=cwd, env=env)
+    assert code == 0, err
+    return json.loads(out)
+
+
+def write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+# --- loading and precedence ------------------------------------------------
+
+def test_global_config_auto_created(home):
+    root, project = home
+    call("cli", "version", root=root, cwd=project)
+    data = yaml_lite.load((root / "config" / "config.yml").read_text())
+    assert data == {"locale": "en_US", "installer_version": "stable"}
+
+
+def test_auto_create_preserves_existing_values(home, tmp_path):
+    root, project = home
+    config = tmp_path / "custom.yml"
+    write(config, "color: false\nlocale: fr_FR")
+    call("cli", "version", root=root, cwd=project,
+         env={"APPCTL_CONFIG_PATH": str(config)})
+    assert yaml_lite.load(config.read_text()) == {
+        "color": False, "locale": "fr_FR", "installer_version": "stable"}

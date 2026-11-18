@@ -1,0 +1,810 @@
+### sith.py (modified)
+--- sith.py
++++ sith.py
+@@ -2,9 +2,9 @@
+ """sith - a small static Python code intelligence tool.
+ 
+ Usage:
+-    python sith.py complete <file> <line> <col> [--fuzzy]
+-    python sith.py infer <file> <line> <col>
+-    python sith.py goto <file> <line> <col>
++    python sith.py complete <file> <line> <col> [--fuzzy] [--project <dir>]
++    python sith.py infer <file> <line> <col> [--project <dir>]
++    python sith.py goto <file> <line> <col> [--follow-imports] [--project <dir>]
+ """
+ import ast
+ import builtins
+@@ -762,6 +762,10 @@
+     return ', '.join(out)
+ 
+ 
++def _posix(p):
++    return p.replace(os.sep, '/') if os.sep != '/' else p
++
++
+ def _ws(s):
+     return re.sub(r'\s+', ' ', s or '').strip()
+ 
+@@ -1235,17 +1239,115 @@
+ # Inference engine
+ # ---------------------------------------------------------------------------
+ 
++def _str_list(node):
++    """String constants of a list/tuple literal (possibly concatenated), or None."""
++    if isinstance(node, (ast.List, ast.Tuple)):
++        out = []
++        for e in node.elts:
++            if isinstance(e, ast.Constant) and isinstance(e.value, str):
++                out.append(e.value)
++        return out
++    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
++        a, b = _str_list(node.left), _str_list(node.right)
++        if a is not None and b is not None:
++            return a + b
++    return None
++
++
++def _inside(path, root):
++    """True if ``path`` is ``root`` or lies below it."""
++    path = os.path.realpath(path)
++    root = os.path.realpath(root)
++    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
++
++
++_STDLIB_NAMES = set(getattr(sys, 'stdlib_module_names', ())) | set(sys.builtin_module_names)
++_RT_BLOCKED = {'antigravity'}
++
++
++def is_stdlib(dotted):
++    top = dotted.split('.')[0]
++    if not top or top in _RT_BLOCKED:
++        return False
++    return top in _STDLIB_NAMES
++
++
++_stdlib_listing = None
++
++
++def stdlib_top_names():
++    """Names of the standard library modules available in this runtime."""
++    global _stdlib_listing
++    if _stdlib_listing is None:
++        names = set(sys.builtin_module_names)
++        base = os.path.dirname(os.__file__)
++        for d in (base, os.path.join(base, 'lib-dynload')):
++            names.update(dir_modules(d))
++        if _STDLIB_NAMES - set(sys.builtin_module_names):
++            names &= _STDLIB_NAMES
++        names.discard('__main__')
++        _stdlib_listing = names - _RT_BLOCKED
++    return _stdlib_listing
++
++
++def dir_modules(d):
++    """Module and package names found directly inside directory ``d``."""
++    out = set()
++    try:
++        listing = os.listdir(d)
++    except OSError:
++        return out
++    for fn in listing:
++        full = os.path.join(d, fn)
++        if fn.endswith('.py'):
++            name = fn[:-3]
++            if not os.path.isfile(full):
++                continue
++        elif '.' in fn and (fn.endswith('.so') or fn.endswith('.pyd')):
++            name = fn.split('.')[0]
++            if not os.path.isfile(full):
++                continue
++        elif fn != '__pycache__' and os.path.isdir(full):
++            name = fn
++        else:
++            continue
++        if name.isidentifier() and name != '__init__' and not keyword.iskeyword(name):
++            out.add(name)
++    return out
++
++
+ class Engine:
+-    def __init__(self, root=None):
++    def __init__(self, root=None, script=None):
+         self.static_cache = {}
+         self.rt_cache = {}
+         self.inferring = set()
+         self.calling = set()
+         self.frames = {}
+         self.reach_cache = {}
+-        self.root = root
++        self.root = os.path.abspath(root) if root else None
+         self.steps = 0
+         self.max_steps = 400000
++        self.import_stack = []
++        self.star_cache = {}
++        self.all_cache = {}
++        self.extra_paths = self._script_paths(script)
++
++    def _script_paths(self, script):
++        """Directories of the script (outside packages) that act as sys.path entries."""
++        if not script:
++            return []
++        d = os.path.dirname(os.path.abspath(script))
++        if self.root is None or not _inside(d, self.root):
++            return [d]
++        out = []
++        while _inside(d, self.root) and os.path.realpath(d) != os.path.realpath(self.root):
++            if not os.path.isfile(os.path.join(d, '__init__.py')):
++                out.append(d)
++            nd = os.path.dirname(d)
++            if nd == d:
++                break
++            d = nd
++        return out
+ 
+     # ----- modules -----
+ 
+@@ -1283,10 +1385,10 @@
+                     d = nd
+                     continue
+                 return None
+-            f = os.path.join(d, p + '.py')
++            f = os.path.join(d, p, '__init__.py')
+             if os.path.isfile(f):
+                 return ('file', f)
+-            f = os.path.join(d, p, '__init__.py')
++            f = os.path.join(d, p + '.py')
+             if os.path.isfile(f):
+                 return ('file', f)
+             nd = os.path.join(d, p)
+@@ -1305,6 +1407,9 @@
+     def rt_import(self, name):
+         if name in self.rt_cache:
+             return self.rt_cache[name]
++        if not is_stdlib(name):
++            self.rt_cache[name] = None
++            return None
+         mod = None
+         try:
+             with contextlib.redirect_stdout(io.StringIO()), \
+@@ -1321,6 +1426,8 @@
+             d = base_dir
+             for _ in range(level - 1):
+                 d = os.path.dirname(d)
++            if self.root and _inside(base_dir, self.root) and not _inside(d, self.root):
++                return UnMod(dotted)
+             if not dotted:
+                 init = os.path.join(d, '__init__.py')
+                 if os.path.isfile(init):
+@@ -1330,38 +1437,113 @@
+             if found:
+                 return self.static_module(found, dotted)
+             return UnMod(dotted)
+-        found = self.find_local(dotted, base_dir)
+-        if found:
+-            return self.static_module(found, dotted)
+-        if self.root and os.path.realpath(self.root) != os.path.realpath(base_dir):
+-            found = self.find_local(dotted, self.root)
++        if not dotted:
++            return UnMod(dotted)
++        roots = [self.root] if self.root else [base_dir]
++        for r in roots:
++            found = self.find_local(dotted, r)
+             if found:
+                 return self.static_module(found, dotted)
+         mod = self.rt_import(dotted)
+         if mod is not None:
+             return RtV(mod)
++        for r in self.extra_paths:
++            found = self.find_local(dotted, r)
++            if found:
++                return self.static_module(found, dotted)
+         return UnMod(dotted)
+ 
+-    def star_names(self, mv, seen=None):
+-        """Return dict name -> thunk for names exported by a star import."""
+-        out = {}
++    def module_all(self, info):
++        """The names listed in a module's ``__all__``, or None."""
++        key = id(info)
++        if key in self.all_cache:
++            return self.all_cache[key]
++        names = None
++        for s in _iter_stmts(info.tree.body):
++            if isinstance(s, (ast.Assign, ast.AnnAssign)):
++                tgts = s.targets if isinstance(s, ast.Assign) else [s.target]
++                if any(isinstance(t, ast.Name) and t.id == '__all__' for t in tgts):
++                    vals = _str_list(s.value)
++                    if vals is not None:
++                        names = vals
++                    elif names is None:
++                        names = []
++            elif isinstance(s, ast.AugAssign) and isinstance(s.target, ast.Name) and \
++                    s.target.id == '__all__' and isinstance(s.op, ast.Add):
++                vals = _str_list(s.value)
++                if vals is not None:
++                    names = (names or []) + vals
++            elif isinstance(s, ast.Expr) and isinstance(s.value, ast.Call):
++                f = s.value.func
++                if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and \
++                        f.value.id == '__all__' and len(s.value.args) == 1:
++                    arg = s.value.args[0]
++                    if f.attr == 'extend':
++                        vals = _str_list(arg)
++                        if vals is not None:
++                            names = (names or []) + vals
++                    elif f.attr == 'append' and isinstance(arg, ast.Constant) and \
++                            isinstance(arg.value, str):
++                        names = (names or []) + [arg.value]
++        if names is not None:
++            names = list(dict.fromkeys(n for n in names if n.isidentifier()))
++        self.all_cache[key] = names
++        return names
++
++    def export_entries(self, mv, seen=None):
++        """Names exported by a module (``__all__`` or public names) as entries."""
+         if isinstance(mv, RtV) and inspect.ismodule(mv.obj):
+             o = mv.obj
+-            try:
+-                names = dir(o)
+-            except Exception:
+-                names = []
++            names = getattr(o, '__all__', None)
++            if not isinstance(names, (list, tuple)) or \
++                    not all(isinstance(n, str) for n in names):
++                try:
++                    names = [n for n in dir(o) if not n.startswith('_')]
++                except Exception:
++                    names = []
++            out = {}
+             for n in names:
+-                if not n.startswith('_'):
++                if hasattr(o, n):
+                     out[n] = self._rt_attr_entry(o, n)
+-        elif isinstance(mv, StMod) and mv.info is not None:
++                else:
++                    full = o.__name__ + '.' + n
++                    out[n] = ('v', lambda f=full: (lambda m: RtV(m) if m is not None else None)(
++                        self.rt_import(f)))
++            return out
++        if not isinstance(mv, StMod):
++            return {}
++        out = {}
++        if mv.info is not None:
++            names = self.module_all(mv.info)
++            if names is None:
++                out = self.module_entries(mv.info, seen)
++            else:
++                ents = self.module_entries(mv.info, seen, private=True)
++                for n in names:
++                    if n in ents:
++                        out[n] = ents[n]
++                    elif mv.pkgdir and self.find_local(n, mv.pkgdir):
++                        out[n] = ('v', lambda n=n: (self.get_attr(mv, n) or [None])[0])
++        return out
++
++    def star_names(self, mv, seen=None):
++        """Return dict name -> entry for names exported by a star import."""
++        if seen is None:
++            key = _vkey(mv)
++            if key not in self.star_cache:
++                self.star_cache[key] = {}
++                self.star_cache[key] = self._star_names(mv, None)
++            return self.star_cache[key]
++        return self._star_names(mv, seen)
++
++    def _star_names(self, mv, seen):
++        if isinstance(mv, StMod) and mv.info is not None:
+             if seen is None:
+                 seen = set()
+             if id(mv.info) in seen:
+-                return out
++                return {}
+             seen.add(id(mv.info))
+-            out.update(self.module_entries(mv.info, seen))
+-        return out
++        return self.export_entries(mv, seen)
+ 
+     def star_entry(self, sc, node, name):
+         mv = self.resolve_module(node.module or '', sc.module.dir, node.level or 0)
+@@ -1374,7 +1556,7 @@
+                 return True
+         return False
+ 
+-    def module_entries(self, info, seen=None):
++    def module_entries(self, info, seen=None, private=False):
+         sc = info.scope
+         out = {}
+         items = []
+@@ -1387,9 +1569,24 @@
+                 items.append((sl, n, ent))
+         items.sort(key=lambda x: x[0])
+         for _, n, ent in items:
+-            if not n.startswith('_') and MARK not in n:
++            if (private or not n.startswith('_')) and MARK not in n:
+                 out[n] = ent
+         return out
++
++    def import_limit(self, info):
++        """Line at which ``info`` is paused by a circular import, or None."""
++        for inf, line in self.import_stack:
++            if inf is info:
++                return line
++        return None
++
++    def module_attr_entries(self, info, name):
++        """Entries for ``name`` at module level, honouring circular imports."""
++        lim = self.import_limit(info)
++        if lim is None:
++            return self.scope_end_entries(info.scope, name)
++        r = self.reach(info.scope, name, (lim, 0))
++        return list(r) if r else []
+ 
+     def _rt_attr_entry(self, o, n):
+         def thunk():
+@@ -1626,6 +1823,21 @@
+             return [StFunc(b.node, b.extra)]
+         if k == 'class':
+             return [class_value(b.extra)]
++        if k in ('import', 'from') and sc.kind == 'module':
++            self.import_stack.append((sc.module, b.line))
++            try:
++                return self._import_values(b, depth)
++            finally:
++                self.import_stack.pop()
++        if k in ('import', 'from'):
++            return self._import_values(b, depth)
++        if k == 'assign':
++            return self.infer(b.extra, sc, None, depth + 1)
++        return self._other_values(b, depth)
++
++    def _import_values(self, b, depth):
++        k = b.kind
++        sc = b.scope
+         if k == 'import':
+             full, asname = b.extra
+             if asname:
+@@ -1643,8 +1855,11 @@
+                 if m is not None:
+                     return [RtV(m)]
+             return vals
+-        if k == 'assign':
+-            return self.infer(b.extra, sc, None, depth + 1)
++        return []
++
++    def _other_values(self, b, depth):
++        k = b.kind
++        sc = b.scope
+         if k == 'unpack':
+             value, path = b.extra
+             return self.path_values(('n', value, sc), path, depth + 1)
+@@ -2422,7 +2637,7 @@
+                 return []
+         if isinstance(v, StMod):
+             if v.info is not None:
+-                ents = self.scope_end_entries(v.info.scope, name)
++                ents = self.module_attr_entries(v.info, name)
+                 if ents:
+                     vals = self.entries_values(ents, depth + 1)
+                     if vals or not v.pkgdir:
+@@ -2899,7 +3114,213 @@
+     return text.replace('\r\n', '\n').replace('\r', '\n')
+ 
+ 
+-def complete(path, line, col, fuzzy=False):
++def project_root(path, project):
++    if project:
++        root = os.path.abspath(project)
++        if not os.path.isdir(root):
++            raise SithError('project directory not found: %s' % project)
++        return root
++    return os.path.dirname(os.path.abspath(path))
++
++
++def _stmt_tokens(lines, first):
++    """Tokenize ``lines`` (starting at line number ``first``) and return the
++    tokens of the last logical statement as (text, start, end) tuples."""
++    stmt = []
++    depth = 0
++    cont = False
++    quote = None
++    for li, t in enumerate(lines):
++        ln = first + li
++        if not cont and depth == 0 and quote is None:
++            stmt = []
++        cont = False
++        i = 0
++        n = len(t)
++        while i < n:
++            if quote is not None:
++                if t[i] == '\\':
++                    i += 2
++                    continue
++                if t.startswith(quote, i):
++                    i += len(quote)
++                    quote = None
++                    stmt.append(('<str>', (ln, i), (ln, i)))
++                    continue
++                i += 1
++                continue
++            c = t[i]
++            if c in ' \t\f':
++                i += 1
++                continue
++            if c == '#':
++                break
++            if c == '\\' and t[i + 1:].strip() == '':
++                cont = True
++                break
++            if c in '"\'':
++                quote = c * 3 if t.startswith(c * 3, i) else c
++                i += len(quote)
++                continue
++            if is_ident_char(c):
++                j = i
++                while j < n and is_ident_char(t[j]):
++                    j += 1
++                stmt.append((t[i:j], (ln, i), (ln, j)))
++                i = j
++                continue
++            if t.startswith('...', i):
++                stmt.append(('...', (ln, i), (ln, i + 3)))
++                i += 3
++                continue
++            if c in '([{':
++                depth += 1
++            elif c in ')]}':
++                depth = max(0, depth - 1)
++            elif c == ';' and depth == 0:
++                stmt = []
++                i += 1
++                continue
++            stmt.append((c, (ln, i), (ln, i + 1)))
++            i += 1
++        if quote is not None and len(quote) == 1:
++            quote = None
++    return stmt
++
++
++def import_context(lines, line, col, prefix):
++    """Classify an import statement around the cursor.
++
++    Returns None when not inside an import statement, otherwise one of
++    ('modules',), ('submodules', level, dotted), ('names', level, dotted),
++    ('keyword',) or ('none',).
++    """
++    cl = lines[line - 1]
++    pstart = col - len(prefix)
++    toks = None
++    for k in range(line - 1, max(-1, line - 1 - 60), -1):
++        t = _stmt_tokens(lines[k:line - 1] + [cl[:pstart]], k + 1)
++        if t and t[0][0] in ('import', 'from'):
++            toks = t
++            break
++    if toks is None:
++        return None
++    words = [w for w, _, _ in toks]
++    if '<str>' in words:
++        return ('none',)
++    gap = toks[-1][2] != (line, pstart)
++    if words[0] == 'import':
++        last = words[1:]
++        while ',' in last:
++            last = last[last.index(',') + 1:]
++        if not last:
++            return ('modules',)
++        if last[-1] == '.' and _dotted_ok(last[:-1]):
++            return ('submodules', 0, ''.join(last[:-1]))
++        return ('none',)
++    i = 1
++    level = 0
++    while i < len(words) and words[i] in ('.', '...'):
++        level += len(words[i])
++        i += 1
++    j = i
++    while j < len(words) and words[j] != 'import':
++        j += 1
++    mod = words[i:j]
++    if mod and not _dotted_ok(mod[:-1] if mod[-1] == '.' else mod):
++        return ('none',)
++    if j == len(words):
++        if gap and ((mod and mod[-1] != '.') or (not mod and level)):
++            return ('keyword',)
++        if not mod:
++            return ('submodules', level, '') if level else ('modules',)
++        if mod[-1] == '.':
++            return ('submodules', level, ''.join(mod[:-1]))
++        return ('none',)
++    if not mod and not level or (mod and mod[-1] == '.'):
++        return ('none',)
++    names = words[j + 1:]
++    if names[:1] == ['(']:
++        names = names[1:]
++    if ')' in names or '(' in names:
++        return ('none',)
++    while ',' in names:
++        names = names[names.index(',') + 1:]
++    if names:
++        return ('none',)
++    return ('names', level, ''.join(mod))
++
++
++def _dotted_ok(parts):
++    """True if ``parts`` alternate identifier, '.', identifier, ..."""
++    for k, p in enumerate(parts):
++        if k % 2:
++            if p != '.':
++                return False
++        elif not p.isidentifier() or keyword.iskeyword(p):
++            return False
++    return len(parts) % 2 == 1
++
++
++def submodule_entries(engine, mv):
++    """Entries for the submodules of a package value."""
++    out = {}
++    if isinstance(mv, StMod) and mv.pkgdir:
++        for n in dir_modules(mv.pkgdir):
++            out[n] = ('v', lambda n=n: (engine.get_attr(mv, n) or [None])[0])
++    elif isinstance(mv, RtV) and inspect.ismodule(mv.obj):
++        paths = getattr(mv.obj, '__path__', None)
++        if paths:
++            try:
++                import pkgutil
++                names = [m.name for m in pkgutil.iter_modules(list(paths))]
++            except Exception:
++                names = []
++            base = mv.obj.__name__
++            for n in names:
++                full = base + '.' + n
++                out[n] = ('v', lambda f=full: (lambda m: RtV(m) if m is not None else None)(
++                    engine.rt_import(f)))
++    return out
++
++
++def import_completions(engine, ctx, path):
++    """Return dict name -> (type, description) for an import context."""
++    kind = ctx[0]
++    out = {}
++    if kind == 'modules':
++        names = set()
++        for d in ([engine.root] if engine.root else []) + engine.extra_paths:
++            names |= dir_modules(d)
++        names |= stdlib_top_names()
++        for n in names:
++            out[n] = ('module', 'module ' + n)
++        return out
++    if kind == 'keyword':
++        return {'import': ('keyword', 'import')}
++    if kind not in ('submodules', 'names'):
++        return out
++    level, dotted = ctx[1], ctx[2]
++    mv = engine.resolve_module(dotted, os.path.dirname(os.path.abspath(path)), level)
++    ents = {}
++    if kind == 'names':
++        ents.update(engine.export_entries(mv))
++        has_all = isinstance(mv, StMod) and mv.info is not None and \
++            engine.module_all(mv.info) is not None
++        if not has_all:
++            for n, ent in submodule_entries(engine, mv).items():
++                if not n.startswith('_'):
++                    ents.setdefault(n, ent)
++        for n, ent in ents.items():
++            if MARK not in n:
++                out[n] = engine.describe_entry(n, ent)
++    else:
++        for n in submodule_entries(engine, mv):
++            out[n] = ('module', 'module ' + n)
++    return out
++
++
++def complete(path, line, col, fuzzy=False, project=None):
+     text = read_source(path)
+     lines = text.split('\n')
+     if line < 1 or line > len(lines):
+@@ -2923,7 +3344,21 @@
+         j -= 1
+     is_attr = j > 0 and cl[j - 1] == '.'
+ 
+-    engine = Engine(os.path.dirname(os.path.abspath(path)))
++    root = project_root(path, project)
++    engine = Engine(root, path)
++    ctx = import_context(lines, line, col, prefix)
++    if ctx is not None:
++        results = []
++        tree = parse_source(text)
++        info = ModuleInfo(os.path.abspath(path), tree, '__main__', text)
++        engine.static_cache[os.path.realpath(path)] = info
++        for n, (typ, desc) in import_completions(engine, ctx, path).items():
++            if match_name(n, prefix, fuzzy):
++                results.append({'name': n, 'complete': n[len(prefix):], 'type': typ,
++                                 'description': desc})
++        results.sort(key=sort_key)
++        return results
++
+     tree = parse_source(text, (line, col))
+     info = ModuleInfo(os.path.abspath(path), tree, '__main__', text)
+     engine.static_cache[os.path.realpath(path)] = info
+@@ -2996,9 +3431,10 @@
+ 
+ 
+ class Navigator:
+-    def __init__(self, engine, root):
++    def __init__(self, engine, root, follow_imports=False):
+         self.e = engine
+         self.root = os.path.abspath(root)
++        self.follow_imports = follow_imports
+ 
+     # ----- naming -----
+ 
+@@ -3009,20 +3445,20 @@
+         except ValueError:
+             return ap
+         if rp == '..' or rp.startswith('..' + os.sep):
+-            return ap
+-        return rp
++            return _posix(ap)
++        return _posix(rp)
+ 
+     def modname(self, info):
+         path = info.path
+         rp = self.rel(path)
+-        if os.path.isabs(rp):
++        if os.path.isabs(rp) or rp.startswith('/'):
+             base = os.path.basename(path)
+             if base == '__init__.py':
+                 return os.path.basename(os.path.dirname(path))
+             return base[:-3] if base.endswith('.py') else base
+         if rp.endswith('.py'):
+             rp = rp[:-3]
+-        parts = rp.split(os.sep)
++        parts = rp.split('/')
+         if parts[-1] == '__init__' and len(parts) > 1:
+             parts.pop()
+         return '.'.join(parts)
+@@ -3280,11 +3716,60 @@
+             return self.mk(b.name, typ, full2, mp, line, col, self.seg(info, b.node), doc)
+         return self.mk(b.name, 'statement', full, mp, line, col, self.stmt_desc(b), '')
+ 
++    def follow(self, b, seen=frozenset()):
++        """Definitions an import binding ultimately refers to (None if unresolvable)."""
++        if id(b) in seen:
++            return None
++        seen = seen | {id(b)}
++        e = self.e
++        sc = b.scope
++        if b.kind == 'import':
++            full, asname = b.extra
++            mv = e.resolve_module(full if asname else full.split('.')[0], sc.module.dir)
++            if isinstance(mv, StMod):
++                d = self.module_def(mv)
++                return [d] if d else None
++            return None
++        mod, level, attr = b.extra
++        mv = e.resolve_module(mod, sc.module.dir, level)
++        if not isinstance(mv, StMod):
++            return None
++        pushed = sc.kind == 'module'
++        if pushed:
++            e.import_stack.append((sc.module, b.line))
++        try:
++            out = []
++            ents = e.module_attr_entries(mv.info, attr) if mv.info is not None else []
++            for ent in ents:
++                if ent[0] == 'b':
++                    if ent[1].kind in ('import', 'from'):
++                        out += self.follow(ent[1], seen) or []
++                    else:
++                        out.append(self.binding_def(ent[1]))
++                else:
++                    v = ent[1]()
++                    if isinstance(v, (StMod, StClass, StFunc)):
++                        out += self.value_defs(v)
++            if not out and mv.pkgdir:
++                found = e.find_local(attr, mv.pkgdir)
++                if found:
++                    d = self.module_def(e.static_module(found, (mv.name + '.' + attr).strip('.')))
++                    if d:
++                        out.append(d)
++            return out or None
++        finally:
++            if pushed:
++                e.import_stack.pop()
++
+     def entries_defs(self, ents):
+         out = []
+         for ent in ents:
+             if ent[0] == 'b':
+-                out.append(self.binding_def(ent[1]))
++                b = ent[1]
++                if self.follow_imports and b.kind in ('import', 'from'):
++                    out += self.follow(b) or [self.binding_def(b)]
++                else:
++                    out.append(self.binding_def(b))
+             else:
+                 v = ent[1]()
+                 if v is not None:
+@@ -3342,7 +3827,7 @@
+         e = self.e
+         kind = tgt[0]
+         if kind == 'binding':
+-            return [self.binding_def(tgt[1])]
++            return self.entries_defs([('b', tgt[1])])
+         if kind == 'name':
+             node = tgt[1]
+             sc = self.scope_of(info, node)
+@@ -3379,7 +3864,7 @@
+         if isinstance(v, (StInst, StClass, SuperInst)):
+             return [self.binding_def(b) for b in e.attr_bindings(v, name)]
+         if isinstance(v, StMod) and v.info is not None:
+-            ents = e.scope_end_entries(v.info.scope, name)
++            ents = e.module_attr_entries(v.info, name)
+             if ents:
+                 return self.entries_defs(ents)
+         return self.values_defs(e.get_attr(v, name))
+@@ -3494,7 +3979,7 @@
+     return found
+ 
+ 
+-def navigate(path, line, col, mode, project=None):
++def navigate(path, line, col, mode, project=None, follow_imports=False):
+     text = read_source(path)
+     lines = text.split('\n')
+     if line < 1 or line > len(lines):
+@@ -3520,8 +4005,8 @@
+     offset = sum(len(lines[k]) + 1 for k in range(line - 1)) + s
+     in_str = in_comment_or_string(text, offset)
+ 
+-    root = os.path.abspath(project) if project else os.path.dirname(os.path.abspath(path))
+-    engine = Engine(root)
++    root = project_root(path, project)
++    engine = Engine(root, path)
+     tree, fixed = parse_source(text, with_text=True)
+     base = os.path.basename(path)
+     info = ModuleInfo(os.path.abspath(path), tree, base[:-3] if base.endswith('.py') else base,
+@@ -3532,7 +4017,7 @@
+         raise NotAName('cursor is not on a name')
+     if tgt is None:
+         return []
+-    nav = Navigator(engine, root)
++    nav = Navigator(engine, root, follow_imports)
+     defs = nav.goto(info, tgt) if mode == 'goto' else nav.infer(info, tgt)
+     out = []
+     seen = set()
+@@ -3556,9 +4041,9 @@
+         raise SithError('invalid %s: %r' % (what, s))
+ 
+ 
+-USAGE = ('usage: sith.py complete <file> <line> <col> [--fuzzy]\n'
+-         '       sith.py infer <file> <line> <col>\n'
+-         '       sith.py goto <file> <line> <col>\n')
++USAGE = ('usage: sith.py complete <file> <line> <col> [--fuzzy] [--project <dir>]\n'
++         '       sith.py infer <file> <line> <col> [--project <dir>]\n'
++         '       sith.py goto <file> <line> <col> [--follow-imports] [--project <dir>]\n')
+ 
+ 
+ def main(argv):
+@@ -3576,8 +4061,9 @@
+         else:
+             rest.append(a)
+         i += 1
+-    args = [a for a in rest if a != '--fuzzy']
+-    fuzzy = len(args) != len(rest)
++    fuzzy = '--fuzzy' in rest
++    follow = '--follow-imports' in rest
++    args = [a for a in rest if a not in ('--fuzzy', '--follow-imports')]
+     if len(args) != 4 or args[0] not in ('complete', 'infer', 'goto'):
+         sys.stderr.write(USAGE)
+         return 1
+@@ -3586,9 +4072,9 @@
+         col = _parse_int(args[3], 'column')
+         sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))
+         if args[0] == 'complete':
+-            out = {'completions': complete(args[1], line, col, fuzzy)}
++            out = {'completions': complete(args[1], line, col, fuzzy, project)}
+         else:
+-            out = {'definitions': navigate(args[1], line, col, args[0], project)}
++            out = {'definitions': navigate(args[1], line, col, args[0], project, follow)}
+     except SithError as e:
+         sys.stderr.write('error: %s\n' % e)
+         return 1
+

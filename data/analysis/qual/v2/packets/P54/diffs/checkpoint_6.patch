@@ -1,0 +1,1642 @@
+### sith.py (modified)
+--- sith.py
++++ sith.py
+@@ -4,6 +4,8 @@
+        python sith.py infer <file> <line> <col> [--project <dir>]
+        python sith.py goto <file> <line> <col> [--follow-imports] [--project <dir>]
+        python sith.py signatures <file> <line> <col> [--project <dir>]
++           (these four also take [--interpreter [--namespaces <file>]])
++       python sith.py context <file> <line> <col> [--project <dir>]
+        python sith.py references <file> <line> <col> [--scope file|project] [--project <dir>]
+        python sith.py search <query> [--project <dir>]
+        python sith.py names <file> [--all-scopes] [--project <dir>]
+@@ -14,6 +16,14 @@
+        python sith.py extract-function <file> <line> <col> --until <line>:<col> --name <name>
+                       [--diff] [--project <dir>]
+        python sith.py errors <file>
++       python sith.py env list
++       python sith.py env find-virtualenvs [--path <dir>]
++       python sith.py env info [<executable>]
++       python sith.py project init [<dir>] [--environment <executable>]
++                      [--sys-path <path>[,<path>...]] [--added-sys-path <path>[,<path>...]]
++
++Every command takes [--setting key=value]... (case_insensitive, dynamic_params,
++smart_sys_path, add_bracket); they override the project's .sith/project.json.
+ """
+ 
+ import os
+@@ -21,19 +31,26 @@
+ 
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ 
+-from sithlib import (diagnostics, engine, navigation, output, refactoring,  # noqa: E402
+-                     signatures, symbols)
++from sithlib import (config, diagnostics, enclosing, engine, environments,  # noqa: E402
++                     interpreter, navigation, output, refactoring, signatures, symbols)
+ from sithlib.source import SourceError  # noqa: E402
+ 
+-USAGE = ("usage: sith.py (complete|infer|goto|signatures|references|rename|inline|"
++USAGE = ("usage: sith.py (complete|infer|goto|signatures|context|references|rename|inline|"
+          "extract-variable|extract-function) <file> <line> <col> "
+-         "| search <query> | names <file> | errors <file> [--fuzzy] [--follow-imports] "
++         "| search <query> | names <file> | errors <file> "
++         "| env (list|find-virtualenvs|info [<executable>]) | project init [<dir>] "
++         "[--fuzzy] [--follow-imports] "
+          "[--scope file|project] [--all-scopes] [--new-name <name>] [--name <name>] "
+-         "[--until <line>:<col>] [--diff] [--project <dir>]")
+-POSITION_COMMANDS = ("complete", navigation.INFER, navigation.GOTO, "signatures", "references")
++         "[--until <line>:<col>] [--diff] [--project <dir>] [--interpreter] "
++         "[--namespaces <file>] [--setting key=value] [--path <dir>] "
++         "[--environment <executable>] [--sys-path <paths>] [--added-sys-path <paths>]")
++POSITION_COMMANDS = ("complete", navigation.INFER, navigation.GOTO, "signatures", "references",
++                     "context")
++INTERPRETER_COMMANDS = ("complete", navigation.INFER, navigation.GOTO, "signatures")
+ REFACTORING_COMMANDS = ("rename", "inline", "extract-variable", "extract-function")
+ SCOPES = (symbols.FILE, symbols.PROJECT)
+-VALUED_OPTIONS = ("project", "scope", "new-name", "name", "until")
++VALUED_OPTIONS = ("project", "scope", "new-name", "name", "until", "namespaces", "path",
++                  "environment", "sys-path", "added-sys-path")
+ 
+ 
+ class Options:
+@@ -47,6 +64,13 @@
+         self.new_name = None
+         self.name = None
+         self.until = None
++        self.interpreter = False
++        self.namespaces = None
++        self.settings = []
++        self.path = None
++        self.environment = None
++        self.sys_path = None
++        self.added_sys_path = None
+ 
+ 
+ def _fail(message):
+@@ -69,6 +93,15 @@
+             options.all_scopes = True
+         elif arg == "--diff":
+             options.diff = True
++        elif arg == "--interpreter":
++            options.interpreter = True
++        elif arg == "--setting":
++            if index + 1 >= len(argv):
++                return None
++            index += 1
++            options.settings.append(argv[index])
++        elif arg.startswith("--setting="):
++            options.settings.append(arg[len("--setting="):])
+         elif arg[2:] in VALUED_OPTIONS and arg.startswith("--"):
+             if index + 1 >= len(argv):
+                 return None
+@@ -114,15 +147,87 @@
+     return 0
+ 
+ 
++def _env(args, options, overrides):
++    if args == ["env", "list"]:
++        output.write_environments(e.summary() for e in environments.system_environments())
++        return 0
++    if args == ["env", "find-virtualenvs"]:
++        if options.path is not None and not os.path.isdir(options.path):
++            return _fail("not a directory: %s" % options.path)
++        root = options.project if options.project and os.path.isdir(options.project) else None
++        found = environments.virtualenvs(options.path, root)
++        output.write_environments(e.summary() for e in found)
++        return 0
++    if len(args) in (2, 3) and args[1] == "info":
++        if len(args) == 3:
++            executable = environments.find_executable(args[2])
++        else:
++            root = options.project if options.project and os.path.isdir(options.project) \
++                else os.getcwd()
++            configured = config.resolve(root, overrides).environment_path
++            executable = environments.find_executable(configured) if configured \
++                else environments.default_executable()
++        found = environments.probe(executable) if executable else None
++        if found is None:
++            return _fail("not a usable Python executable: %s"
++                         % (args[2] if len(args) == 3 else executable or "python3"))
++        output.write_environment(found.details())
++        return 0
++    return _fail(USAGE)
++
++
++def _project_init(args, options, overrides):
++    if len(args) > 3:
++        return _fail(USAGE)
++    directory = os.path.abspath(args[2] if len(args) == 3 else os.getcwd())
++    if os.path.exists(directory) and not os.path.isdir(directory):
++        return _fail("not a directory: %s" % directory)
++    updates = {}
++    if options.environment is not None:
++        updates["environment_path"] = options.environment
++    if options.sys_path is not None:
++        updates["sys_path"] = config.split_paths(options.sys_path)
++    if options.added_sys_path is not None:
++        updates["added_sys_path"] = config.split_paths(options.added_sys_path)
++    if "smart_sys_path" in overrides:
++        updates["smart_sys_path"] = overrides["smart_sys_path"]
++    try:
++        _, configuration = config.init_project(directory, updates)
++    except config.ConfigError as exc:
++        return _fail(str(exc))
++    output.write_configuration(configuration)
++    return 0
++
++
+ def main(argv):
+     sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))
+     parsed = _parse(argv)
+     if parsed is None:
+         return _fail(USAGE)
+     args, options = parsed
++    overrides = {}
++    try:
++        for setting in options.settings:
++            key, value = config.parse_setting(setting)
++            overrides[key] = value
++    except config.ConfigError as exc:
++        return _fail(str(exc))
++    if options.namespaces is not None and not options.interpreter:
++        return _fail("--namespaces requires --interpreter")
++    if args and args[0] == "env":
++        return _env(args, options, overrides)
++    if args[:2] == ["project", "init"]:
++        return _project_init(args, options, overrides)
+     project = options.project
+     if project is not None and not os.path.isdir(project):
+         project = None
++    if project is not None:
++        root = project
++    elif len(args) >= 2 and args[0] != "search":
++        root = os.path.dirname(os.path.abspath(args[1]))
++    else:
++        root = os.getcwd()
++    config.activate(config.resolve(root, overrides))
+     if len(args) == 2 and args[0] == "search":
+         try:
+             found = symbols.search(args[1], project)
+@@ -155,9 +260,25 @@
+     command, path = args[0], args[1]
+     if command in REFACTORING_COMMANDS:
+         return _refactor(command, path, line, col, options, project)
++    if command == "context":
++        try:
++            found = enclosing.context(path, line, col)
++        except SourceError as exc:
++            return _fail(str(exc))
++        except Exception:  # analysis must never crash on odd input; degrade to nothing
++            found = []
++        output.write_context(found)
++        return 0
++    namespaces = None
++    if options.interpreter and options.namespaces is not None \
++            and command in INTERPRETER_COMMANDS:
++        try:
++            namespaces = interpreter.load(options.namespaces)
++        except interpreter.NamespaceError as exc:
++            return _fail(str(exc))
+     if command == "complete":
+         try:
+-            completions = engine.complete(path, line, col, options.fuzzy, project)
++            completions = engine.complete(path, line, col, options.fuzzy, project, namespaces)
+         except SourceError as exc:
+             return _fail(str(exc))
+         except Exception:  # analysis must never crash on odd input; degrade to nothing
+@@ -166,7 +287,7 @@
+         return 0
+     if command == "signatures":
+         try:
+-            found = signatures.signatures(path, line, col, project)
++            found = signatures.signatures(path, line, col, project, namespaces)
+         except SourceError as exc:
+             return _fail(str(exc))
+         except Exception:  # analysis must never crash on odd input; degrade to nothing
+@@ -184,7 +305,8 @@
+         return 0
+     try:
+         definitions = navigation.run(command, path, line, col, project,
+-                                     follow_imports=options.follow and command == navigation.GOTO)
++                                     follow_imports=options.follow and command == navigation.GOTO,
++                                     namespaces=namespaces)
+     except (SourceError, navigation.NotOnName) as exc:
+         return _fail(str(exc))
+     except Exception:  # analysis must never crash on odd input; degrade to nothing
+
+### sithlib/config.py (created)
+--- sithlib/config.py
++++ sithlib/config.py
+@@ -0,0 +1,168 @@
++"""Settings and project configuration.
++
++Secret: which settings exist and how their values are spelled on the command
++line, where a project's persistent configuration lives (``.sith/project.json``
++below the project root) and how it is read, merged and written, and the
++precedence of command-line settings over project configuration over defaults.
++The settings of the running command are kept as the *active* settings.
++"""
++
++import json
++import os
++
++CONFIG_DIRECTORY = ".sith"
++CONFIG_FILE = "project.json"
++
++# Settings accepted by ``--setting key=value`` (all boolean).
++SETTINGS = {
++    "case_insensitive": True,
++    "dynamic_params": True,
++    "smart_sys_path": True,
++    "add_bracket": False,
++}
++
++# Fields of a project configuration file, with their defaults.
++PROJECT_FIELDS = {
++    "environment_path": "",
++    "sys_path": [],
++    "added_sys_path": [],
++    "smart_sys_path": True,
++}
++
++
++class ConfigError(Exception):
++    """A setting or configuration value is malformed."""
++
++
++class Settings:
++    """The effective configuration of one command."""
++
++    def __init__(self, root=None, values=None, project=None):
++        values = dict(SETTINGS, **(values or {}))
++        project = dict(_project_defaults(), **(project or {}))
++        self.root = os.path.abspath(root) if root else None
++        self.case_insensitive = values["case_insensitive"]
++        self.dynamic_params = values["dynamic_params"]
++        self.smart_sys_path = values["smart_sys_path"]
++        self.add_bracket = values["add_bracket"]
++        self.environment_path = project["environment_path"] or None
++        self.sys_path = [self._absolute(p) for p in project["sys_path"]]
++        self.added_sys_path = [self._absolute(p) for p in project["added_sys_path"]]
++
++    def _absolute(self, path):
++        path = os.path.expanduser(path)
++        if not os.path.isabs(path) and self.root:
++            path = os.path.join(self.root, path)
++        return os.path.normpath(os.path.abspath(path))
++
++
++_ACTIVE = None
++
++
++def activate(settings):
++    global _ACTIVE
++    _ACTIVE = settings
++
++
++def active():
++    """The settings of the running command (the defaults until activated)."""
++    global _ACTIVE
++    if _ACTIVE is None:
++        _ACTIVE = Settings()
++    return _ACTIVE
++
++
++def parse_setting(text):
++    """``(key, value)`` for a ``key=value`` command-line setting."""
++    key, sep, raw = text.partition("=")
++    key = key.strip()
++    if not sep or key not in SETTINGS:
++        raise ConfigError("unknown setting: %s" % text)
++    value = _boolean(raw.strip())
++    if value is None:
++        raise ConfigError("setting %s needs true or false, not %r" % (key, raw))
++    return key, value
++
++
++def resolve(root, overrides):
++    """The settings for a command run in project ``root`` (may be None) with
++    command-line ``overrides`` (dict of setting -> value)."""
++    project = load_project(root) if root else {}
++    values = {key: project[key] for key in SETTINGS if isinstance(project.get(key), bool)}
++    values.update(overrides)
++    return Settings(root, values, {key: project[key] for key in PROJECT_FIELDS
++                                   if key in project})
++
++
++def config_path(root):
++    return os.path.join(root, CONFIG_DIRECTORY, CONFIG_FILE)
++
++
++def load_project(root):
++    """The valid entries of the configuration stored for project ``root`` (a
++    dict; empty when there is none or it cannot be read)."""
++    try:
++        with open(config_path(root), "rb") as handle:
++            data = json.loads(handle.read().decode("utf-8"))
++    except (OSError, ValueError):
++        return {}
++    if not isinstance(data, dict):
++        return {}
++    found = {}
++    environment = data.get("environment_path")
++    if environment is None or isinstance(environment, str):
++        found["environment_path"] = environment
++    for key in ("sys_path", "added_sys_path"):
++        paths = data.get(key)
++        if isinstance(paths, list) and all(isinstance(p, str) for p in paths):
++            found[key] = list(paths)
++    for key in SETTINGS:
++        value = data.get(key)
++        if isinstance(value, str):
++            value = _boolean(value)
++        if isinstance(value, bool):
++            found[key] = value
++    return found
++
++
++def init_project(directory, updates):
++    """Create or update the configuration of project ``directory`` with the
++    fields in ``updates``; return ``(path, configuration)``."""
++    path = config_path(directory)
++    existing = {}
++    try:
++        with open(path, "rb") as handle:
++            existing = json.loads(handle.read().decode("utf-8"))
++    except (OSError, ValueError):
++        existing = {}
++    if not isinstance(existing, dict):
++        existing = {}
++    configuration = dict(_project_defaults(), **existing)
++    configuration.update(updates)
++    try:
++        os.makedirs(os.path.dirname(path), exist_ok=True)
++        with open(path, "w", encoding="utf-8") as handle:
++            json.dump(configuration, handle, indent=2, ensure_ascii=False)
++            handle.write("\n")
++    except OSError as exc:
++        raise ConfigError("cannot write %s: %s" % (path, exc))
++    return path, configuration
++
++
++def split_paths(text):
++    """The entries of a comma-separated path list."""
++    return [part.strip() for part in text.split(",") if part.strip()]
++
++
++def _boolean(text):
++    lowered = text.lower()
++    if lowered == "true":
++        return True
++    if lowered == "false":
++        return False
++    return None
++
++
++def _project_defaults():
++    return {key: list(value) if isinstance(value, list) else value
++            for key, value in PROJECT_FIELDS.items()}
+
+### sithlib/enclosing.py (created)
+--- sithlib/enclosing.py
++++ sithlib/enclosing.py
+@@ -0,0 +1,26 @@
++"""Enclosing scopes (``context``).
++
++Secret: how the classes and functions surrounding a cursor are found (the
++scope tree's notion of which scope a position belongs to) and how each is
++described (name, kind and the position of the name in its header).
++"""
++
++from . import scopes
++from .source import SourceFile
++
++
++def context(path, line, col):
++    """The class and function scopes around the cursor, outermost first: dicts
++    with name, type, line and column."""
++    source = SourceFile(path)
++    source.check_position(line, col)
++    tree = scopes.ScopeTree(source.text(), source.path)
++    found = []
++    scope = tree.scope_at(line, col)
++    while scope is not None and scope.parent is not None:
++        if scope.kind in (scopes.Scope.CLASS, scopes.Scope.FUNCTION) and scope.name:
++            def_line, def_col = tree.definition_position(scope.node)
++            found.append({"name": scope.name, "type": scope.kind,
++                          "line": def_line, "column": def_col})
++        scope = scope.parent
++    return list(reversed(found))
+
+### sithlib/engine.py (modified)
+--- sithlib/engine.py
++++ sithlib/engine.py
+@@ -4,16 +4,18 @@
+ (visible names plus keywords, or public module members, or the attributes
+ of every possible receiver value, or importable modules, or the names a
+ module exports to ``from ... import``) and how filtering, wording and
+-ranking are combined.
++ranking are combined (as the active settings ask: case sensitivity, and
++whether an opening bracket follows function and class names).
+ """
+ 
+-from . import cursor, matching, presentation, ranking, vocabulary
++from . import config, cursor, matching, presentation, ranking, vocabulary
+ from .inference import MODULE, Project
+ from .source import SourceFile
+ 
+ 
+-def complete(path, line, col, fuzzy=False, root=None):
+-    """Return completions as a list of (name, complete, type, description)."""
++def complete(path, line, col, fuzzy=False, root=None, namespaces=None):
++    """Return completions as a list of (name, complete, type, description).
++    ``namespaces``: interpreter namespaces supplying unresolved names."""
+     source = SourceFile(path)
+     source.check_position(line, col)
+     context = cursor.analyze(source.text_before(line, col))
+@@ -22,7 +24,7 @@
+ 
+     text = source.lines()[line - 1]
+     indent = len(text) - len(text.lstrip()) if text[:col].strip() else col
+-    project = Project(source.path, source.text(), root)
++    project = Project(source.path, source.text(), root, namespaces)
+     keywords = []
+     if context.kind == cursor.IMPORT_MODULE:
+         entities = project.module_names(context.module, context.level)
+@@ -46,16 +48,21 @@
+                     continue
+                 entities.setdefault(name, entity)
+ 
++    settings = config.active()
++    case_sensitive = not settings.case_insensitive
+     query = context.prefix
+     results = []
+     for name, entity in entities.items():
+-        if matching.matches(name, query, fuzzy):
++        if matching.matches(name, query, fuzzy, case_sensitive):
+             kind, type_name = entity.presentation()
+             results.append((name, False) + presentation.describe(name, kind, type_name))
+     for word in keywords:
+-        if word not in entities and matching.matches(word, query, fuzzy):
++        if word not in entities and matching.matches(word, query, fuzzy, case_sensitive):
+             results.append((word, True) + presentation.describe(word, presentation.KEYWORD))
+ 
+     ordered = ranking.rank(results, name_of=lambda r: r[0], is_keyword=lambda r: r[1])
+-    return [(name, matching.remaining_text(name, query), kind, description)
+-            for name, _, kind, description in ordered]
++    bracket = "(" if settings.add_bracket else ""
++    return [(name, matching.remaining_text(name, query)
++             + (bracket if kind in ("function", "class") and not is_keyword else ""),
++             kind, description)
++            for name, is_keyword, kind, description in ordered]
+
+### sithlib/environments.py (created)
+--- sithlib/environments.py
++++ sithlib/environments.py
+@@ -0,0 +1,212 @@
++"""Python environment discovery.
++
++Secret: where Python installations and virtualenvs are looked for (the
++running interpreter, ``PATH``, conventional install and virtualenv
++locations), how an executable is asked about itself (a subprocess printing
++its version, prefixes and ``sys.path``), what makes it a virtualenv, and how
++found environments are deduplicated and ordered.
++"""
++
++import json
++import os
++import re
++import shutil
++import subprocess
++import sys
++
++_WINDOWS = os.name == "nt"
++_EXECUTABLE = re.compile(r"^python(\d+(\.\d+)?)?(\.exe)?$", re.IGNORECASE)
++_PROBE = (
++    "import json, sys\n"
++    "print(json.dumps({'version': '%d.%d.%d' % tuple(sys.version_info[:3]),"
++    " 'prefix': sys.prefix,"
++    " 'base_prefix': getattr(sys, 'base_prefix', sys.prefix),"
++    " 'real_prefix': getattr(sys, 'real_prefix', None),"
++    " 'sys_path': sys.path}))\n"
++)
++_TIMEOUT = 15
++
++
++class Environment:
++    def __init__(self, executable, version, is_virtualenv, prefix=None, sys_path=None):
++        self.executable = executable
++        self.version = version
++        self.is_virtualenv = is_virtualenv
++        self.prefix = prefix
++        self.sys_path = sys_path or []
++
++    def summary(self):
++        return {"executable": self.executable, "version": self.version,
++                "is_virtualenv": self.is_virtualenv}
++
++    def details(self):
++        return dict(self.summary(), prefix=self.prefix, sys_path=list(self.sys_path))
++
++
++_PROBED = {}
++
++
++def probe(executable):
++    """The Environment of the Python at path ``executable``, or None when it
++    is not a working Python interpreter."""
++    executable = os.path.abspath(executable)
++    if executable in _PROBED:
++        return _PROBED[executable]
++    found = None
++    if os.path.isfile(executable) and os.access(executable, os.X_OK):
++        try:
++            completed = subprocess.run([executable, "-c", _PROBE], stdin=subprocess.DEVNULL,
++                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
++                                       timeout=_TIMEOUT, cwd=os.path.dirname(executable))
++            data = json.loads(completed.stdout.decode("utf-8", errors="replace")
++                              .strip().splitlines()[-1]) if completed.returncode == 0 else None
++        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
++            data = None
++        if isinstance(data, dict) and isinstance(data.get("version"), str):
++            prefix = data.get("prefix")
++            virtual = bool(data.get("real_prefix")) or (
++                prefix is not None and prefix != data.get("base_prefix"))
++            paths = [p for p in data.get("sys_path") or [] if isinstance(p, str) and p]
++            found = Environment(executable, data["version"], virtual, prefix, paths)
++    _PROBED[executable] = found
++    return found
++
++
++def find_executable(name):
++    """Absolute path of the executable called (or found at) ``name``, or None."""
++    if os.sep in name or (os.altsep and os.altsep in name):
++        return os.path.abspath(name) if os.path.isfile(name) else None
++    found = shutil.which(name)
++    return os.path.abspath(found) if found else None
++
++
++def default_executable():
++    return find_executable("python3") or find_executable("python") or sys.executable
++
++
++def system_environments():
++    """Python installations on this system (newest first)."""
++    found = []
++    seen = set()
++    for executable in _system_candidates():
++        key = os.path.realpath(executable)
++        if key in seen:
++            continue
++        environment = probe(executable)
++        if environment is not None:
++            seen.add(key)
++            found.append(environment)
++    return _ordered(found)
++
++
++def virtualenvs(path=None, project_root=None):
++    """Virtualenvs below ``path`` and in the conventional locations (newest first)."""
++    directories = []
++    if path:
++        directories += _subdirectories(path)
++    directories += _subdirectories(os.path.join(os.path.expanduser("~"), ".virtualenvs"))
++    for base in dict.fromkeys([os.getcwd(), project_root or os.getcwd()]):
++        directories += [os.path.join(base, ".venv"), os.path.join(base, "venv")]
++    found = []
++    seen = set()
++    for directory in directories:
++        key = os.path.realpath(directory)
++        if key in seen:
++            continue
++        environment = _virtualenv(directory)
++        if environment is not None:
++            seen.add(key)
++            found.append(environment)
++    return _ordered(found)
++
++
++def site_directories(executable):
++    """The package directories (``site-packages``) on the ``sys.path`` of the
++    Python at ``executable``."""
++    environment = probe(executable) if executable else None
++    if environment is None:
++        return []
++    return [p for p in environment.sys_path
++            if os.path.basename(os.path.normpath(p)) in ("site-packages", "dist-packages")
++            and os.path.isdir(p)]
++
++
++def _virtualenv(directory):
++    if not os.path.isdir(directory):
++        return None
++    if _WINDOWS:
++        names = [os.path.join("Scripts", "python.exe")]
++    else:
++        names = [os.path.join("bin", "python"), os.path.join("bin", "python3")]
++    for name in names:
++        executable = os.path.abspath(os.path.join(directory, name))
++        if not os.path.isfile(executable):
++            continue
++        environment = probe(executable)
++        if environment is not None:
++            return Environment(executable, environment.version, True,
++                               environment.prefix, environment.sys_path)
++        version = _configured_version(directory)
++        if version is not None:
++            return Environment(executable, version, True, os.path.abspath(directory))
++    return None
++
++
++def _configured_version(directory):
++    """The Python version recorded in a virtualenv's ``pyvenv.cfg``, or None."""
++    try:
++        with open(os.path.join(directory, "pyvenv.cfg"), encoding="utf-8",
++                  errors="replace") as handle:
++            lines = handle.read().splitlines()
++    except OSError:
++        return None
++    for line in lines:
++        key, sep, value = line.partition("=")
++        if sep and key.strip() in ("version", "version_info") and value.strip():
++            return value.strip()
++    return None
++
++
++def _subdirectories(path):
++    try:
++        names = sorted(os.listdir(path))
++    except OSError:
++        return []
++    return [os.path.join(path, name) for name in names
++            if os.path.isdir(os.path.join(path, name))]
++
++
++def _system_candidates():
++    candidates = []
++    directories = os.environ.get("PATH", "").split(os.pathsep)
++    if _WINDOWS:
++        directories += [os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Python")]
++    else:
++        directories += ["/usr/local/bin", "/usr/bin", "/bin", "/opt/homebrew/bin",
++                        "/opt/local/bin"]
++        directories += [os.path.join(d, "bin") for d in _subdirectories(
++            os.path.join(os.path.expanduser("~"), ".pyenv", "versions"))]
++    for directory in dict.fromkeys(d for d in directories if d):
++        try:
++            names = sorted(os.listdir(directory))
++        except OSError:
++            continue
++        for name in names:
++            if _EXECUTABLE.match(name):
++                candidates.append(os.path.abspath(os.path.join(directory, name)))
++    if sys.executable:  # the running interpreter, when not found otherwise
++        candidates.append(os.path.abspath(sys.executable))
++    return candidates
++
++
++def _version_key(version):
++    numbers = []
++    for part in re.split(r"[.\-+]", version):
++        match = re.match(r"\d+", part)
++        numbers.append(int(match.group()) if match else 0)
++    return tuple(numbers)
++
++
++def _ordered(environments):
++    environments = sorted(environments, key=lambda e: e.executable)
++    return sorted(environments, key=lambda e: _version_key(e.version), reverse=True)
+
+### sithlib/inference.py (modified)
+--- sithlib/inference.py
++++ sithlib/inference.py
+@@ -6,7 +6,9 @@
+ the members of a value are enumerated, how a source file's ``.pyi`` stub
+ overrides its type information (values computed in a stub are mapped back to
+ the source definitions they stand for), and how unannotated parameters get
+-values from the call sites in their own file.
++values from the call sites in their own file (unless the active settings
++turn that off), and how the names of interpreter namespaces stand in for
++names the main file leaves unresolved.
+ 
+ Clients see these abstractions:
+   * ``Project``  - opens the main file and returns a ``Location`` for a cursor.
+@@ -25,7 +27,7 @@
+ import os
+ import types
+ 
+-from . import flow, introspect, scopes, vocabulary
++from . import config, flow, introspect, scopes, vocabulary
+ from .modules import (DIRECTORY, RUNTIME, SOURCE, ModuleLocator, directory_module_names,
+                       runtime_submodule_names)
+ 
+@@ -36,6 +38,7 @@
+ PARAM = "param"
+ STATEMENT = "statement"
+ UNKNOWN = "unknown"
++NAMESPACE = "namespace"  # presentation kind of a name taken from an interpreter namespace
+ 
+ _LITERAL_TYPES = {
+     ast.JoinedStr: str,
+@@ -785,6 +788,106 @@
+         return self._dunder_call("__getitem__")
+ 
+ 
++_NAMESPACE_KINDS = {
++    "module": MODULE,
++    "class": CLASS, "type": CLASS,
++    "function": FUNCTION, "builtin_function_or_method": FUNCTION, "method": FUNCTION,
++    "builtin_method": FUNCTION, "method_descriptor": FUNCTION, "lambda": FUNCTION,
++}
++
++
++class NamespaceValue(Value):
++    """The value of an interpreter namespace entry. Its members are those of
++    the object it can be traced to (a module or a module attribute, or for an
++    instance, its builtin type) plus the attributes the entry lists."""
++
++    def __init__(self, project, name, entry):
++        self.project = project
++        self.name = name
++        self.entry = entry
++        self.kind = _NAMESPACE_KINDS.get(entry.type, INSTANCE)
++        self.type_name = entry.type
++        self._backing = None
++
++    def key(self):
++        return ("namespace", self.name, id(self.entry))
++
++    def backing(self):
++        """Values of the object this entry describes, as far as they are known."""
++        if self._backing is None:
++            self._backing = []
++            if self.project.enter(self.key()):
++                try:
++                    self._backing = self._find_backing()
++                finally:
++                    self.project.leave(self.key())
++        return list(self._backing)
++
++    def _find_backing(self):
++        entry = self.entry
++        if self.kind == INSTANCE:
++            cls = getattr(builtins, entry.type, None)
++            if isinstance(cls, type):
++                return [RuntimeInstance(self.project, cls)]
++            module = self.project.module_value(entry.module) if entry.module else None
++            if module is None:
++                return []
++            return [i for c in module.attribute(entry.type) if c.kind == CLASS
++                    for i in c.instantiate()]
++        if self.kind == MODULE:
++            for dotted in dict.fromkeys(n for n in (entry.name, entry.module, self.name) if n):
++                found = self.project.module_value(dotted)
++                if found is not None and found.kind == MODULE:
++                    return [found]
++            return []
++        if not entry.module:
++            return []
++        module = self.project.module_value(entry.module)
++        if module is None:
++            return []
++        return [v for v in module.attribute(entry.name or self.name) if v.kind == self.kind]
++
++    def members(self):
++        result = {}
++        for value in self.backing():
++            for name, entity in value.members().items():
++                result.setdefault(name, entity)
++        for name in self.entry.attributes:
++            result.setdefault(name, ValueEntity(name, lambda n=name: self._attribute(n)))
++        return result
++
++    def _attribute(self, name):
++        return [v for value in self.backing() for v in value.attribute(name)]
++
++    def attribute(self, name):
++        return _unique(self._attribute(name))
++
++    def attribute_targets(self, name):
++        found = [t for value in self.backing() for t in value.attribute_targets(name)]
++        if not found and name in self.entry.attributes:
++            found = [ValueEntity(name, lambda: self._attribute(name))]
++        return found
++
++    def call(self, arguments=None):
++        return _unique([v for value in self.backing() for v in value.call(arguments)])
++
++    def instantiate(self):
++        return _unique([v for value in self.backing() for v in value.instantiate()])
++
++    def iterate(self):
++        return _unique([v for value in self.backing() for v in value.iterate()])
++
++    def subscript(self, index):
++        return _unique([v for value in self.backing() for v in value.subscript(index)])
++
++    def builtin_type(self):
++        for value in self.backing():
++            found = value.builtin_type()
++            if found is not None:
++                return found
++        return None
++
++
+ class ValueTarget:
+     """A resolution target that is directly a value (e.g. a submodule)."""
+ 
+@@ -902,6 +1005,21 @@
+             found = self._fetch()
+             self._values = [found] if isinstance(found, Value) else list(found or [])
+         return list(self._values)
++
++
++class NamespaceEntity(Entity):
++    """A name bound in an interpreter namespace."""
++
++    def __init__(self, project, name, entry):
++        self.project = project
++        self.name = name
++        self.entry = entry
++
++    def presentation(self):
++        return (NAMESPACE, self.entry.type)
++
++    def values(self):
++        return [NamespaceValue(self.project, self.name, self.entry)]
+ 
+ 
+ class BindingEntity(Entity):
+@@ -1092,6 +1210,9 @@
+         for level in reversed(scope.chain()):
+             for event in level.events_until_line(line):
+                 self._apply(result, event)
++        if scope.tree.analysis is self.project.main:
++            for name, entity in self.project.namespace_entities().items():
++                result.setdefault(name, entity)
+         return result
+ 
+     # -- name resolution -------------------------------------------------
+@@ -1141,6 +1262,10 @@
+         if parent is None:
+             if name in vocabulary.builtin_names():
+                 return [(RuntimeEntity(self.project, name, vocabulary.builtin_namespace()), ())]
++            if scope.tree.analysis is self.project.main:
++                entity = self.project.namespace_entity(name)
++                if entity is not None:
++                    return [(entity, ())]
+             return []
+         state = None
+         if scope.kind == scopes.Scope.CLASS and scope.parent is parent:
+@@ -1301,7 +1426,7 @@
+             annotated = self.annotation_values(details["annotation"], where)
+             if annotated:
+                 return annotated
+-        elif dynamic and not self.is_stub and not self.stub_scopes(function):
++        elif dynamic and config.active().dynamic_params and not self.is_stub and not self.stub_scopes(function):
+             found = self._call_site_values(binding)
+             if found:
+                 return found
+@@ -1837,10 +1962,13 @@
+ 
+ class Project:
+     """All files analysed for one request. ``main_path`` may be None when no
+-    file is being edited (``root`` is then required)."""
+-
+-    def __init__(self, main_path, main_text, root=None):
++    file is being edited (``root`` is then required). ``namespaces`` (a list of
++    dicts mapping names to ``interpreter.Entry`` objects, searched in order)
++    supply names the main file cannot resolve otherwise."""
++
++    def __init__(self, main_path, main_text, root=None, namespaces=None):
+         self._main_path = os.path.abspath(main_path) if main_path else None
++        self._namespaces = list(namespaces or [])
+         self.root = os.path.abspath(root) if root else os.path.dirname(self._main_path)
+         self._locator = ModuleLocator(self.root)
+         self._analyses = {}
+@@ -1867,6 +1995,24 @@
+ 
+     def submodule_value(self, directory, name):
+         return self._wrap(self._locator.locate_in_directory(directory, name))
++
++    # -- interpreter namespaces ------------------------------------------
++    def namespace_entity(self, name):
++        """The entity of the first namespace binding ``name``, or None."""
++        for namespace in self._namespaces:
++            if name in namespace:
++                return NamespaceEntity(self, name, namespace[name])
++        return None
++
++    def namespace_entities(self):
++        """Every namespace name (the first namespace binding it wins): dict of
++        name -> Entity."""
++        result = {}
++        for namespace in self._namespaces:
++            for name, entry in namespace.items():
++                if name not in result:
++                    result[name] = NamespaceEntity(self, name, entry)
++        return result
+ 
+     # -- module contents -------------------------------------------------
+     def dunder_all(self, module):
+
+### sithlib/interpreter.py (created)
+--- sithlib/interpreter.py
++++ sithlib/interpreter.py
+@@ -0,0 +1,68 @@
++"""Interpreter namespaces.
++
++Secret: the format of a namespaces file (a JSON array of objects mapping
++names to descriptions of runtime values with ``type``, ``value``,
++``module``, ``name`` and ``attributes`` fields) and how a malformed file or
++entry is treated (the file is rejected; an odd entry is read leniently).
++"""
++
++import json
++
++
++class NamespaceError(Exception):
++    """The namespaces file cannot be used."""
++
++
++class Entry:
++    """What is known about one runtime value."""
++
++    def __init__(self, type_name, value=None, module=None, name=None, attributes=()):
++        self.type = type_name
++        self.value = value
++        self.module = module
++        self.name = name
++        self.attributes = list(attributes)
++
++    def full_name(self, key):
++        name = self.name or key
++        if self.module and self.type != "module":
++            return "%s.%s" % (self.module, name)
++        return name
++
++
++def load(path):
++    """The namespaces stored in the file at ``path``: a list of dicts mapping
++    names to Entry objects, in search order."""
++    try:
++        with open(path, "rb") as handle:
++            data = json.loads(handle.read().decode("utf-8-sig"))
++    except OSError as exc:
++        raise NamespaceError("cannot read namespaces file %s: %s" % (path, exc))
++    except ValueError as exc:
++        raise NamespaceError("namespaces file %s is not valid JSON: %s" % (path, exc))
++    if not isinstance(data, list) or not all(isinstance(n, dict) for n in data):
++        raise NamespaceError("namespaces file %s must hold a JSON array of objects" % path)
++    return [{name: _entry(description) for name, description in namespace.items()}
++            for namespace in data]
++
++
++def _entry(description):
++    if isinstance(description, str):
++        return Entry(description)
++    if not isinstance(description, dict):
++        return Entry(type(description).__name__ if description is not None else "NoneType",
++                     value=json.dumps(description))
++    type_name = description.get("type")
++    attributes = description.get("attributes")
++    return Entry(type_name if isinstance(type_name, str) and type_name else "object",
++                 value=_text(description.get("value")),
++                 module=_text(description.get("module")),
++                 name=_text(description.get("name")),
++                 attributes=[a for a in attributes if isinstance(a, str)]
++                 if isinstance(attributes, list) else ())
++
++
++def _text(value):
++    if value is None:
++        return None
++    return value if isinstance(value, str) else json.dumps(value)
+
+### sithlib/matching.py (modified)
+--- sithlib/matching.py
++++ sithlib/matching.py
+@@ -1,15 +1,16 @@
+ """Query matching.
+ 
+ Secret: the algorithm deciding whether a typed query matches a candidate
+-name (case-insensitive prefix, or case-insensitive in-order subsequence when
+-fuzzy) and how much of the name remains to be inserted.
++name (prefix, or in-order subsequence when fuzzy; ignoring case unless asked
++not to) and how much of the name remains to be inserted.
+ """
+ 
+ 
+-def matches(name, query, fuzzy=False):
++def matches(name, query, fuzzy=False, case_sensitive=False):
+     if not query:
+         return True
+-    name, query = name.lower(), query.lower()
++    if not case_sensitive:
++        name, query = name.lower(), query.lower()
+     if not fuzzy:
+         return name.startswith(query)
+     position = 0
+
+### sithlib/modules.py (modified)
+--- sithlib/modules.py
++++ sithlib/modules.py
+@@ -15,6 +15,8 @@
+ import pkgutil
+ import sys
+ import sysconfig
++
++from . import config, environments
+ 
+ SOURCE = "source"  # a ``.py`` file, or a ``.pyi`` stub without one
+ RUNTIME = "runtime"
+@@ -114,12 +116,35 @@
+         return found.path
+ 
+     def search_roots(self, importer_path=None):
+-        roots = [self._project_dir]
+-        if importer_path:
+-            own = os.path.dirname(os.path.abspath(importer_path))
+-            if own not in roots:
+-                roots.append(own)
+-        return roots
++        """Directories absolute imports are looked for in, in order: the
++        configured ``sys_path`` or else (with ``smart_sys_path``) the project
++        root, the importer's directory, the directory its top-level package
++        lives in and the configured environment's site-packages; then the
++        configured ``added_sys_path``."""
++        settings = config.active()
++        if settings.sys_path:
++            roots = list(settings.sys_path)
++        elif settings.smart_sys_path:
++            roots = [self._project_dir]
++            if importer_path:
++                own = os.path.dirname(os.path.abspath(importer_path))
++                roots += [own, self._package_root(own)]
++            if settings.environment_path:
++                roots += environments.site_directories(settings.environment_path)
++        else:
++            roots = []
++        roots += settings.added_sys_path
++        return list(dict.fromkeys(roots))
++
++    def _package_root(self, directory):
++        """The nearest ancestor of ``directory`` (inside the project) that is
++        not a package: where the package holding ``directory`` is importable."""
++        while os.path.isfile(os.path.join(directory, "__init__.py")):
++            parent = os.path.dirname(directory)
++            if parent == directory or not parent.startswith(self._project_dir):
++                break
++            directory = parent
++        return directory
+ 
+     def top_level_names(self, importer_path=None):
+         """Names of the modules ``import <name>`` can find."""
+
+### sithlib/navigation.py (modified)
+--- sithlib/navigation.py
++++ sithlib/navigation.py
+@@ -14,7 +14,7 @@
+ import re
+ import types
+ 
+-from . import flow, inference, introspect, scopes
++from . import config, flow, inference, introspect, scopes
+ from .inference import (DictInstance, DirectoryModule, RuntimeEntity, RuntimeInstance,
+                         RuntimeValue, StaticClass, StaticFunction, StaticInstance,
+                         StaticModule, Where)
+@@ -28,15 +28,16 @@
+     """The cursor does not touch an identifier."""
+ 
+ 
+-def run(command, path, line, col, root=None, follow_imports=False):
++def run(command, path, line, col, root=None, follow_imports=False, namespaces=None):
+     """Definitions (as dicts) answering ``command`` at the cursor.
+ 
+     With ``follow_imports``, ``goto`` continues through import statements to
+-    the definitions they finally name.
++    the definitions they finally name. ``namespaces`` (interpreter namespaces)
++    answer for names the file leaves unresolved.
+     """
+     source = SourceFile(path)
+     source.check_position(line, col)
+-    project = inference.Project(source.path, source.text(), root)
++    project = inference.Project(source.path, source.text(), root, namespaces)
+     analysis = project.main
+     occurrence = _Finder(analysis, line, col).find()
+     if occurrence is None:
+@@ -660,6 +661,8 @@
+                 records.extend(self.binding(b) for b in target.bindings)
+             elif isinstance(target, RuntimeEntity):
+                 records.append(self.runtime_entity(target))
++            elif isinstance(target, inference.NamespaceEntity):
++                records.extend(self.value(v) for v in target.values())
+             elif isinstance(target, inference.ValueEntity):
+                 records.extend(self.value(v) for v in target.values())
+             elif isinstance(target, inference.ValueTarget):
+@@ -685,7 +688,7 @@
+         return relative.replace(os.sep, "/")
+ 
+     def module_name(self, path):
+-        relative = self.relative(path)
++        relative = self._import_relative(path) or self.relative(path)
+         if os.path.isabs(relative):
+             relative = os.path.basename(relative)
+         if relative.endswith(".pyi"):
+@@ -698,6 +701,20 @@
+         if len(parts) > 1 and parts[-1] == "__init__":
+             parts.pop()
+         return ".".join(parts)
++
++    @staticmethod
++    def _import_relative(path):
++        """``path`` relative to the innermost configured import root holding it, or None."""
++        settings = config.active()
++        path = os.path.abspath(path)
++        best = None
++        for root in settings.sys_path + settings.added_sys_path:
++            prefix = root.rstrip(os.sep) + os.sep
++            if path.startswith(prefix) and (best is None or len(root) > len(best)):
++                best = root
++        if best is None:
++            return None
++        return os.path.relpath(path, best).replace(os.sep, "/")
+ 
+     def directory_name(self, directory):
+         return ".".join(p for p in self.relative(directory).split("/") if p)
+@@ -833,7 +850,14 @@
+             return self.runtime_object(value.obj)
+         if isinstance(value, inference._DictView):
+             return self.runtime_object(getattr(dict, value.which))
++        if isinstance(value, inference.NamespaceValue):
++            return self.namespace_value(value)
+         return None
++
++    def namespace_value(self, value):
++        entry = value.entry
++        return self.record(entry.name or value.name, entry.type, entry.full_name(value.name),
++                           "", 0, 0, "%s (runtime)" % entry.type, entry.value or "")
+ 
+     def runtime_instance(self, cls):
+         name = _type_name(cls)
+
+### sithlib/output.py (modified)
+--- sithlib/output.py
++++ sithlib/output.py
+@@ -3,8 +3,10 @@
+ Secret: the wire format of the result (compact JSON with a ``completions``
+ array of name/complete/type/description objects, a ``definitions`` array of
+ definition objects, a ``signatures`` array, a ``references`` array, an
+-``errors`` array, or ``changed_files``/``renames`` maps, newline-terminated;
+-or a unified diff as plain text).
++``errors`` array, a ``context`` array of enclosing scopes, an
++``environments`` array, an environment object, a project configuration
++object, or ``changed_files``/``renames`` maps, newline-terminated; or a
++unified diff as plain text).
+ """
+ 
+ import json
+@@ -63,6 +65,29 @@
+     _write({"errors": [{f: e[f] for f in fields} for e in errors]}, stream)
+ 
+ 
++def write_context(scopes, stream=None):
++    """``scopes``: dicts with name, type, line, column (outermost first)."""
++    fields = ("name", "type", "line", "column")
++    _write({"context": [{f: s[f] for f in fields} for s in scopes]}, stream)
++
++
++def write_environments(environments, stream=None):
++    """``environments``: dicts with executable, version, is_virtualenv."""
++    fields = ("executable", "version", "is_virtualenv")
++    _write({"environments": [{f: e[f] for f in fields} for e in environments]}, stream)
++
++
++def write_environment(environment, stream=None):
++    """``environment``: dict with executable, version, is_virtualenv, prefix, sys_path."""
++    fields = ("executable", "version", "is_virtualenv", "prefix", "sys_path")
++    _write({f: environment[f] for f in fields}, stream)
++
++
++def write_configuration(configuration, stream=None):
++    """``configuration``: the project configuration fields."""
++    _write(dict(configuration), stream)
++
++
+ def write_changes(changed_files, renames, stream=None):
+     """``changed_files``: path -> new content; ``renames``: old path -> new path."""
+     _write({"changed_files": changed_files, "renames": renames}, stream)
+
+### sithlib/presentation.py (modified)
+--- sithlib/presentation.py
++++ sithlib/presentation.py
+@@ -1,10 +1,12 @@
+ """Completion wording.
+ 
+ Secret: the vocabulary used for a completion's ``type`` field and the
+-format of its human-readable ``description``.
++format of its human-readable ``description`` (a name taken from an
++interpreter namespace is described by its runtime type).
+ """
+ 
+ KEYWORD = "keyword"
++NAMESPACE = "namespace"
+ 
+ 
+ def describe(name, kind, type_name=None):
+@@ -21,4 +23,6 @@
+         return "param", "param %s" % name
+     if kind == KEYWORD:
+         return "keyword", name
++    if kind == NAMESPACE:
++        return type_name, "%s (runtime)" % type_name
+     return "statement", "statement"
+
+### sithlib/signatures.py (modified)
+--- sithlib/signatures.py
++++ sithlib/signatures.py
+@@ -3,8 +3,9 @@
+ Secret: how the callable whose argument list holds the cursor is turned into
+ signatures (functions and bound methods, classes through their initializer
+ or dataclass fields, callable instances, overloads and stub declarations,
+-runtime callables), how parameters and signatures are rendered, and how the
+-arguments typed so far are bound to parameters to find the active one.
++runtime callables, interpreter namespace entries), how parameters and
++signatures are rendered, and how the arguments typed so far are bound to
++parameters to find the active one.
+ """
+ 
+ import ast
+@@ -12,8 +13,8 @@
+ import re
+ 
+ from . import cursor, navigation
+-from .inference import (Project, RuntimeValue, StaticClass, StaticFunction, StaticInstance,
+-                        CLASS, FUNCTION)
++from .inference import (NamespaceValue, Project, RuntimeValue, StaticClass, StaticFunction,
++                        StaticInstance, CLASS, FUNCTION)
+ from .source import SourceFile
+ 
+ POSITIONAL_ONLY = "positional_only"
+@@ -99,14 +100,15 @@
+     return None
+ 
+ 
+-def signatures(path, line, col, root=None):
+-    """Signatures (as dicts) of the call whose argument list holds the cursor."""
++def signatures(path, line, col, root=None, namespaces=None):
++    """Signatures (as dicts) of the call whose argument list holds the cursor.
++    ``namespaces``: interpreter namespaces supplying unresolved names."""
+     source = SourceFile(path)
+     source.check_position(line, col)
+     context = cursor.call_context(source.text_before(line, col))
+     if context is None:
+         return []
+-    project = Project(source.path, source.text(), root)
++    project = Project(source.path, source.text(), root, namespaces)
+     text = source.lines()[line - 1]
+     indent = len(text) - len(text.lstrip()) if text[:col].strip() else col
+     builder = _Builder(project)
+@@ -142,7 +144,18 @@
+         if isinstance(value, RuntimeValue) and value.kind in (FUNCTION, CLASS):
+             found = _runtime(value.obj)
+             return [found] if found is not None else []
++        if isinstance(value, NamespaceValue):
++            return self._namespace(value)
+         return []
++
++    def _namespace(self, value):
++        """Signatures of the object a namespace entry describes, or else a
++        parameterless one when the entry is a function or class."""
++        result = [s for backing in value.backing() for s in self.signatures(backing)]
++        if result or value.kind not in (FUNCTION, CLASS):
++            return result
++        entry = value.entry
++        return [Signature(entry.name or value.name, [], None, entry.value or "", "", 0)]
+ 
+     def _function(self, function, name, skip_first, docstring=None, returns=True):
+         own_doc = _docstring(function.scope.node)
+
+### tests/test_interpreter.py (created)
+--- tests/test_interpreter.py
++++ tests/test_interpreter.py
+@@ -0,0 +1,318 @@
++"""End-to-end tests for interpreter mode, ``context``, settings, project
++configuration and the ``env`` commands."""
++
++import json
++import os
++import subprocess
++import sys
++import tempfile
++import textwrap
++import unittest
++
++SITH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sith.py")
++
++MAIN = '''\
++    import os
++
++
++    class Shape:
++        def area(self, scale):
++            total = scale
++            return total
++
++        async def grow(self):
++            def inner():
++                pass
++            return 1
++
++
++    def helper(a, b=2):
++        return a
++
++
++    local_value = 1
++    runtime_num
++    mod.
++    data.
++    mystery(
++    local_value
++    Obj.
++    '''
++
++NAMESPACES = [
++    {"runtime_num": {"type": "int", "value": "42"},
++     "runtime_other": {"type": "list"},
++     "mod": {"type": "module", "name": "os"},
++     "data": {"type": "dict"},
++     "mystery": {"type": "function", "value": "Does things."},
++     "local_value": {"type": "str"},
++     "Obj": {"type": "class", "module": "app", "attributes": ["alpha", "beta"]}},
++    {"runtime_num": {"type": "str"},
++     "runtime_late": {"type": "float"}},
++]
++
++
++class SithTestCase(unittest.TestCase):
++    def setUp(self):
++        self.directory = tempfile.TemporaryDirectory()
++        self.root = os.path.realpath(self.directory.name)
++
++    def tearDown(self):
++        self.directory.cleanup()
++
++    def write(self, name, text):
++        path = os.path.join(self.root, name)
++        os.makedirs(os.path.dirname(path), exist_ok=True)
++        with open(path, "w") as handle:
++            handle.write(textwrap.dedent(text))
++        return path
++
++    def run_sith(self, *args, cwd=None, env=None):
++        return subprocess.run([sys.executable, SITH] + [str(a) for a in args],
++                              capture_output=True, text=True, cwd=cwd or self.root, env=env)
++
++    def json_of(self, *args, **kwargs):
++        completed = self.run_sith(*args, **kwargs)
++        self.assertEqual(completed.returncode, 0, completed.stderr)
++        return json.loads(completed.stdout)
++
++
++class InterpreterTest(SithTestCase):
++    def setUp(self):
++        super().setUp()
++        self.main = self.write("main.py", MAIN)
++        self.namespaces = self.write("ns.json", json.dumps(NAMESPACES))
++
++    def interpreter(self, command, line, col):
++        return self.json_of(command, self.main, line, col, "--interpreter",
++                            "--namespaces", self.namespaces)
++
++    def test_completion_merges_namespaces_first_match_wins(self):
++        found = self.interpreter("complete", 20, 8)["completions"]
++        by_name = {c["name"]: c for c in found}
++        self.assertEqual(by_name["runtime_num"],
++                         {"name": "runtime_num", "complete": "num", "type": "int",
++                          "description": "int (runtime)"})
++        self.assertEqual(by_name["runtime_other"]["description"], "list (runtime)")
++        self.assertEqual(by_name["runtime_late"]["type"], "float")
++
++    def test_static_names_win_over_namespaces(self):
++        found = self.interpreter("complete", 24, 5)["completions"]
++        local = [c for c in found if c["name"] == "local_value"]
++        self.assertEqual(local[0]["description"], "instance of int")
++        definitions = self.interpreter("infer", 24, 3)["definitions"]
++        self.assertEqual([d["name"] for d in definitions], ["int"])
++
++    def test_infer_and_goto_fall_back_to_namespaces(self):
++        for command in ("infer", "goto"):
++            definitions = self.interpreter(command, 20, 3)["definitions"]
++            self.assertEqual(len(definitions), 1)
++            self.assertEqual(definitions[0]["type"], "int")
++            self.assertEqual(definitions[0]["description"], "int (runtime)")
++            self.assertEqual(definitions[0]["docstring"], "42")
++
++    def test_attribute_completion_of_namespace_values(self):
++        names = [c["name"] for c in self.interpreter("complete", 21, 4)["completions"]]
++        self.assertIn("getcwd", names)
++        names = [c["name"] for c in self.interpreter("complete", 22, 5)["completions"]]
++        self.assertIn("keys", names)
++        names = [c["name"] for c in self.interpreter("complete", 25, 4)["completions"]]
++        self.assertEqual(names[:2], ["alpha", "beta"])
++
++    def test_signatures_of_namespace_function(self):
++        found = self.interpreter("signatures", 23, 8)["signatures"]
++        self.assertEqual(found[0]["name"], "mystery")
++        self.assertEqual(found[0]["docstring"], "Does things.")
++
++    def test_interpreter_without_namespaces_is_normal_mode(self):
++        normal = self.json_of("complete", self.main, 20, 8)
++        self.assertEqual(self.json_of("complete", self.main, 20, 8, "--interpreter"), normal)
++        self.assertEqual(normal["completions"], [])
++
++    def test_namespaces_without_interpreter_fails(self):
++        completed = self.run_sith("complete", self.main, 20, 7, "--namespaces", self.namespaces)
++        self.assertEqual(completed.returncode, 1)
++        self.assertTrue(completed.stderr)
++
++    def test_bad_namespaces_file_fails(self):
++        bad = self.write("bad.json", "{}")
++        completed = self.run_sith("complete", self.main, 20, 7, "--interpreter",
++                                  "--namespaces", bad)
++        self.assertEqual(completed.returncode, 1)
++
++
++class ContextTest(SithTestCase):
++    def setUp(self):
++        super().setUp()
++        self.main = self.write("main.py", MAIN)
++
++    def context(self, line, col):
++        return self.json_of("context", self.main, line, col)["context"]
++
++    def test_module_level_is_empty(self):
++        self.assertEqual(self.context(19, 0), [])
++
++    def test_nested_scopes_outermost_first(self):
++        self.assertEqual(self.context(6, 8), [
++            {"name": "Shape", "type": "class", "line": 4, "column": 6},
++            {"name": "area", "type": "function", "line": 5, "column": 8}])
++        self.assertEqual([s["name"] for s in self.context(11, 16)], ["Shape", "grow", "inner"])
++        self.assertEqual(self.context(16, 4),
++                         [{"name": "helper", "type": "function", "line": 15, "column": 4}])
++
++
++class SettingsTest(SithTestCase):
++    def setUp(self):
++        super().setUp()
++        self.main = self.write("m.py", '''\
++            def func(p):
++                return p
++
++
++            func(1)
++            Value = 1
++            value_two = 2
++            val
++            fu
++            ''')
++
++    def names(self, *extra):
++        found = self.json_of("complete", self.main, 8, 3, *extra)["completions"]
++        return [c["name"] for c in found]
++
++    def test_case_insensitive(self):
++        self.assertIn("Value", self.names())
++        self.assertEqual(self.names("--setting", "case_insensitive=false"), ["value_two"])
++        self.assertIn("Value", self.names("--setting", "case_insensitive=TRUE"))
++
++    def test_add_bracket(self):
++        found = self.json_of("complete", self.main, 9, 2, "--setting", "add_bracket=true")
++        func = [c for c in found["completions"] if c["name"] == "func"][0]
++        self.assertEqual(func["complete"], "nc(")
++
++    def test_dynamic_params(self):
++        self.assertEqual(len(self.json_of("infer", self.main, 2, 12)["definitions"]), 1)
++        found = self.json_of("infer", self.main, 2, 12, "--setting", "dynamic_params=false")
++        self.assertEqual(found["definitions"], [])
++
++    def test_invalid_settings_fail(self):
++        for setting in ("nonsense=true", "add_bracket=maybe", "add_bracket"):
++            completed = self.run_sith("complete", self.main, 8, 3, "--setting", setting)
++            self.assertEqual(completed.returncode, 1, setting)
++
++    def test_cli_overrides_project_config(self):
++        os.makedirs(os.path.join(self.root, ".sith"))
++        self.write(".sith/project.json", '{"case_insensitive": false}')
++        self.assertEqual(self.names(), ["value_two"])
++        self.assertIn("Value", self.names("--setting", "case_insensitive=true"))
++
++
++class ProjectTest(SithTestCase):
++    def setUp(self):
++        super().setUp()
++        self.write("src/mylib/__init__.py", "def libfunc():\n    pass\n")
++        self.write("extra/extramod.py", "EXTRA = 1\n")
++        self.write("app/sibling.py", "SIB = 1\n")
++        self.main = self.write("app/main.py", '''\
++            import mylib
++            import extramod
++            import sibling
++            mylib.libfunc
++            extramod.EXTRA
++            sibling.SIB
++            ''')
++
++    def config(self):
++        with open(os.path.join(self.root, ".sith", "project.json")) as handle:
++            return json.load(handle)
++
++    def resolves(self, line, col):
++        found = self.json_of("infer", self.main, line, col, "--project", self.root)
++        return bool(found["definitions"])
++
++    def test_init_defaults_and_merge(self):
++        self.json_of("project", "init")
++        self.assertEqual(self.config(), {"environment_path": "", "sys_path": [],
++                                         "added_sys_path": [], "smart_sys_path": True})
++        self.json_of("project", "init", self.root, "--environment", "/usr/bin/python3")
++        self.json_of("project", "init", self.root, "--added-sys-path", "a,b")
++        self.assertEqual(self.config(), {"environment_path": "/usr/bin/python3",
++                                         "sys_path": [], "added_sys_path": ["a", "b"],
++                                         "smart_sys_path": True})
++
++    def test_init_creates_directory(self):
++        target = os.path.join(self.root, "new")
++        self.json_of("project", "init", target, "--sys-path", "x")
++        self.assertTrue(os.path.isfile(os.path.join(target, ".sith", "project.json")))
++
++    def test_added_sys_path(self):
++        self.assertFalse(self.resolves(4, 7))
++        self.json_of("project", "init", "--added-sys-path", "src")
++        self.assertTrue(self.resolves(4, 7))
++        found = self.json_of("infer", self.main, 4, 7, "--project", self.root)
++        self.assertEqual(found["definitions"][0]["full_name"], "mylib.libfunc")
++
++    def test_sys_path_replaces_auto_detection(self):
++        self.assertTrue(self.resolves(6, 9))
++        self.json_of("project", "init", "--sys-path", "extra")
++        self.assertTrue(self.resolves(5, 10))
++        self.assertFalse(self.resolves(6, 9))
++
++    def test_smart_sys_path_false(self):
++        self.json_of("project", "init", "--added-sys-path", "src",
++                     "--setting", "smart_sys_path=false")
++        self.assertIs(self.config()["smart_sys_path"], False)
++        self.assertTrue(self.resolves(4, 7))
++        self.assertFalse(self.resolves(6, 9))
++        found = self.json_of("infer", self.main, 6, 9, "--project", self.root,
++                             "--setting", "smart_sys_path=true")
++        self.assertTrue(found["definitions"])
++
++
++class EnvTest(SithTestCase):
++    def test_list(self):
++        environments = self.json_of("env", "list")["environments"]
++        self.assertTrue(environments)
++        for environment in environments:
++            self.assertEqual(set(environment), {"executable", "version", "is_virtualenv"})
++            self.assertTrue(os.path.isabs(environment["executable"]))
++        resolved = [os.path.realpath(e["executable"]) for e in environments]
++        self.assertEqual(len(resolved), len(set(resolved)))
++        self.assertIn(os.path.realpath(sys.executable), resolved)
++        keys = [(tuple(-int(p) for p in e["version"].split(".")), e["executable"])
++                for e in environments]
++        self.assertEqual(keys, sorted(keys))
++
++    def test_find_virtualenvs(self):
++        venvs = os.path.join(self.root, "venvs")
++        subprocess.run([sys.executable, "-m", "venv", "--without-pip",
++                        os.path.join(venvs, "real")], check=True)
++        self.write("venvs/fake/pyvenv.cfg", "version = 3.9.1\n")
++        self.write("venvs/fake/bin/python", "")
++        self.write("venvs/plain/readme.txt", "")
++        env = dict(os.environ, HOME=self.root)
++        found = self.json_of("env", "find-virtualenvs", "--path", venvs, env=env)
++        found = found["environments"]
++        self.assertEqual([e["executable"] for e in found],
++                         [os.path.join(venvs, "real", "bin", "python"),
++                          os.path.join(venvs, "fake", "bin", "python")])
++        self.assertTrue(all(e["is_virtualenv"] for e in found))
++        self.assertEqual(found[1]["version"], "3.9.1")
++
++    def test_info(self):
++        info = self.json_of("env", "info", sys.executable)
++        self.assertEqual(info["version"], "%d.%d.%d" % sys.version_info[:3])
++        self.assertEqual(info["prefix"], sys.prefix)
++        self.assertEqual(info["is_virtualenv"], sys.prefix != sys.base_prefix)
++        self.assertIsInstance(info["sys_path"], list)
++        self.assertIn("prefix", self.json_of("env", "info"))
++
++    def test_info_rejects_non_python(self):
++        missing = self.run_sith("env", "info", os.path.join(self.root, "nope"))
++        self.assertEqual(missing.returncode, 1)
++        other = self.write("not_python", "")
++        self.assertEqual(self.run_sith("env", "info", other).returncode, 1)
++
++
++if __name__ == "__main__":
++    unittest.main()
+

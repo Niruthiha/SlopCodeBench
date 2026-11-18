@@ -1,0 +1,3693 @@
+### DESIGN.md (deleted)
+--- DESIGN.md
++++ DESIGN.md
+@@ -1,49 +0,0 @@
+-# sith — design
+-
+-`python sith.py complete <file> <line> <col> [--fuzzy]` prints completions as JSON.
+-Standard library only (`requirements.txt` lists no packages).
+-
+-## Decisions likely to change, and the module that hides each
+-
+-| Module | Secret (the decision it hides) |
+-|---|---|
+-| `sithlib/source.py` | How a file is read, decoded and split into lines, and how a (line, col) cursor is validated. |
+-| `sithlib/parsing.py` | The repair strategy that turns broken source into a syntax tree without shifting line numbers. |
+-| `sithlib/cursor.py` | How the text before the cursor is lexed into a context (name / attribute / none), the typed prefix, and the receiver expression. |
+-| `sithlib/scopes.py` | How bindings are found in the tree, which scope owns them, and the (indentation-aware) rules for the scope at a cursor and for visibility. |
+-| `sithlib/modules.py` | How an imported module is located: project source file/package first, otherwise a runtime import with side effects contained. |
+-| `sithlib/introspect.py` | How live Python objects are classified and their attributes enumerated and fetched safely. |
+-| `sithlib/vocabulary.py` | Where builtin names and keywords come from. |
+-| `sithlib/inference.py` | How bindings and expressions map to values (module/class/function/instance), name resolution through scopes, star imports and builtins, and member enumeration. |
+-| `sithlib/matching.py` | The prefix / fuzzy matching algorithm and the "text still to insert" rule. |
+-| `sithlib/ranking.py` | The ordering rules (public, private, dunder, keywords; case-insensitive). |
+-| `sithlib/presentation.py` | The wording of the `type` and `description` fields. |
+-| `sithlib/output.py` | The wire format (compact, newline-terminated JSON). |
+-| `sithlib/engine.py` | The completion policy: what each cursor context offers and how filtering, wording and ranking combine. |
+-| `sith.py` | Command-line parsing, exit codes and error reporting. |
+-
+-## Interfaces between modules
+-
+-Modules talk only through small interfaces, never through each other's internal
+-data structures:
+-
+-* `cursor.analyze(text_before) -> CursorContext(kind, prefix, receiver_text)`
+-* `inference.Project(path, text).location(line, col)` returns a `Location` with
+-  `visible_entities()` and `evaluate(expression_text)`.
+-* A `Value` exposes `kind`, `type_name` and `members()`; an `Entity` exposes `name`,
+-  `presentation() -> (kind, type_name)` and `value()`.
+-* `matching.matches(name, query, fuzzy)` and `matching.remaining_text(name, query)`.
+-* `ranking.rank(items, name_of, is_keyword)`.
+-* `presentation.describe(name, kind, type_name) -> (type, description)`.
+-* `output.write_completions([(name, complete, type, description), ...])`.
+-
+-## Behaviour choices where the specification is silent
+-
+-* Inside a comment or string literal, no completions are returned.
+-* `True`, `False` and `None` are offered only as keywords, not also as builtins.
+-* Class scopes are not visible from inside their methods, matching Python.
+-* Literal receivers list every attribute of their builtin type, dunders included.
+-  Module receivers list public names only.
+-* Star imports bring in every public name. `__all__` is not consulted.
+-* A trailing newline at the end of the file counts as an extra, empty last line, so
+-  the cursor can sit on it.
+
+### sith.py (modified)
+--- sith.py
++++ sith.py
+@@ -1,6 +1,8 @@
+-"""sith - static Python code completion.
++"""sith - static Python code completion and navigation.
+ 
+-Usage: python sith.py complete <file> <line> <col> [--fuzzy]
++Usage: python sith.py complete <file> <line> <col> [--fuzzy] [--project <dir>]
++       python sith.py infer <file> <line> <col> [--project <dir>]
++       python sith.py goto <file> <line> <col> [--project <dir>]
+ """
+ 
+ import os
+@@ -8,10 +10,12 @@
+ 
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ 
+-from sithlib import engine, output  # noqa: E402
++from sithlib import engine, navigation, output  # noqa: E402
+ from sithlib.source import SourceError  # noqa: E402
+ 
+-USAGE = "usage: sith.py complete <file> <line> <col> [--fuzzy]"
++USAGE = ("usage: sith.py (complete|infer|goto) <file> <line> <col> [--fuzzy] "
++         "[--project <dir>]")
++COMMANDS = ("complete", navigation.INFER, navigation.GOTO)
+ 
+ 
+ def _fail(message):
+@@ -19,23 +23,60 @@
+     return 1
+ 
+ 
++def _parse(argv):
++    """Return (positional args, fuzzy, project dir) or None if malformed."""
++    fuzzy = False
++    project = None
++    args = []
++    index = 0
++    while index < len(argv):
++        arg = argv[index]
++        if arg == "--fuzzy":
++            fuzzy = True
++        elif arg == "--project":
++            if index + 1 >= len(argv):
++                return None
++            index += 1
++            project = argv[index]
++        elif arg.startswith("--project="):
++            project = arg[len("--project="):]
++        else:
++            args.append(arg)
++        index += 1
++    return args, fuzzy, project
++
++
+ def main(argv):
+     sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))
+-    fuzzy = "--fuzzy" in argv
+-    args = [a for a in argv if a != "--fuzzy"]
+-    if len(args) != 4 or args[0] != "complete":
++    parsed = _parse(argv)
++    if parsed is None:
++        return _fail(USAGE)
++    args, fuzzy, project = parsed
++    if len(args) != 4 or args[0] not in COMMANDS:
+         return _fail(USAGE)
+     try:
+         line, col = int(args[2]), int(args[3])
+     except ValueError:
+         return _fail("line and column must be integers")
++    if project is not None and not os.path.isdir(project):
++        project = None
++    command, path = args[0], args[1]
++    if command == "complete":
++        try:
++            completions = engine.complete(path, line, col, fuzzy, project)
++        except SourceError as exc:
++            return _fail(str(exc))
++        except Exception:  # analysis must never crash on odd input; degrade to nothing
++            completions = []
++        output.write_completions(completions)
++        return 0
+     try:
+-        completions = engine.complete(args[1], line, col, fuzzy)
+-    except SourceError as exc:
++        definitions = navigation.run(command, path, line, col, project)
++    except (SourceError, navigation.NotOnName) as exc:
+         return _fail(str(exc))
+     except Exception:  # analysis must never crash on odd input; degrade to nothing
+-        completions = []
+-    output.write_completions(completions)
++        definitions = []
++    output.write_definitions(definitions)
+     return 0
+ 
+ 
+
+### sithlib/engine.py (modified)
+--- sithlib/engine.py
++++ sithlib/engine.py
+@@ -1,8 +1,8 @@
+ """Completion engine.
+ 
+ Secret: the completion policy — which candidates each cursor context offers
+-(visible names plus keywords, or public module members, or receiver
+-attributes) and how filtering, wording and ranking are combined.
++(visible names plus keywords, or public module members, or the attributes
++of every possible receiver value) and how filtering, wording and ranking are combined.
+ """
+ 
+ from . import cursor, matching, presentation, ranking, vocabulary
+@@ -10,7 +10,7 @@
+ from .source import SourceFile
+ 
+ 
+-def complete(path, line, col, fuzzy=False):
++def complete(path, line, col, fuzzy=False, root=None):
+     """Return completions as a list of (name, complete, type, description)."""
+     source = SourceFile(path)
+     source.check_position(line, col)
+@@ -18,16 +18,20 @@
+     if context.kind == cursor.NONE:
+         return []
+ 
+-    location = Project(source.path, source.text()).location(line, col)
++    text = source.lines()[line - 1]
++    indent = len(text) - len(text.lstrip()) if text[:col].strip() else col
++    location = Project(source.path, source.text(), root).location(line, col, indent)
+     keywords = []
+     if context.kind == cursor.NAME:
+         entities = location.visible_entities()
+         keywords = vocabulary.keywords()
+     else:
+-        receiver = location.evaluate(context.receiver)
+-        entities = receiver.members()
+-        if receiver.kind == MODULE:
+-            entities = {n: e for n, e in entities.items() if not n.startswith("_")}
++        entities = {}
++        for receiver in location.evaluate(context.receiver):
++            for name, entity in receiver.members().items():
++                if receiver.kind == MODULE and name.startswith("_"):
++                    continue
++                entities.setdefault(name, entity)
+ 
+     query = context.prefix
+     results = []
+
+### sithlib/flow.py (created)
+--- sithlib/flow.py
++++ sithlib/flow.py
+@@ -0,0 +1,337 @@
++"""Flow analysis.
++
++Secret: how control flow inside one scope is approximated — which bindings
++of a name can reach a statement (branches merge, ``return``/``raise``/
++``break``/``continue`` end a path, loops run zero or one time, handlers see
++any prefix of their ``try`` body) and which narrowing conditions
++(``isinstance`` checks, ``is None`` tests, asserts) hold there.
++
++A state maps a name to a set of facts ``(binding, constraints)``. The binding
++``OUTER`` stands for "whatever the enclosing scope provides"; it only appears
++when a name that is not bound locally gets narrowed.
++"""
++
++import ast
++
++from . import scopes
++
++OUTER = None
++
++
++class Constraint:
++    """A condition known to hold for a name: ``isinstance`` or ``is None``."""
++
++    ISINSTANCE, NONE = "isinstance", "none"
++
++    def __init__(self, kind, positive, expr=None):
++        self.kind = kind
++        self.positive = positive
++        self.expr = expr
++
++    def negated(self):
++        return Constraint(self.kind, not self.positive, self.expr)
++
++
++class State:
++    def __init__(self, names=None, dead=False):
++        self.names = names if names is not None else {}
++        self.dead = dead
++
++    def facts(self, name):
++        return self.names.get(name)
++
++    def bound(self, binding):
++        names = dict(self.names)
++        names[binding.name] = frozenset([(binding, ())])
++        return State(names, self.dead)
++
++    def narrowed(self, conditions):
++        if not conditions:
++            return self
++        names = dict(self.names)
++        for name, constraint in conditions:
++            facts = names.get(name) or frozenset([(OUTER, ())])
++            names[name] = frozenset((b, c + (constraint,)) for b, c in facts)
++        return State(names, self.dead)
++
++    def killed(self):
++        return State(self.names, True)
++
++
++def merge(states, keep_dead=False):
++    """Join the states of paths meeting at one point."""
++    states = [s for s in states if s is not None]
++    live = [s for s in states if not s.dead]
++    pool = states if keep_dead or not live else live
++    if not pool:
++        return State(dead=True)
++    if len(pool) == 1:
++        return State(pool[0].names, not live and not keep_dead)
++    names = {}
++    for state in pool:
++        for name in state.names:
++            names.setdefault(name, None)
++    for name in names:
++        facts = set()
++        missing = False
++        for state in pool:
++            found = state.names.get(name)
++            if found is None:
++                missing = True
++            else:
++                facts.update(found)
++        if missing and any(b is OUTER for b, _ in facts):
++            facts.add((OUTER, ()))
++        names[name] = frozenset(facts)
++    return State(names, not live and not keep_dead)
++
++
++class _Loop:
++    def __init__(self):
++        self.breaks = []
++        self.continues = []
++
++
++class Flow:
++    """Reaching bindings at every statement of one scope."""
++
++    def __init__(self, scope):
++        self.scope = scope
++        self.before = {}
++        self.after = {}
++        self._exits = []
++        self._by_stmt = {}
++        stray = []
++        start = State()
++        for event in scope.events:
++            if not event.name or event.form == scopes.STAR:
++                continue
++            if event.form == scopes.PARAM:
++                start = start.bound(event)
++            elif event.home is scope and event.stmt is not None:
++                self._by_stmt.setdefault(id(event.stmt), []).append(event)
++            else:
++                stray.append(event)
++        body = scope.node.body if scope.node is not None else []
++        last = self._block(body, start, None)
++        end = merge([last] + self._exits, keep_dead=True)
++        for event in stray:
++            facts = set(end.names.get(event.name, ()))
++            facts.add((event, ()))
++            end.names[event.name] = frozenset(facts)
++        self.end = end
++        self.body = body
++
++    # -- statements ------------------------------------------------------
++    def _apply(self, node, state):
++        for event in self._by_stmt.get(id(node), ()):
++            state = state.bound(event)
++        return state
++
++    def _block(self, statements, state, loop):
++        for statement in statements:
++            self.before[id(statement)] = state
++            state = self._statement(statement, state, loop)
++            self.after[id(statement)] = state
++        return state
++
++    def _statement(self, node, state, loop):
++        if isinstance(node, ast.If):
++            state = self._apply(node, state)
++            positive, negative = conditions(node.test)
++            body = self._block(node.body, state.narrowed(positive), loop)
++            other = self._block(node.orelse, state.narrowed(negative), loop)
++            merged = merge([body, other])
++            if not body.dead and not other.dead:
++                merged = _forget(merged, positive, negative)
++            return merged
++        if isinstance(node, ast.While):
++            state = self._apply(node, state)
++            positive, negative = conditions(node.test)
++            inner = _Loop()
++            body = self._block(node.body, state.narrowed(positive), inner)
++            if _always_true(node.test):
++                normal = State(state.names, True)
++            else:
++                normal = merge([state, body] + inner.continues).narrowed(negative)
++            other = self._block(node.orelse, normal, loop)
++            return merge([other] + inner.breaks)
++        if isinstance(node, (ast.For, ast.AsyncFor)):
++            inner = _Loop()
++            body = self._block(node.body, self._apply(node, state), inner)
++            normal = merge([state, body] + inner.continues)
++            other = self._block(node.orelse, normal, loop)
++            return merge([other] + inner.breaks)
++        if isinstance(node, (ast.With, ast.AsyncWith)):
++            return self._block(node.body, self._apply(node, state), loop)
++        if isinstance(node, (ast.Try, getattr(ast, "TryStar", ast.Try))):
++            return self._try(node, state, loop)
++        if isinstance(node, ast.Match):
++            state = self._apply(node, state)
++            ends = []
++            exhaustive = False
++            for case in node.cases:
++                start = self._apply(case, state)
++                self.before[id(case)] = start
++                ends.append(self._block(case.body, start, loop))
++                if case.guard is None and isinstance(case.pattern, ast.MatchAs) \
++                        and case.pattern.pattern is None:
++                    exhaustive = True
++            if not exhaustive:
++                ends.append(state)
++            return merge(ends)
++        if isinstance(node, (ast.Return, ast.Raise)):
++            state = self._apply(node, state)
++            self._exits.append(state)
++            return state.killed()
++        if isinstance(node, ast.Break):
++            if loop is not None:
++                loop.breaks.append(state)
++            return state.killed()
++        if isinstance(node, ast.Continue):
++            if loop is not None:
++                loop.continues.append(state)
++            return state.killed()
++        if isinstance(node, ast.Assert):
++            state = self._apply(node, state)
++            return state.narrowed(conditions(node.test)[0])
++        return self._apply(node, state)
++
++    def _try(self, node, state, loop):
++        body = self._block(node.body, state, loop)
++        partial = [state] + [self.after[id(s)] for s in node.body if id(s) in self.after]
++        handler_start = merge(partial, keep_dead=True)
++        ends = []
++        for handler in node.handlers:
++            start = self._apply(handler, handler_start)
++            self.before[id(handler)] = start
++            ends.append(self._block(handler.body, start, loop))
++        ends.insert(0, self._block(node.orelse, body, loop))
++        joined = merge(ends)
++        if node.finalbody:
++            start = merge(ends + [handler_start], keep_dead=True) if joined.dead else joined
++            final = self._block(node.finalbody, start, loop)
++            return State(final.names, joined.dead or final.dead)
++        return joined
++
++    # -- queries ---------------------------------------------------------
++    def state_before(self, node):
++        """State just before ``node`` (a statement, handler or case) runs."""
++        return self.before.get(id(node))
++
++    def state_at(self, line, col, indent):
++        """State at a cursor that may sit between or after statements.
++
++        ``indent`` is the indentation of the cursor's line (used to decide
++        which block an empty or broken line belongs to).
++        """
++        return self._find(self.body, line, col, indent, self.end)
++
++    def _find(self, statements, line, col, indent, fallback):
++        previous = None
++        for statement in statements:
++            if (statement.lineno, statement.col_offset) > (line, col):
++                break
++            previous = statement
++        if previous is None:
++            return self.before.get(id(statements[0]), fallback) if statements else fallback
++        blocks = _blocks(previous)
++        if line <= (previous.end_lineno or previous.lineno):
++            inner = [block for block in blocks
++                     if (block[0].lineno, block[0].col_offset) <= (line, col)
++                     or block[0].lineno < line]
++            if inner:
++                block = inner[-1]
++                return self._find(block, line, col, indent,
++                                  self.after.get(id(block[-1]), fallback))
++            return self.before.get(id(previous), fallback)
++        if blocks and indent > previous.col_offset:
++            block = blocks[-1]
++            return self._find(block, line, col, indent, self.after.get(id(block[-1]), fallback))
++        return self.after.get(id(previous), fallback)
++
++
++def _forget(state, positive, negative):
++    """Drop narrowing by one test where both of its outcomes rejoin.
++
++    A binding narrowed one way on the true path and the other way on the
++    false path is, after the paths meet, just the binding again. (When one
++    path rebinds the name, the other path's narrowing is kept.)
++    """
++    own = {id(c) for _, c in positive + negative}
++    if not own:
++        return state
++    names = dict(state.names)
++    for name, facts in state.names.items():
++        groups = {}
++        for binding, constraints in facts:
++            base = tuple(c for c in constraints if id(c) not in own)
++            groups.setdefault((binding, base), []).append(constraints)
++        if all(len(variants) == 1 for variants in groups.values()):
++            continue
++        result = set()
++        for (binding, base), variants in groups.items():
++            if len(variants) > 1:
++                result.add((binding, base))
++            else:
++                result.add((binding, variants[0]))
++        names[name] = frozenset(result)
++    return State(names, state.dead)
++
++
++def _blocks(node):
++    """Nested non-empty statement lists of a compound statement, in source order."""
++    found = []
++    for field in ("body", "handlers", "orelse", "finalbody", "cases"):
++        value = getattr(node, field, None)
++        if not value or not isinstance(value, list):
++            continue
++        if field in ("handlers", "cases"):
++            found.extend(item.body for item in value if item.body)
++        else:
++            found.append(value)
++    found.sort(key=lambda block: (block[0].lineno, block[0].col_offset))
++    return found
++
++
++def _always_true(test):
++    return isinstance(test, ast.Constant) and bool(test.value)
++
++
++def conditions(test):
++    """``(holds_if_true, holds_if_false)``: lists of (name, Constraint)."""
++    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
++        positive, negative = conditions(test.operand)
++        return negative, positive
++    if isinstance(test, ast.BoolOp):
++        parts = [conditions(value) for value in test.values]
++        if isinstance(test.op, ast.And):
++            return [c for p, _ in parts for c in p], []
++        return [], [c for _, n in parts for c in n]
++    if isinstance(test, ast.NamedExpr):
++        return conditions(test.value)
++    if isinstance(test, ast.Call) and isinstance(test.func, ast.Name) \
++            and test.func.id == "isinstance" and len(test.args) == 2 \
++            and isinstance(test.args[0], ast.Name):
++        constraint = Constraint(Constraint.ISINSTANCE, True, test.args[1])
++        name = test.args[0].id
++        return [(name, constraint)], [(name, constraint.negated())]
++    if isinstance(test, ast.Compare) and len(test.ops) == 1:
++        left, right = test.left, test.comparators[0]
++        if _is_none(left):
++            left, right = right, left
++        if isinstance(left, ast.Name) and _is_none(right):
++            op = test.ops[0]
++            if isinstance(op, (ast.Is, ast.Eq)):
++                positive = True
++            elif isinstance(op, (ast.IsNot, ast.NotEq)):
++                positive = False
++            else:
++                return [], []
++            constraint = Constraint(Constraint.NONE, positive)
++            return [(left.id, constraint)], [(left.id, constraint.negated())]
++    return [], []
++
++
++def _is_none(node):
++    return isinstance(node, ast.Constant) and node.value is None
+
+### sithlib/inference.py (modified)
+--- sithlib/inference.py
++++ sithlib/inference.py
+@@ -1,21 +1,28 @@
+ """Static inference.
+ 
+ Secret: how bindings and expressions are mapped to values (modules, classes,
+-functions, instances), how names are resolved through scopes, star imports
+-and builtins, and how the members of a value are enumerated.
+-
+-Clients see three abstractions:
++functions, instances), how names are resolved through scopes, flow states,
++star imports and builtins, how narrowing conditions restrict values, and how
++the members of a value are enumerated.
++
++Clients see these abstractions:
+   * ``Project``  - opens the main file and returns a ``Location`` for a cursor.
+-  * ``Value``    - has ``kind``, ``type_name`` and ``members()``.
++  * ``Where``    - an evaluation point: a scope plus the flow state there.
++  * ``Value``    - has ``kind``, ``type_name`` and ``members()``; evaluation
++                   always yields a list of possible values (a union).
+   * ``Entity``   - a named member/visible name with ``presentation()`` giving
+-                   ``(kind, type_name)`` and ``value()`` giving a ``Value``.
++                   ``(kind, type_name)`` and ``values()`` giving its values.
++Name resolution yields *targets*: ``scopes.Binding`` objects for names bound
++in source, or ``Entity`` objects for names provided at runtime.
+ """
+ 
+ import ast
++import builtins
++import io
+ import os
+ import types
+ 
+-from . import introspect, scopes, vocabulary
++from . import flow, introspect, scopes, vocabulary
+ from .modules import DIRECTORY, RUNTIME, SOURCE, ModuleLocator
+ 
+ MODULE = "module"
+@@ -28,14 +35,147 @@
+ 
+ _LITERAL_TYPES = {
+     ast.JoinedStr: str,
+-    ast.List: list, ast.ListComp: list,
+-    ast.Tuple: tuple,
+-    ast.Dict: dict, ast.DictComp: dict,
+-    ast.Set: set, ast.SetComp: set,
++    ast.ListComp: list,
++    ast.DictComp: dict,
++    ast.SetComp: set,
+     ast.GeneratorExp: types.GeneratorType,
+     ast.Compare: bool,
+ }
++_SEQUENCE_TYPES = {ast.List: list, ast.Tuple: tuple, ast.Set: set}
+ _ARITHMETIC_TYPES = (int, float, complex, str, bytes, list, tuple)
++_PROPERTY_DECORATORS = ("property", "cached_property")
++_SPECIAL_BUILTINS = ("type", "getattr", "enumerate", "zip", "sorted", "list", "reversed",
++                     "iter", "set", "frozenset", "tuple", "next")
++
++_FUNCTION_RETURNS = {
++    "len": int, "repr": str, "ascii": str, "chr": str, "ord": int, "hash": int, "id": int,
++    "input": str, "format": str, "bin": str, "oct": str, "hex": str, "isinstance": bool,
++    "issubclass": bool, "callable": bool, "hasattr": bool, "all": bool, "any": bool,
++    "sorted": list, "dir": list, "vars": dict, "globals": dict, "locals": dict,
++    "round": int, "divmod": tuple, "open": io.TextIOWrapper,
++}
++_FUNCTION_RETURNS = {getattr(builtins, name): result
++                     for name, result in _FUNCTION_RETURNS.items() if hasattr(builtins, name)}
++
++
++def _method_table():
++    table = {}
++
++    def add(owner, result, names):
++        for name in names.split():
++            table[(owner, name)] = result
++
++    add(str, str, "upper lower strip lstrip rstrip replace format join title capitalize "
++                  "casefold center ljust rjust zfill swapcase expandtabs removeprefix "
++                  "removesuffix translate format_map")
++    add(str, list, "split rsplit splitlines")
++    add(str, bool, "startswith endswith isalpha isdigit isalnum isspace islower isupper "
++                   "istitle isdecimal isnumeric isidentifier isprintable isascii")
++    add(str, int, "find rfind index rindex count")
++    add(str, bytes, "encode")
++    add(str, tuple, "partition rpartition")
++    add(bytes, str, "decode hex")
++    add(bytes, bytes, "upper lower strip lstrip rstrip replace join")
++    add(bytes, list, "split rsplit splitlines")
++    add(list, list, "copy")
++    add(list, int, "index count")
++    add(tuple, int, "index count")
++    add(dict, dict, "copy")
++    add(dict, type({}.keys()), "keys")
++    add(dict, type({}.values()), "values")
++    add(dict, type({}.items()), "items")
++    add(set, set, "copy union intersection difference symmetric_difference")
++    add(set, bool, "issubset issuperset isdisjoint")
++    add(frozenset, frozenset, "copy union intersection difference symmetric_difference")
++    add(int, int, "bit_length bit_count conjugate")
++    add(int, bytes, "to_bytes")
++    add(float, bool, "is_integer")
++    add(float, str, "hex")
++    return table
++
++
++_METHOD_RETURNS = _method_table()
++
++
++class _Slice:
++    """Marker for a slice subscript."""
++
++
++SLICE = _Slice()
++UNKNOWN_INDEX = _Slice()
++
++
++# ---------------------------------------------------------------------------
++# Evaluation points
++
++class Where:
++    """A scope plus the flow state (None: the state at the end of the scope).
++
++    ``frame`` optionally supplies argument values for the parameters of a
++    function scope being called; ``local_values`` maps names bound inside an
++    expression (comprehension variables) to their values.
++    """
++
++    def __init__(self, scope, state=None, frame=None, local_values=None):
++        self.scope = scope
++        self.state = state
++        self.frame = frame
++        self.local_values = local_values
++
++
++class Arguments:
++    """The argument expressions of one call, with where they are evaluated."""
++
++    def __init__(self, node, where):
++        self.positional = node.args
++        self.keywords = node.keywords
++        self.where = where
++
++
++class Frame:
++    """Parameter values for one call of a function scope."""
++
++    def __init__(self, scope, bound=None, arguments=None):
++        self.scope = scope
++        self._mapping = {}
++        params = sorted((e for e in scope.events if e.form == scopes.PARAM),
++                        key=lambda e: e.details["index"])
++        positional = [p for p in params
++                      if not p.details["star"] and not p.details.get("keyword_only")]
++        if bound is not None and positional:
++            self._mapping[id(positional[0])] = list(bound)
++            positional = positional[1:]
++        if arguments is None:
++            return
++        for index, node in enumerate(arguments.positional):
++            if isinstance(node, ast.Starred) or index >= len(positional):
++                break
++            self._mapping[id(positional[index])] = (node, arguments.where)
++        for keyword in arguments.keywords:
++            for param in params:
++                if keyword.arg is not None and param.name == keyword.arg \
++                        and not param.details["star"]:
++                    self._mapping[id(param)] = (keyword.value, arguments.where)
++
++    def param_values(self, binding):
++        entry = self._mapping.get(id(binding))
++        if entry is None:
++            return None
++        if isinstance(entry, list):
++            return entry
++        node, where = entry
++        return where.scope.tree.analysis.evaluate(node, where)
++
++
++def _unique(values):
++    seen = set()
++    result = []
++    for value in values:
++        key = value.key()
++        if key not in seen:
++            seen.add(key)
++            result.append(value)
++    return result
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -45,63 +185,118 @@
+     kind = UNKNOWN
+     type_name = None
+ 
++    def key(self):
++        return ("value", id(self))
++
+     def members(self):
+         return {}
+ 
+     def attribute(self, name):
+         entity = self.members().get(name)
+-        return entity.value() if entity is not None else UNKNOWN_VALUE
+-
+-    def call(self):
+-        return UNKNOWN_VALUE
++        return entity.values() if entity is not None else []
++
++    def attribute_targets(self, name):
++        """Where attribute ``name`` is bound (Bindings or Entities)."""
++        entity = self.members().get(name)
++        return [entity] if entity is not None else []
++
++    def call(self, arguments=None):
++        return []
+ 
+     def instantiate(self):
+-        return UNKNOWN_VALUE
++        return []
++
++    def iterate(self):
++        return []
++
++    def subscript(self, index):
++        return []
+ 
+     def builtin_type(self):
+         """For instances of builtin types, the type object; else None."""
+         return None
+ 
+ 
+-UNKNOWN_VALUE = Value()
+-
+-
+ class RuntimeValue(Value):
+     """A live object obtained by importing a module."""
+ 
+-    def __init__(self, project, obj):
+-        self._project = project
+-        self._obj = obj
++    def __init__(self, project, obj, owner=None):
++        self.project = project
++        self.obj = obj
++        self._owner = owner
+         self.kind = introspect.kind_of(obj)
+         if self.kind == INSTANCE:
+             self.type_name = introspect.type_name(obj)
+ 
++    def key(self):
++        return ("runtime", id(self.obj))
++
+     def members(self):
+-        return {name: RuntimeEntity(self._project, name, self._obj)
+-                for name in introspect.attribute_names(self._obj)}
++        return {name: RuntimeEntity(self.project, name, self.obj)
++                for name in introspect.attribute_names(self.obj)}
+ 
+     def attribute(self, name):
+-        ok, value = introspect.get_attribute(self._obj, name)
++        ok, value = introspect.get_attribute(self.obj, name)
+         if ok:
+-            return RuntimeValue(self._project, value)
++            owner = self.obj if self.kind == CLASS else type(self.obj)
++            return [RuntimeValue(self.project, value, owner)]
+         if self.kind == MODULE:
+-            module_name = getattr(self._obj, "__name__", None)
++            module_name = getattr(self.obj, "__name__", None)
+             if module_name:
+-                found = self._project.module_value(module_name + "." + name)
++                found = self.project.module_value(module_name + "." + name)
+                 if found is not None:
+-                    return found
+-        return UNKNOWN_VALUE
+-
+-    def call(self):
+-        return self.instantiate()
++                    return [found]
++        return []
++
++    def attribute_targets(self, name):
++        ok, _ = introspect.get_attribute(self.obj, name)
++        if ok:
++            return [RuntimeEntity(self.project, name, self.obj)]
++        return [ValueTarget(v) for v in self.attribute(name)]
++
++    def call(self, arguments=None):
++        if self.kind == CLASS:
++            return self.instantiate()
++        if self.kind == FUNCTION:
++            try:
++                result = _FUNCTION_RETURNS.get(self.obj)
++            except TypeError:
++                result = None
++            if result is None and self._owner is not None:
++                result = _method_return(self._owner, getattr(self.obj, "__name__", None))
++            if result is not None:
++                return [RuntimeInstance(self.project, result)]
++        return []
+ 
+     def instantiate(self):
+         if self.kind == CLASS:
+-            return RuntimeInstance(self._project, self._obj)
+-        return UNKNOWN_VALUE
++            return [RuntimeInstance(self.project, self.obj)]
++        return []
++
++    def iterate(self):
++        if self.kind == INSTANCE:
++            return RuntimeInstance(self.project, type(self.obj)).iterate()
++        return []
++
++    def subscript(self, index):
++        if self.kind == CLASS:
++            return [self]
++        if self.kind == INSTANCE:
++            return RuntimeInstance(self.project, type(self.obj)).subscript(index)
++        return []
+ 
+     def builtin_type(self):
+-        return type(self._obj) if self.kind == INSTANCE else None
++        return type(self.obj) if self.kind == INSTANCE else None
++
++
++def _method_return(owner, name):
++    if not name or not isinstance(owner, type):
++        return None
++    for base in getattr(owner, "__mro__", (owner,)):
++        result = _METHOD_RETURNS.get((base, name))
++        if result is not None:
++            return result
++    return None
+ 
+ 
+ class RuntimeInstance(Value):
+@@ -110,20 +305,170 @@
+     kind = INSTANCE
+ 
+     def __init__(self, project, cls):
+-        self._project = project
+-        self._cls = cls
++        self.project = project
++        self.cls = cls
+         self._sample = introspect.sample_instance(cls)
+         self.type_name = introspect.class_name(cls)
+ 
++    def key(self):
++        return ("instance", id(self.cls))
++
+     def members(self):
+-        return {name: RuntimeEntity(self._project, name, self._sample, from_class=self._cls)
+-                for name in introspect.attribute_names(self._cls)}
++        return {name: RuntimeEntity(self.project, name, self._sample, from_class=self.cls)
++                for name in introspect.attribute_names(self.cls)}
+ 
+     def attribute(self, name):
+-        return RuntimeEntity(self._project, name, self._sample, from_class=self._cls).value()
++        return RuntimeEntity(self.project, name, self._sample, from_class=self.cls).values()
++
++    def attribute_targets(self, name):
++        if name in introspect.attribute_names(self.cls):
++            return [RuntimeEntity(self.project, name, self._sample, from_class=self.cls)]
++        return []
++
++    def iterate(self):
++        if issubclass(self.cls, str):
++            return [RuntimeInstance(self.project, str)]
++        if issubclass(self.cls, (bytes, bytearray, range)):
++            return [RuntimeInstance(self.project, int)]
++        return []
++
++    def subscript(self, index):
++        if index is SLICE and issubclass(self.cls, (str, bytes, list, tuple)):
++            return [self]
++        if issubclass(self.cls, str):
++            return [RuntimeInstance(self.project, str)]
++        if issubclass(self.cls, (bytes, bytearray)):
++            return [RuntimeInstance(self.project, int)]
++        return []
+ 
+     def builtin_type(self):
+-        return self._cls
++        return self.cls
++
++
++class SequenceInstance(RuntimeInstance):
++    """A list/tuple/set display whose elements are known expressions."""
++
++    def __init__(self, project, cls, node, where):
++        RuntimeInstance.__init__(self, project, cls)
++        self._node = node
++        self._where = where
++
++    def key(self):
++        return ("display", id(self._node))
++
++    def _analysis(self):
++        return self._where.scope.tree.analysis
++
++    def iterate(self):
++        result = []
++        for element in self._node.elts:
++            if not isinstance(element, ast.Starred):
++                result.extend(self._analysis().evaluate(element, self._where))
++        return _unique(result)
++
++    def subscript(self, index):
++        if index is SLICE:
++            return [self]
++        elements = self._node.elts
++        if isinstance(index, int) and not isinstance(index, bool) \
++                and not any(isinstance(e, ast.Starred) for e in elements) \
++                and -len(elements) <= index < len(elements) and self.cls is not set:
++            return self._analysis().evaluate(elements[index], self._where)
++        if self.cls is set:
++            return []
++        return self.iterate()
++
++
++class ValueSequence(RuntimeInstance):
++    """A container whose element values are known (one list per position).
++
++    With ``positional`` the positions are fixed (a tuple); otherwise every
++    element may be any of the listed values.
++    """
++
++    def __init__(self, project, cls, elements, positional=False):
++        RuntimeInstance.__init__(self, project, cls)
++        self._elements = elements
++        self._positional = positional
++
++    def key(self):
++        return ("sequence", id(self))
++
++    def iterate(self):
++        return _unique([v for values in self._elements for v in values])
++
++    def subscript(self, index):
++        if index is SLICE:
++            return [self]
++        if self._positional and isinstance(index, int) and not isinstance(index, bool) \
++                and -len(self._elements) <= index < len(self._elements):
++            return self._elements[index]
++        return self.iterate()
++
++
++class DictInstance(RuntimeInstance):
++    """A dict display whose keys and values are known expressions."""
++
++    def __init__(self, project, node, where):
++        RuntimeInstance.__init__(self, project, dict)
++        self._node = node
++        self._where = where
++
++    def key(self):
++        return ("display", id(self._node))
++
++    def iterate(self):
++        analysis = self._where.scope.tree.analysis
++        result = []
++        for key in self._node.keys:
++            if key is not None:
++                result.extend(analysis.evaluate(key, self._where))
++        return _unique(result)
++
++    def _values(self):
++        analysis = self._where.scope.tree.analysis
++        return _unique([v for k, value in zip(self._node.keys, self._node.values)
++                        if k is not None for v in analysis.evaluate(value, self._where)])
++
++    def attribute(self, name):
++        if name in ("keys", "values", "items"):
++            return [_DictView(self, name)]
++        return RuntimeInstance.attribute(self, name)
++
++    def subscript(self, index):
++        analysis = self._where.scope.tree.analysis
++        pairs = [(k, v) for k, v in zip(self._node.keys, self._node.values) if k is not None]
++        if index is not UNKNOWN_INDEX and index is not SLICE:
++            for key, value in pairs:
++                if isinstance(key, ast.Constant) and type(key.value) is type(index) \
++                        and key.value == index:
++                    return analysis.evaluate(value, self._where)
++        return _unique([v for _, value in pairs for v in analysis.evaluate(value, self._where)])
++
++
++class _DictView(Value):
++    """``keys``/``values``/``items`` of a dict display (a bound method)."""
++
++    kind = FUNCTION
++
++    def __init__(self, owner, which):
++        self._owner = owner
++        self.which = which
++
++    def key(self):
++        return ("dict-view", id(self._owner), self.which)
++
++    def call(self, arguments=None):
++        owner = self._owner
++        project = owner.project
++        keys, values = owner.iterate(), owner._values()
++        if self.which == "keys":
++            elements = [keys]
++        elif self.which == "values":
++            elements = [values]
++        else:
++            elements = [[ValueSequence(project, tuple, [keys, values], positional=True)]]
++        return [ValueSequence(project, list, elements)]
+ 
+ 
+ class UnresolvedModule(Value):
+@@ -136,85 +481,139 @@
+     kind = MODULE
+ 
+     def __init__(self, project, directory):
+-        self._project = project
+-        self._directory = directory
++        self.project = project
++        self.directory = directory
++
++    def key(self):
++        return ("directory", self.directory)
+ 
+     def attribute(self, name):
+-        found = self._project.submodule_value(self._directory, name)
+-        return found if found is not None else UNKNOWN_VALUE
++        found = self.project.submodule_value(self.directory, name)
++        return [found] if found is not None else []
++
++    def attribute_targets(self, name):
++        return [ValueTarget(v) for v in self.attribute(name)]
+ 
+ 
+ class StaticModule(Value):
+     kind = MODULE
+ 
+     def __init__(self, analysis):
+-        self._analysis = analysis
++        self.analysis = analysis
++
++    def key(self):
++        return ("module", self.analysis.path)
+ 
+     def members(self):
+-        return self._analysis.module_members()
++        return self.analysis.module_members()
++
++    def attribute_targets(self, name):
++        analysis = self.analysis
++        targets = [t for t, _ in analysis.resolve_local(name, Where(analysis.tree.module))]
++        if targets:
++            return targets
++        package_dir = analysis.package_dir()
++        if package_dir:
++            found = analysis.project.submodule_value(package_dir, name)
++            if found is not None:
++                return [ValueTarget(found)]
++        return []
+ 
+     def attribute(self, name):
+-        entity = self.members().get(name)
+-        if entity is not None:
+-            return entity.value()
+-        package_dir = self._analysis.package_dir()
+-        if package_dir:
+-            found = self._analysis.project.submodule_value(package_dir, name)
+-            if found is not None:
+-                return found
+-        return UNKNOWN_VALUE
++        result = []
++        for target in self.attribute_targets(name):
++            result.extend(self.analysis.target_values(target))
++        return _unique(result)
+ 
+ 
+ class StaticFunction(Value):
+     kind = FUNCTION
+ 
+-    def __init__(self, analysis, scope):
+-        self._analysis = analysis
+-        self._scope = scope
+-
+-    def call(self):
+-        if self._scope.is_async():
+-            return UNKNOWN_VALUE
+-        project = self._analysis.project
+-        key = ("call", id(self._scope))
+-        if not project.enter(key):
+-            return UNKNOWN_VALUE
+-        try:
+-            view = _View(scope=self._scope, order=float("inf"))
+-            for expr in self._scope.returned_expressions():
+-                value = self._analysis.evaluate(expr, self._scope, view)
+-                if value.kind != UNKNOWN:
+-                    return value
+-            return UNKNOWN_VALUE
+-        finally:
+-            project.leave(key)
+-
+-
+-class StaticClass(Value):
+-    kind = CLASS
+-
+-    def __init__(self, analysis, scope):
+-        self._analysis = analysis
+-        self._scope = scope
+-        self.name = scope.name
+-
+-    def identity(self):
+-        return id(self._scope)
+-
+-    def bases(self):
+-        project = self._analysis.project
+-        key = ("bases", id(self._scope))
++    def __init__(self, analysis, scope, bound=None):
++        self.analysis = analysis
++        self.scope = scope
++        self.bound = bound  # values of the receiver for a bound method
++
++    def key(self):
++        return ("function", id(self.scope))
++
++    def is_property(self):
++        return any(name in _PROPERTY_DECORATORS for name in self.scope.decorator_names())
++
++    def bind(self, receiver):
++        """This function as a method looked up on ``receiver``."""
++        decorators = self.scope.decorator_names()
++        if "staticmethod" in decorators:
++            return self
++        if "classmethod" in decorators:
++            if isinstance(receiver, StaticInstance):
++                receiver = receiver.cls
++            return StaticFunction(self.analysis, self.scope, [receiver])
++        if receiver.kind == CLASS:
++            return self
++        return StaticFunction(self.analysis, self.scope, [receiver])
++
++    def call(self, arguments=None):
++        if self.scope.is_async():
++            return []
++        project = self.analysis.project
++        key = ("call", id(self.scope))
+         if not project.enter(key):
+             return []
+         try:
+-            parent = self._scope.parent
+-            view = _View()
++            frame = None
++            if self.bound is not None or arguments is not None:
++                frame = Frame(self.scope, self.bound, arguments)
++            return self._returns(frame)
++        finally:
++            project.leave(key)
++
++    def _returns(self, frame):
++        analysis = self.analysis
++        statements = self.scope.return_statements()
++        if statements is None:
++            return [RuntimeInstance(analysis.project, types.GeneratorType)]
++        result = []
++        for statement in statements:
++            if statement.value is None:
++                result.append(analysis.none_value())
++            else:
++                where = analysis.where_before(self.scope, statement)
++                where.frame = frame
++                result.extend(analysis.evaluate(statement.value, where))
++        if not statements:
++            result.append(analysis.none_value())
++        result = _unique(result)
++        if not result and self.scope.node.returns is not None:
++            where = analysis.where_before(self.scope.parent, self.scope.node)
++            result = analysis.annotation_values(self.scope.node.returns, where)
++        return result
++
++
++class StaticClass(Value):
++    kind = CLASS
++
++    def __init__(self, analysis, scope):
++        self.analysis = analysis
++        self.scope = scope
++        self.name = scope.name
++
++    def key(self):
++        return ("class", id(self.scope))
++
++    def bases(self):
++        project = self.analysis.project
++        key = ("bases", id(self.scope))
++        if not project.enter(key):
++            return []
++        try:
++            where = self.analysis.where_before(self.scope.parent, self.scope.node)
+             result = []
+-            for expr in self._scope.base_expressions():
+-                value = self._analysis.evaluate(expr, parent, view)
+-                if isinstance(value, StaticClass) and value.identity() != self.identity():
+-                    result.append(value)
+-            return result
++            for expr in self.scope.base_expressions():
++                for value in self.analysis.evaluate(expr, where):
++                    if isinstance(value, StaticClass) and value.key() != self.key():
++                        result.append(value)
++            return _unique(result)
+         finally:
+             project.leave(key)
+ 
+@@ -224,41 +623,138 @@
+     def members(self):
+         result = {}
+         for cls in reversed(self.mro()):
+-            for event in cls._scope.all_events():
++            for event in cls.scope.all_events():
+                 if event.name and event.form != scopes.STAR:
+-                    result[event.name] = BindingEntity(cls._analysis, event)
++                    result[event.name] = BindingEntity(cls.analysis, event)
+         return result
+ 
+     def instance_members(self):
+         result = self.members()
++        grouped = {}
+         for cls in reversed(self.mro()):
+-            for event in cls._scope.instance_attribute_events():
+-                result[event.name] = BindingEntity(cls._analysis, event)
++            for event in cls.scope.instance_attribute_events():
++                grouped.setdefault(event.name, []).append(event)
++        for name, events in grouped.items():
++            result[name] = AttributeEntity(self.analysis, events)
+         return result
+ 
+-    def call(self):
+-        return self.instantiate()
++    def class_targets(self, name):
++        for cls in self.mro():
++            targets = [t for t, _ in cls.analysis.resolve_local(name, Where(cls.scope))]
++            if targets:
++                return targets
++        return []
++
++    def instance_targets(self, name):
++        targets = []
++        for cls in self.mro():
++            targets.extend(e for e in cls.scope.instance_attribute_events() if e.name == name)
++        return targets
++
++    def attribute_targets(self, name):
++        return self.class_targets(name)
++
++    def attribute(self, name):
++        result = []
++        for target in self.class_targets(name):
++            for value in self.analysis.target_values(target):
++                result.append(value.bind(self) if isinstance(value, StaticFunction) else value)
++        return _unique(result)
++
++    def call(self, arguments=None):
++        return [StaticInstance(self, arguments)]
+ 
+     def instantiate(self):
+-        return StaticInstance(self)
++        return [StaticInstance(self)]
++
++    def subscript(self, index):
++        return [self]
++
++    def is_subclass_of(self, other):
++        return any(cls.key() == other.key() for cls in self.mro())
+ 
+ 
+ class StaticInstance(Value):
+     kind = INSTANCE
+ 
+-    def __init__(self, cls):
+-        self._cls = cls
++    def __init__(self, cls, arguments=None):
++        self.cls = cls
+         self.type_name = cls.name
++        self.arguments = arguments  # constructor arguments, when known
++
++    def key(self):
++        return ("static-instance", self.cls.key())
+ 
+     def members(self):
+-        return self._cls.instance_members()
++        return self.cls.instance_members()
++
++    def attribute_targets(self, name):
++        return self.cls.instance_targets(name) or self.cls.class_targets(name)
++
++    def attribute(self, name):
++        analysis = self.cls.analysis
++        project = analysis.project
++        key = ("attribute", self.cls.key(), name)
++        if not project.enter(key):
++            return []
++        try:
++            result = []
++            for target in self.cls.instance_targets(name):
++                method = target.home
++                arguments = self.arguments if method.name == "__init__" else None
++                frame = Frame(method, [self], arguments)
++                result.extend(target.home.tree.analysis.binding_values(target, frame))
++            if result or self.cls.instance_targets(name):
++                return _unique(result)
++            for target in self.cls.class_targets(name):
++                for value in analysis.target_values(target):
++                    if isinstance(value, StaticFunction):
++                        value = value.bind(self)
++                        if value.is_property():
++                            result.extend(value.call())
++                            continue
++                    result.append(value)
++            return _unique(result)
++        finally:
++            project.leave(key)
++
++    def _dunder_call(self, name):
++        result = []
++        for value in self.attribute(name):
++            result.extend(value.call())
++        return _unique(result)
++
++    def call(self, arguments=None):
++        result = []
++        for value in self.attribute("__call__"):
++            result.extend(value.call(arguments))
++        return _unique(result)
++
++    def iterate(self):
++        result = []
++        for iterator in self._dunder_call("__iter__"):
++            if isinstance(iterator, StaticInstance):
++                result.extend(iterator._dunder_call("__next__"))
++            else:
++                result.extend(iterator.iterate())
++        return _unique(result)
++
++    def subscript(self, index):
++        return self._dunder_call("__getitem__")
++
++
++class ValueTarget:
++    """A resolution target that is directly a value (e.g. a submodule)."""
++
++    def __init__(self, value):
++        self.value = value
+ 
+ 
+ def _linearize(cls, seen):
+     """C3 linearization of statically known classes (DFS on conflict)."""
+-    if cls.identity() in seen:
++    if cls.key() in seen:
+         return [cls]
+-    seen = seen | {cls.identity()}
++    seen = seen | {cls.key()}
+     bases = cls.bases()
+     sequences = [_linearize(base, seen) for base in bases] + [list(bases)]
+     result = [cls]
+@@ -266,16 +762,16 @@
+     while sequences:
+         for sequence in sequences:
+             head = sequence[0]
+-            if not any(head.identity() in [c.identity() for c in s[1:]] for s in sequences):
++            if not any(head.key() in [c.key() for c in s[1:]] for s in sequences):
+                 break
+         else:
+             for sequence in sequences:
+                 for item in sequence:
+-                    if item.identity() not in [c.identity() for c in result]:
++                    if item.key() not in [c.key() for c in result]:
+                         result.append(item)
+             return result
+         result.append(head)
+-        sequences = [[c for c in s if c.identity() != head.identity()] for s in sequences]
++        sequences = [[c for c in s if c.key() != head.key()] for s in sequences]
+         sequences = [s for s in sequences if s]
+     return result
+ 
+@@ -289,20 +785,20 @@
+     def presentation(self):
+         return (STATEMENT, None)
+ 
+-    def value(self):
+-        return UNKNOWN_VALUE
++    def values(self):
++        return []
+ 
+ 
+ class RuntimeEntity(Entity):
+     """An attribute of a live object, or of a class standing in for an instance."""
+ 
+     def __init__(self, project, name, owner, from_class=None):
+-        self._project = project
++        self.project = project
+         self.name = name
+         self._owner = owner
+         self._from_class = from_class
+ 
+-    def _fetch(self):
++    def fetch(self):
+         if self._owner is not None:
+             return introspect.get_attribute(self._owner, self.name)
+         ok, obj = introspect.get_attribute(self._from_class, self.name)
+@@ -310,8 +806,17 @@
+             return False, None
+         return ok, obj
+ 
++    def owner_name(self):
++        """Qualified name of the object or class this is an attribute of."""
++        owner = self._from_class if self._from_class is not None else self._owner
++        if isinstance(owner, types.ModuleType):
++            return owner.__name__
++        if not isinstance(owner, type):
++            owner = type(owner)
++        return "%s.%s" % (owner.__module__, owner.__qualname__)
++
+     def presentation(self):
+-        ok, obj = self._fetch()
++        ok, obj = self.fetch()
+         if not ok:
+             return (STATEMENT, None)
+         kind = introspect.kind_of(obj)
+@@ -319,20 +824,24 @@
+             return (INSTANCE, introspect.type_name(obj))
+         return (kind, None)
+ 
+-    def value(self):
+-        ok, obj = self._fetch()
+-        return RuntimeValue(self._project, obj) if ok else UNKNOWN_VALUE
++    def values(self):
++        ok, obj = self.fetch()
++        if not ok:
++            return []
++        owner = self._from_class
++        if owner is None:
++            owner = self._owner if isinstance(self._owner, type) else type(self._owner)
++        return [RuntimeValue(self.project, obj, owner)]
+ 
+ 
+ class BindingEntity(Entity):
+     def __init__(self, analysis, binding):
+         self._analysis = analysis
+-        self._binding = binding
++        self.binding = binding
+         self.name = binding.name
+-        self._value = None
+ 
+     def presentation(self):
+-        form = self._binding.form
++        form = self.binding.form
+         if form == scopes.DEF:
+             return (FUNCTION, None)
+         if form == scopes.CLASS:
+@@ -342,44 +851,41 @@
+         if form == scopes.IMPORT:
+             return (MODULE, None)
+         if form in (scopes.IMPORT_FROM, scopes.ASSIGN, scopes.EXCEPT):
+-            value = self.value()
++            values = self.values()
++            value = values[0] if values else Value()
+             if value.kind == INSTANCE:
+                 return (INSTANCE, value.type_name)
+             if form == scopes.IMPORT_FROM and value.kind in (MODULE, CLASS, FUNCTION):
+                 return (value.kind, None)
+         return (STATEMENT, None)
+ 
+-    def value(self):
+-        if self._value is None:
+-            project = self._analysis.project
+-            key = ("binding", id(self._binding))
+-            if not project.enter(key):
+-                return UNKNOWN_VALUE
+-            try:
+-                self._value = self._analysis.binding_value(self._binding)
+-            finally:
+-                project.leave(key)
+-        return self._value
++    def values(self):
++        return self._analysis.binding_values(self.binding)
++
++
++class AttributeEntity(Entity):
++    """An instance attribute assigned (possibly several times) in methods."""
++
++    def __init__(self, analysis, bindings):
++        self._analysis = analysis
++        self.bindings = bindings
++        self.name = bindings[0].name
++
++    def presentation(self):
++        values = self.values()
++        if values and values[0].kind == INSTANCE:
++            return (INSTANCE, values[0].type_name)
++        return (STATEMENT, None)
++
++    def values(self):
++        result = []
++        for binding in self.bindings:
++            result.extend(self._analysis.binding_values(binding))
++        return _unique(result)
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# Name resolution
+-
+-class _View:
+-    """Which events of each scope are visible for a lookup."""
+-
+-    def __init__(self, line=None, scope=None, order=None):
+-        self._line = line
+-        self._scope = scope
+-        self._order = order
+-
+-    def events(self, scope):
+-        if self._line is not None:
+-            return scope.events_until_line(self._line)
+-        if scope is self._scope and self._order is not None:
+-            return scope.events_before(self._order)
+-        return scope.all_events()
+-
++# Analysis of one file
+ 
+ class Analysis:
+     """Inference over one source file."""
+@@ -387,23 +893,45 @@
+     def __init__(self, project, path, text):
+         self.project = project
+         self.path = path
+-        self._tree = scopes.ScopeTree(text)
++        self.tree = scopes.ScopeTree(text, path)
++        self.tree.analysis = self
+         self._scope_by_node = {}
+-        self._index(self._tree.module)
++        self._index(self.tree.module)
+         self._module_members = None
++        self._flows = {}
++        self._binding_cache = {}
+ 
+     def _index(self, scope):
+         for child in scope.children:
+             self._scope_by_node[id(child.node)] = child
+             self._index(child)
+ 
++    def scope_of(self, node):
++        return self._scope_by_node.get(id(node))
++
+     def package_dir(self):
+         if os.path.basename(self.path) == "__init__.py":
+             return os.path.dirname(self.path)
+         return None
+ 
+-    def location(self, line, col):
+-        return Location(self, self._tree.scope_at(line, col), line)
++    def location(self, line, col, indent):
++        return Location(self, self.tree.scope_at(line, col), line, col, indent)
++
++    def none_value(self):
++        return RuntimeInstance(self.project, type(None))
++
++    # -- flow ------------------------------------------------------------
++    def flow(self, scope):
++        analysis = scope.tree.analysis
++        if analysis is not self:
++            return analysis.flow(scope)
++        found = self._flows.get(id(scope))
++        if found is None:
++            found = self._flows[id(scope)] = flow.Flow(scope)
++        return found
++
++    def where_before(self, scope, node):
++        return Where(scope, self.flow(scope).state_before(node))
+ 
+     # -- members ---------------------------------------------------------
+     def module_members(self):
+@@ -413,7 +941,7 @@
+                 return {}
+             try:
+                 result = {}
+-                for event in self._tree.module.all_events():
++                for event in self.tree.module.all_events():
+                     self._apply(result, event)
+                 self._module_members = result
+             finally:
+@@ -434,59 +962,192 @@
+         return {name: entity for name, entity in module.members().items()
+                 if not name.startswith("_")}
+ 
+-    def visible(self, scope, view):
++    def visible(self, scope, line):
+         result = {name: RuntimeEntity(self.project, name, vocabulary.builtin_namespace())
+                   for name in vocabulary.builtin_names()}
+         for level in reversed(scope.chain()):
+-            for event in view.events(level):
++            for event in level.events_until_line(line):
+                 self._apply(result, event)
+         return result
+ 
+-    def lookup(self, name, scope, view):
+-        for level in scope.chain():
+-            for event in reversed(view.events(level)):
+-                if event.form == scopes.STAR:
+-                    members = self.star_members(event)
+-                    if name in members:
+-                        return members[name]
+-                elif event.name == name:
+-                    return BindingEntity(self, event)
+-        if name in vocabulary.builtin_names():
+-            return RuntimeEntity(self.project, name, vocabulary.builtin_namespace())
+-        return None
++    # -- name resolution -------------------------------------------------
++    def resolve(self, name, where):
++        """Targets ``name`` may refer to at ``where``: list of (target, constraints)."""
++        scope = where.scope
++        if scope.parent is not None and name in scope.globals_declared:
++            module = scope
++            while module.parent is not None:
++                module = module.parent
++            return self.resolve(name, Where(module))
++        state = where.state if where.state is not None else self.flow(scope).end
++        facts = state.facts(name)
++        if facts:
++            result = []
++            for binding, constraints in sorted(facts, key=_fact_order):
++                if binding is flow.OUTER:
++                    for target, more in self._resolve_outer(name, scope):
++                        result.append((target, more + constraints))
++                else:
++                    result.append((binding, constraints))
++            return result
++        for event in reversed(scope.events):
++            if event.form == scopes.STAR:
++                members = scope.tree.analysis.star_members(event)
++                if name in members:
++                    return [(members[name], ())]
++        return self._resolve_outer(name, scope)
++
++    def resolve_local(self, name, where):
++        """Like ``resolve`` but without looking outside ``where.scope``."""
++        state = where.state if where.state is not None else self.flow(where.scope).end
++        facts = state.facts(name)
++        if facts:
++            return [(b, c) for b, c in sorted(facts, key=_fact_order) if b is not flow.OUTER]
++        for event in reversed(where.scope.events):
++            if event.form == scopes.STAR:
++                members = where.scope.tree.analysis.star_members(event)
++                if name in members:
++                    return [(members[name], ())]
++        return []
++
++    def _resolve_outer(self, name, scope):
++        parent = scope.parent
++        while parent is not None and parent.kind == scopes.Scope.CLASS:
++            parent = parent.parent
++        if parent is None:
++            if name in vocabulary.builtin_names():
++                return [(RuntimeEntity(self.project, name, vocabulary.builtin_namespace()), ())]
++            return []
++        state = None
++        if scope.kind == scopes.Scope.CLASS and scope.parent is parent:
++            state = self.flow(parent).state_before(scope.node)
++        return self.resolve(name, Where(parent, state))
++
++    def target_values(self, target, frame=None):
++        if isinstance(target, scopes.Binding):
++            return target.home.tree.analysis.binding_values(target, frame)
++        if isinstance(target, ValueTarget):
++            return [target.value]
++        return target.values()
++
++    def name_values(self, name, where):
++        if where.local_values and name in where.local_values:
++            return where.local_values[name]
++        result = []
++        for target, constraints in self.resolve(name, where):
++            values = self.target_values(target, where.frame)
++            if constraints:
++                values = self.narrow(values, constraints, where)
++            result.extend(values)
++        return _unique(result)
++
++    def narrow(self, values, constraints, where):
++        for constraint in constraints:
++            if constraint.kind == flow.Constraint.NONE:
++                if constraint.positive:
++                    values = [self.none_value()]
++                else:
++                    values = [v for v in values if v.builtin_type() is not type(None)]
++                continue
++            classes = [c for c in self._class_values(constraint.expr, where)]
++            if not classes:
++                continue
++            if constraint.positive:
++                values = _unique([i for c in classes for i in c.instantiate()])
++            else:
++                values = [v for v in values if not any(_is_instance(v, c) for c in classes)]
++        return values
++
++    def _class_values(self, expr, where):
++        if isinstance(expr, ast.Tuple):
++            found = []
++            for element in expr.elts:
++                found.extend(self._class_values(element, where))
++            return found
++        return [v for v in self.evaluate(expr, where) if v.kind == CLASS]
+ 
+     # -- bindings --------------------------------------------------------
+-    def binding_value(self, binding):
++    def binding_values(self, binding, frame=None):
++        owner = binding.home.tree.analysis
++        if owner is not self:
++            return owner.binding_values(binding, frame)
++        if frame is not None and binding.home is frame.scope:
++            if binding.form == scopes.PARAM:
++                found = frame.param_values(binding)
++                if found:
++                    return _unique(found)
++            else:
++                key = ("binding", id(binding), id(frame))
++                if not self.project.enter(key):
++                    return []
++                try:
++                    return _unique(self._binding_values(binding, frame))
++                finally:
++                    self.project.leave(key)
++        cached = self._binding_cache.get(id(binding))
++        if cached is not None:
++            return cached
++        key = ("binding", id(binding))
++        if not self.project.enter(key):
++            return []
++        try:
++            result = _unique(self._binding_values(binding))
++        finally:
++            self.project.leave(key)
++        self._binding_cache[id(binding)] = result
++        return result
++
++    def _binding_values(self, binding, frame=None):
+         form, details = binding.form, binding.details
+-        view = _View(scope=binding.scope, order=binding.order)
+         if form == scopes.DEF:
+-            return StaticFunction(self, self._scope_by_node[id(details["node"])])
++            return [StaticFunction(self, self.scope_of(binding.node))]
+         if form == scopes.CLASS:
+-            return StaticClass(self, self._scope_by_node[id(details["node"])])
++            return [StaticClass(self, self.scope_of(binding.node))]
+         if form == scopes.PARAM:
+-            return self._param_value(binding, view)
++            return self._param_values(binding)
+         if form == scopes.IMPORT:
+             found = self.project.module_value(details["module"], 0, self.path)
+-            return found if found is not None else UnresolvedModule()
++            return [found] if found is not None else []
+         if form == scopes.IMPORT_FROM:
+-            return self._import_from_value(details)
++            return self._import_from_values(details)
++        where = self.where_before(binding.home, binding.stmt) if binding.stmt is not None \
++            else Where(binding.home)
++        where.frame = frame
+         if form == scopes.ASSIGN:
+-            value = UNKNOWN_VALUE
+-            expr = _unpack(details["value"], details["path"])
+-            if expr is not None:
+-                value = self.evaluate(expr, binding.scope, view)
+-            if value.kind != INSTANCE and details.get("annotation") is not None:
+-                annotated = self.evaluate(details["annotation"], binding.scope, view)
+-                if annotated.kind == CLASS:
+-                    value = annotated.instantiate()
+-            return value
++            if details.get("starred"):
++                return [RuntimeInstance(self.project, list)]
++            if details.get("annotation") is not None:
++                annotated = self.annotation_values(details["annotation"], where)
++                if annotated:
++                    return annotated
++            return self._unpacked(details.get("value"), details.get("path", ()), where)
++        if form == scopes.OTHER and details.get("value") is not None:
++            values = self.evaluate(details["value"], where)
++            if details.get("source") == "for":
++                values = [item for value in values for item in value.iterate()]
++            elif details.get("source") == "with":
++                values = [entered for value in values for entered in _entered(value)]
++            return self.index_path(values, details.get("path", ()))
+         if form == scopes.EXCEPT and details["type_expr"] is not None:
+-            exc_type = self.evaluate(details["type_expr"], binding.scope, view)
+-            if exc_type.kind == CLASS:
+-                return exc_type.instantiate()
+-        return UNKNOWN_VALUE
+-
+-    def _param_value(self, binding, view):
++            return [i for c in self._class_values(details["type_expr"], where)
++                    for i in c.instantiate()]
++        return []
++
++    def _unpacked(self, expr, path, where):
++        if expr is None:
++            return []
++        direct = _unpack(expr, path)
++        if direct is not None:
++            return self.evaluate(direct, where)
++        return self.index_path(self.evaluate(expr, where), path)
++
++    @staticmethod
++    def index_path(values, path):
++        for index in path:
++            values = _unique([item for value in values for item in value.subscript(index)])
++        return values
++
++    def _param_values(self, binding):
+         details = binding.details
+         function = details["function"]
+         owner = function.class_scope()
+@@ -494,57 +1155,253 @@
+             decorators = function.decorator_names()
+             if "staticmethod" not in decorators:
+                 cls = StaticClass(self, owner)
+-                return cls if "classmethod" in decorators else cls.instantiate()
++                return [cls] if "classmethod" in decorators else cls.instantiate()
+         if details["star"] == "*":
+-            return RuntimeInstance(self.project, tuple)
++            return [RuntimeInstance(self.project, tuple)]
+         if details["star"] == "**":
+-            return RuntimeInstance(self.project, dict)
++            return [RuntimeInstance(self.project, dict)]
++        where = self.where_before(function.parent, function.node)
+         if details["annotation"] is not None:
+-            annotated = self.evaluate(details["annotation"], function.parent, _View())
+-            if annotated.kind == CLASS:
+-                return annotated.instantiate()
+-        return UNKNOWN_VALUE
+-
+-    def _import_from_value(self, details):
++            annotated = self.annotation_values(details["annotation"], where)
++            if annotated:
++                return annotated
++        if details.get("default") is not None:
++            return self.evaluate(details["default"], where)
++        return []
++
++    def _import_from_values(self, details):
+         module_name, level, attr = details["module"], details["level"], details["attr"]
+         module = self.project.module_value(module_name, level, self.path)
+         if module is not None:
+-            value = module.attribute(attr)
+-            if value.kind != UNKNOWN:
+-                return value
++            values = module.attribute(attr)
++            if values:
++                return values
+         dotted = module_name + "." + attr if module_name else attr
+         sub = self.project.module_value(dotted, level, self.path)
+-        return sub if sub is not None else UNKNOWN_VALUE
++        return [sub] if sub is not None else []
++
++    def import_from_targets(self, binding):
++        """Where an imported name is bound in its own module."""
++        details = binding.details
++        module = self.project.module_value(details["module"], details["level"], self.path)
++        if module is not None:
++            targets = module.attribute_targets(details["attr"])
++            if targets:
++                return targets
++        return []
++
++    # -- annotations -----------------------------------------------------
++    def annotation_values(self, node, where):
++        if isinstance(node, ast.Constant):
++            if node.value is None:
++                return [self.none_value()]
++            if isinstance(node.value, str):
++                try:
++                    parsed = ast.parse(node.value.strip(), mode="eval").body
++                except (SyntaxError, ValueError, RecursionError, MemoryError):
++                    return []
++                return self.annotation_values(parsed, where)
++            return []
++        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
++            return _unique(self.annotation_values(node.left, where)
++                           + self.annotation_values(node.right, where))
++        if isinstance(node, ast.Subscript):
++            head = _terminal_name(node.value)
++            args = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
++            if head == "Optional":
++                return _unique(self.annotation_values(args[0], where) + [self.none_value()])
++            if head == "Union":
++                return _unique([v for a in args for v in self.annotation_values(a, where)])
++            if head in ("Annotated", "ClassVar", "Final", "Required", "NotRequired",
++                        "ReadOnly"):
++                return self.annotation_values(args[0], where)
++            if head in ("Type", "type"):
++                return [v for v in self.evaluate(args[0], where) if v.kind == CLASS]
++            return self._instances_of(self.evaluate(node.value, where))
++        return self._instances_of(self.evaluate(node, where))
++
++    def _instances_of(self, values):
++        result = []
++        for value in values:
++            if value.kind == CLASS:
++                result.extend(value.instantiate())
++            elif isinstance(value, RuntimeValue):
++                origin = getattr(value.obj, "__origin__", None)
++                if isinstance(origin, type):
++                    result.append(RuntimeInstance(self.project, origin))
++        return _unique(result)
+ 
+     # -- expressions -----------------------------------------------------
+-    def evaluate(self, node, scope, view):
++    def evaluate(self, node, where):
+         project = self.project
+         if isinstance(node, ast.Constant):
+-            return RuntimeInstance(project, type(node.value))
++            return [RuntimeInstance(project, type(node.value))]
++        sequence = _SEQUENCE_TYPES.get(type(node))
++        if sequence is not None:
++            return [SequenceInstance(project, sequence, node, where)]
++        if isinstance(node, ast.Dict):
++            return [DictInstance(project, node, where)]
+         literal = _LITERAL_TYPES.get(type(node))
+         if literal is not None:
+-            return RuntimeInstance(project, literal)
++            return [RuntimeInstance(project, literal)]
+         if isinstance(node, ast.Name):
+-            entity = self.lookup(node.id, scope, view)
+-            return entity.value() if entity is not None else UNKNOWN_VALUE
++            return self.name_values(node.id, where)
+         if isinstance(node, ast.Attribute):
+-            return self.evaluate(node.value, scope, view).attribute(node.attr)
++            result = []
++            for value in self.evaluate(node.value, where):
++                result.extend(value.attribute(node.attr))
++            return _unique(result)
+         if isinstance(node, ast.Call):
+-            return self.evaluate(node.func, scope, view).call()
++            if isinstance(node.func, ast.Name) and node.func.id == "super":
++                found = self._super_values(where)
++                if found is not None:
++                    return found
++            if isinstance(node.func, ast.Name) and node.func.id in _SPECIAL_BUILTINS:
++                found = self._builtin_call(node, where)
++                if found is not None:
++                    return found
++            arguments = Arguments(node, where)
++            result = []
++            for value in self.evaluate(node.func, where):
++                result.extend(value.call(arguments))
++            return _unique(result)
++        if isinstance(node, ast.Subscript):
++            index = _index_of(node.slice)
++            result = []
++            for value in self.evaluate(node.value, where):
++                result.extend(value.subscript(index))
++            return _unique(result)
+         if isinstance(node, ast.UnaryOp):
+             if isinstance(node.op, ast.Not):
+-                return RuntimeInstance(project, bool)
+-            return self.evaluate(node.operand, scope, view)
++                return [RuntimeInstance(project, bool)]
++            return self.evaluate(node.operand, where)
+         if isinstance(node, ast.BinOp):
+-            left = self.evaluate(node.left, scope, view)
++            return self._binary(node, where)
++        if isinstance(node, ast.BoolOp):
++            return _unique([v for operand in node.values for v in self.evaluate(operand, where)])
++        if isinstance(node, ast.IfExp):
++            return _unique(self.evaluate(node.body, where) + self.evaluate(node.orelse, where))
++        if isinstance(node, ast.NamedExpr):
++            return self.evaluate(node.value, where)
++        return []
++
++    def _binary(self, node, where):
++        result = []
++        lefts = self.evaluate(node.left, where)
++        rights = None
++        for left in lefts:
+             left_type = left.builtin_type()
+             if left_type is str and isinstance(node.op, ast.Mod):
+-                return left
+-            right_type = self.evaluate(node.right, scope, view).builtin_type()
+-            if left_type is not None and left_type is right_type \
+-                    and left_type in _ARITHMETIC_TYPES:
+-                return left
+-        return UNKNOWN_VALUE
++                result.append(left)
++                continue
++            if rights is None:
++                rights = self.evaluate(node.right, where)
++            for right in rights:
++                if left_type is not None and left_type is right.builtin_type() \
++                        and left_type in _ARITHMETIC_TYPES:
++                    result.append(RuntimeInstance(self.project, left_type))
++        return _unique(result)
++
++    def _builtin_call(self, node, where):
++        """Calls of builtins whose result depends on their arguments."""
++        name = node.func.id
++        functions = self.evaluate(node.func, where)
++        if len(functions) != 1 or not isinstance(functions[0], RuntimeValue) \
++                or functions[0].obj is not getattr(builtins, name, None) \
++                or any(isinstance(a, ast.Starred) for a in node.args):
++            return None
++        args = node.args
++        project = self.project
++        if name == "type" and len(args) == 1:
++            result = []
++            for value in self.evaluate(args[0], where):
++                if isinstance(value, StaticInstance):
++                    result.append(value.cls)
++                elif isinstance(value, RuntimeInstance):
++                    result.append(RuntimeValue(project, value.cls))
++            return _unique(result)
++        if name == "getattr" and len(args) >= 2 and isinstance(args[1], ast.Constant) \
++                and isinstance(args[1].value, str):
++            result = []
++            for value in self.evaluate(args[0], where):
++                result.extend(value.attribute(args[1].value))
++            if len(args) > 2:
++                result.extend(self.evaluate(args[2], where))
++            return _unique(result)
++        if not args:
++            return None
++        items = [[v for value in self.evaluate(a, where) for v in value.iterate()]
++                 for a in args]
++        if name == "enumerate":
++            pair = ValueSequence(project, tuple, [[RuntimeInstance(project, int)], items[0]],
++                                 positional=True)
++            return [ValueSequence(project, enumerate, [[pair]])]
++        if name == "zip":
++            group = ValueSequence(project, tuple, items, positional=True)
++            return [ValueSequence(project, zip, [[group]])]
++        if name in ("sorted", "list", "reversed", "iter"):
++            cls = {"sorted": list, "list": list, "reversed": reversed, "iter": type(iter([]))}
++            return [ValueSequence(project, cls[name], [items[0]])]
++        if name in ("set", "frozenset", "tuple"):
++            return [ValueSequence(project, getattr(builtins, name), [items[0]])]
++        if name == "next":
++            return items[0]
++        return None
++
++    def _super_values(self, where):
++        scope = where.scope
++        owner = scope.class_scope() if scope.kind == scopes.Scope.FUNCTION else None
++        if owner is None:
++            return None
++        cls = StaticClass(owner.tree.analysis, owner)
++        params = sorted((e for e in scope.events if e.form == scopes.PARAM),
++                        key=lambda e: e.details["index"])
++        receivers = self.name_values(params[0].name, where) if params else []
++        arguments = [r.arguments for r in receivers if isinstance(r, StaticInstance)] or [None]
++        return _unique([StaticInstance(base, arguments[0]) for base in cls.bases()])
++
++
++def _fact_order(fact):
++    binding = fact[0]
++    return getattr(binding, "order", 0)
++
++
++def _is_instance(value, cls):
++    if isinstance(value, StaticInstance) and isinstance(cls, StaticClass):
++        return value.cls.is_subclass_of(cls)
++    if isinstance(cls, RuntimeValue) and value.builtin_type() is not None:
++        try:
++            return issubclass(value.builtin_type(), cls.obj)
++        except TypeError:
++            return False
++    return False
++
++
++def _entered(value):
++    if isinstance(value, StaticInstance):
++        entered = value._dunder_call("__enter__")
++        if entered:
++            return entered
++    return [value]
++
++
++def _terminal_name(node):
++    if isinstance(node, ast.Name):
++        return node.id
++    if isinstance(node, ast.Attribute):
++        return node.attr
++    return None
++
++
++def _index_of(node):
++    if isinstance(node, ast.Slice):
++        return SLICE
++    if isinstance(node, ast.Constant):
++        return node.value
++    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) \
++            and isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int):
++        return -node.operand.value
++    return UNKNOWN_INDEX
+ 
+ 
+ def _unpack(expr, path):
+@@ -558,31 +1415,34 @@
+ 
+ 
+ class Location:
+-    """A cursor position inside the main file."""
+-
+-    def __init__(self, analysis, scope, line):
++    """A cursor position inside the main file (for completion)."""
++
++    def __init__(self, analysis, scope, line, col, indent):
+         self._analysis = analysis
+         self._scope = scope
+-        self._view = _View(line=line)
++        self._line = line
++        self._where = Where(scope, analysis.flow(scope).state_at(line, col, indent))
+ 
+     def visible_entities(self):
+-        return self._analysis.visible(self._scope, self._view)
++        return self._analysis.visible(self._scope, self._line)
+ 
+     def evaluate(self, expression_text):
++        """Possible values of an expression written at the cursor."""
+         try:
+             node = ast.parse(expression_text.strip(), mode="eval").body
+         except (SyntaxError, ValueError, RecursionError, MemoryError):
+-            return UNKNOWN_VALUE
+-        return self._analysis.evaluate(node, self._scope, self._view)
++            return []
++        return self._analysis.evaluate(node, self._where)
+ 
+ 
+ # ---------------------------------------------------------------------------
+ # Project
+ 
+ class Project:
+-    def __init__(self, main_path, main_text):
++    def __init__(self, main_path, main_text, root=None):
+         self._main_path = os.path.abspath(main_path)
+-        self._locator = ModuleLocator(os.path.dirname(self._main_path))
++        self.root = os.path.abspath(root) if root else os.path.dirname(self._main_path)
++        self._locator = ModuleLocator(self.root)
+         self._analyses = {}
+         self._active = set()
+         self.main = Analysis(self, self._main_path, main_text)
+@@ -597,8 +1457,8 @@
+     def leave(self, key):
+         self._active.discard(key)
+ 
+-    def location(self, line, col):
+-        return self.main.location(line, col)
++    def location(self, line, col, indent=0):
++        return self.main.location(line, col, indent)
+ 
+     def module_value(self, dotted, level=0, importer_path=None):
+         located = self._locator.locate(dotted, level, importer_path or self._main_path)
+
+### sithlib/navigation.py (created)
+--- sithlib/navigation.py
++++ sithlib/navigation.py
+@@ -0,0 +1,791 @@
++"""Definition navigation (``goto`` and ``infer``).
++
++Secret: how the identifier under the cursor is found and classified (plain
++name, attribute, definition header, parameter, import part, keyword
++argument, comprehension variable), what each command answers for it, and
++how bindings and values are described as definition records (names,
++qualified names, positions, descriptions, docstrings).
++"""
++
++import ast
++import inspect
++import os
++import re
++import types
++
++from . import flow, inference, introspect, scopes
++from .inference import (DictInstance, DirectoryModule, RuntimeEntity, RuntimeInstance,
++                        RuntimeValue, StaticClass, StaticFunction, StaticInstance,
++                        StaticModule, Where)
++from .source import SourceFile
++
++GOTO = "goto"
++INFER = "infer"
++
++
++class NotOnName(Exception):
++    """The cursor does not touch an identifier."""
++
++
++def run(command, path, line, col, root=None):
++    """Definitions (as dicts) answering ``command`` at the cursor."""
++    source = SourceFile(path)
++    source.check_position(line, col)
++    project = inference.Project(source.path, source.text(), root)
++    analysis = project.main
++    occurrence = _Finder(analysis, line, col).find()
++    if occurrence is None:
++        raise NotOnName("no name at %d:%d" % (line, col))
++    describer = _Describer(project)
++    if command == GOTO:
++        records = describer.targets(occurrence.goto())
++    else:
++        records = describer.values(occurrence.infer())
++    unique = {}
++    for record in records:
++        if record is not None:
++            unique.setdefault(tuple(sorted(record.items())), record)
++    return sorted(unique.values(),
++                  key=lambda r: (r["module_path"], r["line"], r["column"], r["name"]))
++
++
++# ---------------------------------------------------------------------------
++# Finding the identifier under the cursor
++
++class _Occurrence:
++    """One identifier in the main file and what it means."""
++
++    def __init__(self, analysis, kind, node, scope, stmt, conditions=(), comprehension=None,
++                 **extra):
++        self.analysis = analysis
++        self.kind = kind
++        self.node = node
++        self.scope = scope
++        self.stmt = stmt
++        self.conditions = list(conditions)  # narrowing from enclosing and/or/if-else
++        self.comprehension = comprehension or {}  # visible comprehension variables
++        self.extra = extra
++
++    def where(self):
++        if self.stmt is None:
++            where = Where(self.scope)
++        else:
++            where = self.analysis.where_before(self.scope, self.stmt)
++        if self.conditions:
++            state = where.state if where.state is not None \
++                else self.analysis.flow(self.scope).end
++            where.state = state.narrowed(self.conditions)
++        return self._with_comprehension(where, self.comprehension)
++
++    def _with_comprehension(self, base, visible):
++        if not visible:
++            return base
++        local = {name: self._comprehension_values(info, base) for name, info in visible.items()}
++        return Where(base.scope, base.state, base.frame, local)
++
++    def _comprehension_values(self, info, base):
++        generator, _, path, before = info
++        if path is None:
++            return []
++        where = self._with_comprehension(base, before)
++        values = self.analysis.evaluate(generator.iter, where)
++        return self.analysis.index_path([v for value in values for v in value.iterate()], path)
++
++    # Results: goto gives targets (Bindings, Entities, value targets), infer values.
++    def goto(self):
++        return self._answer(GOTO)
++
++    def infer(self):
++        return self._answer(INFER)
++
++    def _answer(self, command):
++        analysis = self.analysis
++        kind = self.kind
++        binding = self.extra.get("binding")
++        if binding is not None:
++            if command == GOTO:
++                return [binding]
++            return analysis.binding_values(binding)
++        if kind == "name":
++            return self._name(command, self.node.id, self.where())
++        if kind == "global":
++            module = self.scope
++            while module.parent is not None:
++                module = module.parent
++            return self._name(command, self.extra["name"], Where(module))
++        if kind == "attr":
++            receivers = analysis.evaluate(self.node.value, self.where())
++            result = []
++            for receiver in receivers:
++                if command == GOTO:
++                    result.extend(receiver.attribute_targets(self.node.attr))
++                else:
++                    result.extend(receiver.attribute(self.node.attr))
++            return result
++        if kind == "module":
++            found = analysis.project.module_value(self.extra["dotted"], self.extra["level"],
++                                                  analysis.path)
++            if found is None:
++                return []
++            return [inference.ValueTarget(found)] if command == GOTO else [found]
++        if kind == "imported":
++            import_binding = self.extra["import_binding"]
++            if command == GOTO:
++                targets = analysis.import_from_targets(import_binding)
++                if targets:
++                    return targets
++                return [inference.ValueTarget(v)
++                        for v in analysis.binding_values(import_binding)]
++            return analysis.binding_values(import_binding)
++        if kind == "keyword":
++            params = self._keyword_params()
++            if command == GOTO:
++                return params
++            return [v for p in params for v in analysis.binding_values(p)]
++        if kind == "comprehension":
++            info = self.comprehension[self.node.id]
++            if command == GOTO:
++                return [_ComprehensionTarget(self.analysis, info[0], info[1])]
++            return self._comprehension_values(info, self.where())
++        return []
++
++    def _name(self, command, name, where):
++        analysis = self.analysis
++        if command == GOTO:
++            return [target for target, _ in analysis.resolve(name, where)]
++        return analysis.name_values(name, where)
++
++    def _keyword_params(self):
++        analysis = self.analysis
++        name = self.node.arg
++        functions = []
++        for value in analysis.evaluate(self.extra["call"].func, self.where()):
++            if isinstance(value, StaticFunction):
++                functions.append(value)
++            elif isinstance(value, StaticClass):
++                functions.extend(v for v in value.attribute("__init__")
++                                 if isinstance(v, StaticFunction))
++        params = []
++        for function in functions:
++            params.extend(e for e in function.scope.events
++                          if e.form == scopes.PARAM and e.name == name)
++        return params
++
++
++class _ComprehensionTarget:
++    def __init__(self, analysis, generator, target):
++        self.analysis = analysis
++        self.generator = generator
++        self.target = target
++
++
++class _Finder:
++    """Walks the main file's syntax tree looking for the cursor's identifier."""
++
++    def __init__(self, analysis, line, col):
++        self.analysis = analysis
++        self.tree = analysis.tree
++        self.line = line
++        self.col = col
++        self.exact = None
++        self.touching = None
++        self.conditions = []
++        self.comprehension = {}
++        self.bindings = {}
++        for binding in _all_bindings(self.tree.module):
++            if binding.node is not None:
++                self.bindings.setdefault(id(binding.node), binding)
++
++    def find(self):
++        module = self.tree.module
++        for statement in module.node.body:
++            self._walk(statement, module, None, {})
++        return self.exact or self.touching
++
++    def _check(self, line, start, name, make):
++        if line != self.line or name is None:
++            return
++        end = start + len(name)
++        if start <= self.col < end:
++            if self.exact is None:
++                self.exact = make()
++        elif self.col == end and self.touching is None:
++            self.touching = make()
++
++    def _occurrence(self, kind, node, scope, stmt, **extra):
++        conditions = list(self.conditions)
++        comprehension = self.comprehension
++        return lambda: _Occurrence(self.analysis, kind, node, scope, stmt, conditions,
++                                   comprehension, **extra)
++
++    def _walk_narrowed(self, node, scope, stmt, comprehension, conditions):
++        saved = self.conditions
++        self.conditions = saved + list(conditions)
++        try:
++            self._walk(node, scope, stmt, comprehension)
++        finally:
++            self.conditions = saved
++
++    def _bound(self, node, scope, stmt, fallback_kind="name"):
++        binding = self.bindings.get(id(node))
++        if binding is not None:
++            return self._occurrence("binding", node, scope, stmt, binding=binding)
++        return self._occurrence(fallback_kind, node, scope, stmt)
++
++    def _walk(self, node, scope, stmt, comprehension):
++        if node is None or not self._within(node):
++            return
++        saved = self.comprehension
++        self.comprehension = comprehension
++        try:
++            self._visit(node, scope, stmt, comprehension)
++        finally:
++            self.comprehension = saved
++
++    def _visit(self, node, scope, stmt, comprehension):
++        if isinstance(node, (ast.stmt, ast.ExceptHandler, ast.match_case)):
++            stmt = node
++        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
++            self._function(node, scope, stmt)
++        elif isinstance(node, ast.ClassDef):
++            for child in node.decorator_list + node.bases:
++                self._walk(child, scope, stmt, comprehension)
++            for keyword in node.keywords:
++                if keyword.arg is not None:
++                    self._check(keyword.lineno, keyword.col_offset, keyword.arg,
++                                self._occurrence("nothing", keyword, scope, stmt))
++                self._walk(keyword.value, scope, stmt, comprehension)
++            self._type_params(node, scope, stmt)
++            line, col = self.tree.definition_position(node)
++            self._check(line, col, node.name, self._bound(node, scope, stmt))
++            inner = self.analysis.scope_of(node) or scope
++            for child in node.body:
++                self._walk(child, inner, child, {})
++        elif isinstance(node, ast.Lambda):
++            args = node.args
++            for default in args.defaults + [d for d in args.kw_defaults if d is not None]:
++                self._walk(default, scope, stmt, comprehension)
++            for arg in _arguments(args):
++                self._check(arg.lineno, arg.col_offset, arg.arg,
++                            self._occurrence("lambda", arg, scope, stmt))
++            shadowed = {k: v for k, v in comprehension.items()
++                        if k not in {a.arg for a in _arguments(args)}}
++            self._walk(node.body, scope, stmt, shadowed)
++        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
++            self._comprehension(node, scope, stmt, comprehension)
++        elif isinstance(node, ast.BoolOp):
++            known = []
++            for value in node.values:
++                self._walk_narrowed(value, scope, stmt, comprehension, known)
++                positive, negative = flow.conditions(value)
++                known = known + (positive if isinstance(node.op, ast.And) else negative)
++        elif isinstance(node, ast.IfExp):
++            positive, negative = flow.conditions(node.test)
++            self._walk(node.test, scope, stmt, comprehension)
++            self._walk_narrowed(node.body, scope, stmt, comprehension, positive)
++            self._walk_narrowed(node.orelse, scope, stmt, comprehension, negative)
++        elif isinstance(node, ast.Name):
++            if node.id in comprehension:
++                make = self._occurrence("comprehension", node, scope, stmt)
++            elif isinstance(node.ctx, ast.Store):
++                make = self._bound(node, scope, stmt)
++            else:
++                make = self._occurrence("name", node, scope, stmt)
++            self._check(node.lineno, node.col_offset, node.id, make)
++        elif isinstance(node, ast.Attribute):
++            self._walk(node.value, scope, stmt, comprehension)
++            binding = self.bindings.get(id(node)) if isinstance(node.ctx, ast.Store) else None
++            if binding is not None:
++                make = self._occurrence("binding", node, scope, stmt, binding=binding)
++            else:
++                make = self._occurrence("attr", node, scope, stmt)
++            self._check(node.end_lineno, node.end_col_offset - len(node.attr), node.attr, make)
++        elif isinstance(node, ast.Call):
++            self._walk(node.func, scope, stmt, comprehension)
++            for arg in node.args:
++                self._walk(arg, scope, stmt, comprehension)
++            for keyword in node.keywords:
++                if keyword.arg is not None:
++                    self._check(keyword.lineno, keyword.col_offset, keyword.arg,
++                                self._occurrence("keyword", keyword, scope, stmt, call=node))
++                self._walk(keyword.value, scope, stmt, comprehension)
++        elif isinstance(node, ast.Import):
++            self._import(node, scope, stmt)
++        elif isinstance(node, ast.ImportFrom):
++            self._import_from(node, scope, stmt)
++        elif isinstance(node, ast.ExceptHandler):
++            self._walk(node.type, scope, stmt, comprehension)
++            binding = self.bindings.get(id(node))
++            if binding is not None:
++                line, col = binding.position
++                self._check(line, col, node.name, self._bound(node, scope, stmt))
++            for child in node.body:
++                self._walk(child, scope, child, comprehension)
++        elif isinstance(node, (ast.Global, ast.Nonlocal)):
++            col = node.col_offset
++            for name in node.names:
++                line, col = self.tree.find_identifier(name, node.lineno, col)
++                kind = "global" if isinstance(node, ast.Global) else "name"
++                target = ast.Name(id=name, ctx=ast.Load())
++                self._check(line, col, name,
++                            self._occurrence(kind, target, scope, stmt, name=name))
++        elif isinstance(node, (ast.MatchAs, ast.MatchStar, ast.MatchMapping)):
++            for child in ast.iter_child_nodes(node):
++                self._walk(child, scope, stmt, comprehension)
++            binding = self.bindings.get(id(node))
++            if binding is not None:
++                line, col = binding.position
++                self._check(line, col, binding.name, self._bound(node, scope, stmt))
++        else:
++            for child in ast.iter_child_nodes(node):
++                self._walk(child, scope, stmt, comprehension)
++
++    def _within(self, node):
++        first = getattr(node, "lineno", None)
++        if first is None:
++            return True
++        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
++                and node.decorator_list:
++            first = min(first, min(d.lineno for d in node.decorator_list))
++        last = getattr(node, "end_lineno", None) or first
++        return first <= self.line <= last
++
++    def _type_params(self, node, scope, stmt):
++        for param in getattr(node, "type_params", None) or ():
++            name = getattr(param, "name", None)
++            if name:
++                self._check(param.lineno, param.col_offset + _type_param_prefix(param), name,
++                            self._occurrence("nothing", param, scope, stmt))
++
++    def _function(self, node, scope, stmt):
++        for child in node.decorator_list:
++            self._walk(child, scope, stmt, {})
++        self._type_params(node, scope, stmt)
++        args = node.args
++        for default in args.defaults + [d for d in args.kw_defaults if d is not None]:
++            self._walk(default, scope, stmt, {})
++        inner = self.analysis.scope_of(node) or scope
++        for arg in _arguments(args):
++            self._walk(arg.annotation, scope, stmt, {})
++            self._check(arg.lineno, arg.col_offset, arg.arg, self._bound(arg, inner, stmt))
++        self._walk(node.returns, scope, stmt, {})
++        line, col = self.tree.definition_position(node)
++        self._check(line, col, node.name, self._bound(node, scope, stmt))
++        for child in node.body:
++            self._walk(child, inner, child, {})
++
++    def _comprehension(self, node, scope, stmt, comprehension):
++        visible = dict(comprehension)
++        for generator in node.generators:
++            self._walk(generator.iter, scope, stmt, visible)
++            before = dict(visible)
++            for name_node, path in _target_names(generator.target):
++                visible[name_node.id] = (generator, name_node, path, before)
++            self._walk(generator.target, scope, stmt, visible)
++            for condition in generator.ifs:
++                self._walk(condition, scope, stmt, visible)
++        if isinstance(node, ast.DictComp):
++            self._walk(node.key, scope, stmt, visible)
++            self._walk(node.value, scope, stmt, visible)
++        else:
++            self._walk(node.elt, scope, stmt, visible)
++
++    def _import(self, node, scope, stmt):
++        for alias in node.names:
++            binding = self.bindings.get(id(alias))
++            parts = alias.name.split(".")
++            col = alias.col_offset
++            for index, part in enumerate(parts):
++                dotted = ".".join(parts[: index + 1])
++                if index == 0 and not alias.asname and binding is not None:
++                    make = self._occurrence("binding", alias, scope, stmt, binding=binding)
++                else:
++                    make = self._occurrence("module", alias, scope, stmt, dotted=dotted, level=0)
++                self._check(alias.lineno, col, part, make)
++                col += len(part) + 1
++            if alias.asname and binding is not None:
++                line, col = binding.position
++                self._check(line, col, alias.asname,
++                            self._occurrence("binding", alias, scope, stmt, binding=binding))
++
++    def _import_from(self, node, scope, stmt):
++        if node.module:
++            line, col = _module_position(self.tree, node)
++            parts = node.module.split(".")
++            for index, part in enumerate(parts):
++                dotted = ".".join(parts[: index + 1])
++                self._check(line, col, part, self._occurrence(
++                    "module", node, scope, stmt, dotted=dotted, level=node.level))
++                col += len(part) + 1
++        for alias in node.names:
++            binding = self.bindings.get(id(alias))
++            if binding is None:
++                continue
++            if alias.asname:
++                self._check(alias.lineno, alias.col_offset, alias.name, self._occurrence(
++                    "imported", alias, scope, stmt, import_binding=binding))
++                line, col = binding.position
++                self._check(line, col, alias.asname,
++                            self._occurrence("binding", alias, scope, stmt, binding=binding))
++            else:
++                self._check(alias.lineno, alias.col_offset, alias.name,
++                            self._occurrence("binding", alias, scope, stmt, binding=binding))
++
++
++def _type_param_prefix(param):
++    """Width of the ``*``/``**`` before a type parameter's name."""
++    if param.__class__.__name__ == "TypeVarTuple":
++        return 1
++    if param.__class__.__name__ == "ParamSpec":
++        return 2
++    return 0
++
++
++def _module_position(tree, node):
++    """Position of the module name in ``from <module> import ...``."""
++    for number in range(node.lineno, (node.end_lineno or node.lineno) + 1):
++        text = tree.line_text(number)
++        start = node.col_offset if number == node.lineno else 0
++        match = re.compile(r"\bfrom\s*\.*\s*").search(text, start)
++        if match:
++            return number, match.end()
++    return node.lineno, node.col_offset
++
++
++def _arguments(args):
++    found = args.posonlyargs + args.args
++    if args.vararg:
++        found.append(args.vararg)
++    found += args.kwonlyargs
++    if args.kwarg:
++        found.append(args.kwarg)
++    return found
++
++
++def _target_names(target, path=()):
++    if isinstance(target, ast.Name):
++        yield target, path
++    elif isinstance(target, (ast.Tuple, ast.List)):
++        for index, element in enumerate(target.elts):
++            if isinstance(element, ast.Starred):
++                for name, _ in _target_names(element.value):
++                    yield name, None
++            else:
++                yield from _target_names(element, path + (index,))
++
++
++def _all_bindings(scope):
++    yield from scope.events
++    yield from scope.instance_events
++    for child in scope.children:
++        yield from _all_bindings(child)
++
++
++# ---------------------------------------------------------------------------
++# Describing definitions
++
++class _Describer:
++    def __init__(self, project):
++        self.project = project
++        self.root = project.root
++
++    # -- entry points ----------------------------------------------------
++    def targets(self, targets):
++        records = []
++        for target in targets:
++            if isinstance(target, scopes.Binding):
++                records.append(self.binding(target))
++            elif isinstance(target, inference.BindingEntity):
++                records.append(self.binding(target.binding))
++            elif isinstance(target, inference.AttributeEntity):
++                records.extend(self.binding(b) for b in target.bindings)
++            elif isinstance(target, RuntimeEntity):
++                records.append(self.runtime_entity(target))
++            elif isinstance(target, inference.ValueTarget):
++                records.append(self.value(target.value))
++            elif isinstance(target, _ComprehensionTarget):
++                records.append(self.comprehension(target))
++        return records
++
++    def values(self, values):
++        return [self.value(value) for value in values]
++
++    # -- helpers ---------------------------------------------------------
++    def relative(self, path):
++        if not path:
++            return ""
++        path = os.path.abspath(path)
++        relative = os.path.relpath(path, self.root)
++        if relative.startswith(os.pardir + os.sep) or relative == os.pardir:
++            return path
++        return relative
++
++    def module_name(self, path):
++        relative = self.relative(path)
++        if os.path.isabs(relative):
++            relative = os.path.basename(relative)
++        if relative.endswith(".py"):
++            relative = relative[:-3]
++        parts = [p for p in relative.replace(os.sep, "/").split("/") if p]
++        if len(parts) > 1 and parts[-1] == "__init__":
++            parts.pop()
++        return ".".join(parts)
++
++    def qualified(self, scope, name=None):
++        names = []
++        while scope is not None and scope.parent is not None:
++            names.append(scope.name)
++            scope = scope.parent
++        tree = scope.tree if scope is not None else None
++        prefix = [self.module_name(tree.path)] if tree is not None and tree.path else []
++        result = prefix + list(reversed(names))
++        if name is not None:
++            result.append(name)
++        return ".".join(p for p in result if p)
++
++    @staticmethod
++    def record(name, kind, full_name, module_path, line, column, description, docstring):
++        return {"name": name, "type": kind, "full_name": full_name,
++                "module_path": module_path, "line": line, "column": column,
++                "description": description, "docstring": docstring or ""}
++
++    # -- source definitions ----------------------------------------------
++    def binding(self, binding):
++        form = binding.form
++        tree = binding.home.tree
++        line, column = binding.position
++        module_path = self.relative(tree.path)
++        if form in (scopes.DEF, scopes.CLASS):
++            scope = tree.analysis.scope_of(binding.node)
++            if scope is not None:
++                return self.scope_definition(scope)
++        owner = binding.details.get("owner")
++        if owner is not None:
++            full_name = self.qualified(owner, binding.name)
++        else:
++            full_name = self.qualified(binding.scope, binding.name)
++        if form == scopes.PARAM:
++            return self.record(binding.name, "param", full_name, module_path, line, column,
++                               "param %s" % binding.name, "")
++        if form in (scopes.IMPORT, scopes.IMPORT_FROM):
++            return self.import_binding(binding, module_path, line, column)
++        return self.record(binding.name, "statement", full_name, module_path, line, column,
++                           _statement_description(tree, binding), "")
++
++    def import_binding(self, binding, module_path, line, column):
++        analysis = binding.home.tree.analysis
++        details = binding.details
++        values = analysis.binding_values(binding)
++        kind = "module"
++        full_name = None
++        if binding.form == scopes.IMPORT:
++            full_name = details["module"]
++        else:
++            for value in values:
++                if value.kind in (inference.MODULE, inference.CLASS, inference.FUNCTION,
++                                  inference.INSTANCE):
++                    kind = value.kind
++                    break
++            module = analysis.project.module_value(details["module"], details["level"],
++                                                   analysis.path)
++            prefix = None
++            if isinstance(module, StaticModule):
++                prefix = self.module_name(module.analysis.path)
++            elif isinstance(module, RuntimeValue):
++                prefix = getattr(module.obj, "__name__", None)
++            if not prefix:
++                prefix = details["module"] or ""
++            full_name = "%s.%s" % (prefix, details["attr"]) if prefix else details["attr"]
++        description = _import_text(binding.home.tree, binding.stmt)
++        return self.record(binding.name, kind, full_name, module_path, line, column,
++                           description, "")
++
++    def scope_definition(self, scope, instance=False):
++        node = scope.node
++        tree = scope.tree
++        line, column = tree.definition_position(node)
++        full_name = self.qualified(scope)
++        docstring = _docstring(node)
++        module_path = self.relative(tree.path)
++        if isinstance(node, ast.ClassDef):
++            if instance:
++                return self.record(node.name, "instance", full_name, module_path, line,
++                                   column, "instance of %s" % node.name, docstring)
++            return self.record(node.name, "class", full_name, module_path, line, column,
++                               "class %s" % node.name, docstring)
++        return self.record(node.name, "function", full_name, module_path, line, column,
++                           "def %s(%s)" % (node.name, _parameters(node)), docstring)
++
++    def comprehension(self, target):
++        tree = target.analysis.tree
++        node = target.target
++        generator = target.generator
++        description = "for %s in %s" % (_text(tree, generator.target),
++                                        _text(tree, generator.iter))
++        return self.record(node.id, "statement", self.qualified(tree.module, node.id),
++                           self.relative(tree.path), node.lineno, node.col_offset,
++                           description, "")
++
++    # -- values ----------------------------------------------------------
++    def value(self, value):
++        if isinstance(value, StaticInstance):
++            return self.scope_definition(value.cls.scope, instance=True)
++        if isinstance(value, (StaticClass, StaticFunction)):
++            return self.scope_definition(value.scope)
++        if isinstance(value, StaticModule):
++            path = value.analysis.path
++            full_name = self.module_name(path)
++            module = value.analysis.tree.module.node
++            return self.record(full_name.split(".")[-1], "module", full_name,
++                               self.relative(path), 1, 0, "module %s" % full_name.split(".")[-1],
++                               _docstring(module))
++        if isinstance(value, DirectoryModule):
++            full_name = ".".join(p for p in self.relative(value.directory).split(os.sep) if p)
++            name = full_name.split(".")[-1]
++            return self.record(name, "module", full_name, self.relative(value.directory),
++                               0, 0, "module %s" % name, "")
++        if isinstance(value, (RuntimeInstance, DictInstance)):
++            return self.runtime_instance(value.cls)
++        if isinstance(value, RuntimeValue):
++            return self.runtime_object(value.obj)
++        if isinstance(value, inference._DictView):
++            return self.runtime_object(getattr(dict, value.which))
++        return None
++
++    def runtime_instance(self, cls):
++        name = _type_name(cls)
++        return self.record(name, "instance", "%s.%s" % (_type_module(cls), name), "", 0, 0,
++                           "instance of %s" % name, "")
++
++    def runtime_object(self, obj, name=None, full_name=None):
++        kind = introspect.kind_of(obj)
++        if kind == inference.INSTANCE:
++            return self.runtime_instance(type(obj))
++        if kind == inference.MODULE:
++            module_name = getattr(obj, "__name__", name or "")
++            short = module_name.split(".")[-1]
++            return self.record(name or short, "module", module_name, "", 0, 0,
++                               "module %s" % (name or short), "")
++        if kind == inference.CLASS:
++            own = _type_name(obj)
++            full = full_name or "%s.%s" % (_type_module(obj),
++                                           getattr(obj, "__qualname__", own))
++            return self.record(name or own, "class", full, "", 0, 0,
++                               "class %s" % (name or own), "")
++        own = getattr(obj, "__name__", name or "")
++        if full_name is None:
++            module = getattr(obj, "__module__", None)
++            qualname = getattr(obj, "__qualname__", own)
++            if module is None:
++                owner = getattr(obj, "__objclass__", None) or getattr(obj, "__self__", None)
++                if owner is not None and not isinstance(owner, (type, types.ModuleType)):
++                    owner = type(owner)
++                module = getattr(owner, "__module__", None)
++            full_name = "%s.%s" % (module, qualname) if module else qualname
++        name = name or own
++        return self.record(name, "function", full_name, "", 0, 0,
++                           "def %s(%s)" % (name, _runtime_parameters(obj)), "")
++
++    def runtime_entity(self, entity):
++        ok, obj = entity.fetch()
++        if not ok:
++            return None
++        full_name = "%s.%s" % (entity.owner_name(), entity.name)
++        kind = introspect.kind_of(obj)
++        if kind == inference.INSTANCE:
++            if obj is None or isinstance(obj, (bool, int, float, str, bytes)):
++                return self.runtime_instance(type(obj))
++            name = _type_name(type(obj))
++            return self.record(entity.name, "instance", full_name, "", 0, 0,
++                               "instance of %s" % name, "")
++        if kind == inference.MODULE:
++            return self.runtime_object(obj, name=entity.name)
++        return self.runtime_object(obj, name=entity.name, full_name=full_name)
++
++
++def _type_name(cls):
++    if cls is type(None):
++        return "None"
++    return getattr(cls, "__name__", "object")
++
++
++def _type_module(cls):
++    module = getattr(cls, "__module__", None) or "builtins"
++    if cls in (type(None), types.GeneratorType, type(Ellipsis), type(NotImplemented)):
++        return "builtins"
++    return module
++
++
++def _docstring(node):
++    try:
++        return ast.get_docstring(node, clean=True) or ""
++    except (TypeError, AttributeError):
++        return ""
++
++
++def _parameters(node):
++    try:
++        return ast.unparse(node.args)
++    except Exception:  # unparse may choke on repaired or odd trees
++        return ", ".join(a.arg for a in _arguments(node.args))
++
++
++def _runtime_parameters(obj):
++    try:
++        signature = inspect.signature(obj)
++    except (TypeError, ValueError):
++        return "..."
++    text = str(signature)
++    return text[1:text.rfind(")")] if text.startswith("(") else "..."
++
++
++def _collapse(text):
++    return re.sub(r"\s+", " ", text).strip()
++
++
++def _text(tree, node):
++    segment = tree.segment(node)
++    if segment is None:
++        try:
++            segment = ast.unparse(node)
++        except Exception:  # odd trees
++            segment = ""
++    return _collapse(segment)
++
++
++def _import_text(tree, statement):
++    if statement is None:
++        return ""
++    segment = tree.segment(statement)
++    if segment is None or "\n" in segment:
++        try:
++            return ast.unparse(statement)
++        except Exception:  # odd trees
++            return _collapse(segment or "")
++    return _collapse(segment)
++
++
++def _statement_description(tree, binding):
++    details = binding.details
++    statement = binding.stmt
++    if binding.form == scopes.ASSIGN and details.get("value") is not None:
++        return _text(tree, details["value"])
++    if statement is None:
++        return binding.name
++    if isinstance(statement, (ast.AnnAssign, ast.AugAssign, ast.Assign, ast.Expr)):
++        return _text(tree, statement)
++    if isinstance(statement, (ast.For, ast.AsyncFor)):
++        return "for %s in %s" % (_text(tree, statement.target), _text(tree, statement.iter))
++    if isinstance(statement, (ast.With, ast.AsyncWith)):
++        return "with " + ", ".join(_text(tree, item.context_expr) + (
++            " as " + _text(tree, item.optional_vars) if item.optional_vars else "")
++            for item in statement.items)
++    if isinstance(statement, ast.ExceptHandler):
++        text = "except"
++        if statement.type is not None:
++            text += " " + _text(tree, statement.type)
++        return text + (" as %s" % statement.name if statement.name else "")
++    if isinstance(statement, ast.match_case):
++        return "case " + _text(tree, statement.pattern)
++    first = tree.line_text(statement.lineno)[statement.col_offset:]
++    return _collapse(first).rstrip(":")
+
+### sithlib/output.py (modified)
+--- sithlib/output.py
++++ sithlib/output.py
+@@ -1,11 +1,16 @@
+ """Result serialization.
+ 
+ Secret: the wire format of the result (compact JSON with a ``completions``
+-array of name/complete/type/description objects, newline-terminated).
++array of name/complete/type/description objects, or a ``definitions`` array
++of definition objects, newline-terminated).
+ """
+ 
+ import json
+ import sys
++
++
++_DEFINITION_FIELDS = ("name", "type", "full_name", "module_path", "line", "column",
++                      "description", "docstring")
+ 
+ 
+ def write_completions(completions, stream=None):
+@@ -14,6 +19,17 @@
+         {"name": name, "complete": complete, "type": kind, "description": description}
+         for name, complete, kind, description in completions
+     ]}
++    _write(payload, stream)
++
++
++def write_definitions(definitions, stream=None):
++    """``definitions``: iterable of dicts with the definition fields."""
++    payload = {"definitions": [{field: d[field] for field in _DEFINITION_FIELDS}
++                               for d in definitions]}
++    _write(payload, stream)
++
++
++def _write(payload, stream):
+     text = json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n"
+     stream = stream or sys.stdout
+     if hasattr(stream, "buffer"):
+
+### sithlib/scopes.py (modified)
+--- sithlib/scopes.py
++++ sithlib/scopes.py
+@@ -6,6 +6,7 @@
+ """
+ 
+ import ast
++import re
+ 
+ from . import parsing
+ 
+@@ -24,16 +25,27 @@
+ class Binding:
+     """One event that binds a name (or, for STAR, a set of names)."""
+ 
+-    def __init__(self, name, form, line, order, scope, **details):
++    def __init__(self, name, form, line, order, scope, node=None, position=None,
++                 stmt=None, home=None, **details):
+         self.name = name
+         self.form = form
+         self.line = line
+         self.order = order
+         self.scope = scope
++        # where the bound identifier itself is written: (1-based line, 0-based column)
++        self.position = position or (line, 0)
++        # the syntax node naming the binding, the statement (or handler/case)
++        # that performs it, and the scope whose code contains that statement
++        self.node = node
++        self.stmt = stmt
++        self.home = home or scope
+         # form-specific details:
+         #   DEF/CLASS: node
+-        #   PARAM: function (Scope), index, annotation, star ("", "*", "**")
+-        #   ASSIGN: value (expr or None), path (tuple of ints), annotation
++        #   PARAM: function (Scope), index, annotation, default, star ("", "*", "**"),
++        #          keyword_only (optional)
++        #   ASSIGN: value (expr or None), path (tuple of ints), annotation,
++        #           owner (class Scope, for instance attributes), starred
++        #   OTHER: source ("for"/"with"/None), value (iterable/context expr), path
+         #   IMPORT: module (dotted name bound), as_name (bool)
+         #   IMPORT_FROM: module, level, attr
+         #   STAR: module, level
+@@ -51,7 +63,7 @@
+         self.tree = tree
+         self.children = []
+         self.events = []
+-        self.instance_events = []  # self.<attr> assignments in __init__ (classes)
++        self.instance_events = []  # self.<attr> assignments in methods (classes)
+         self.globals_declared = set()
+ 
+     @property
+@@ -84,6 +96,16 @@
+                 found.append(node.value)
+         return found
+ 
++    def return_statements(self):
++        """``return`` statements of a function, or None for generators."""
++        found = []
++        for node in _walk_own(self.node.body if self.node is not None else []):
++            if isinstance(node, (ast.Yield, ast.YieldFrom)):
++                return None
++            if isinstance(node, ast.Return):
++                found.append(node)
++        return found
++
+     def base_expressions(self):
+         return list(getattr(self.node, "bases", []))
+ 
+@@ -114,11 +136,50 @@
+ 
+ 
+ class ScopeTree:
+-    def __init__(self, text):
++    def __init__(self, text, path=None):
++        self.path = path
+         self._lines = text.split("\n")
+         module = parsing.parse_tolerant(text)
+         self.module = Scope(Scope.MODULE, module, None, self)
+         _Collector(self.module).visit_body(module.body)
++
++    def line_text(self, line):
++        return self._lines[line - 1] if 0 < line <= len(self._lines) else ""
++
++    def segment(self, node):
++        """Source text of ``node`` (as written), or None."""
++        try:
++            first, last = node.lineno, node.end_lineno
++            if last is None or first > len(self._lines):
++                return None
++            if first == last:
++                return self._lines[first - 1][node.col_offset:node.end_col_offset]
++            parts = [self._lines[first - 1][node.col_offset:]]
++            parts.extend(self._lines[first:last - 1])
++            parts.append(self._lines[last - 1][:node.end_col_offset])
++            return "\n".join(parts)
++        except (AttributeError, IndexError, TypeError):
++            return None
++
++    def find_identifier(self, name, line, col, after_keyword=None):
++        """Position of identifier ``name`` at or after (line, col).
++
++        With ``after_keyword`` the identifier must follow that keyword.
++        """
++        pattern = re.compile((r"\b%s\s+" % after_keyword if after_keyword else r"(?<![\w.])")
++                             + r"(%s)\b" % re.escape(name))
++        for number in range(line, min(line + 50, len(self._lines)) + 1):
++            text = self._lines[number - 1]
++            start = col if number == line else 0
++            match = pattern.search(text, start)
++            if match:
++                return number, match.start(1)
++        return line, col
++
++    def definition_position(self, node):
++        """Position of the name in a ``def``/``class`` header."""
++        keyword = "class" if isinstance(node, ast.ClassDef) else "def"
++        return self.find_identifier(node.name, node.lineno, node.col_offset, keyword)
+ 
+     def scope_at(self, line, col):
+         scope = self.module
+@@ -182,6 +243,16 @@
+ class _Collector(ast.NodeVisitor):
+     def __init__(self, scope):
+         self.scope = scope
++        self.stmt = None
++
++    def visit(self, node):
++        if isinstance(node, (ast.stmt, ast.ExceptHandler, ast.match_case)):
++            saved, self.stmt = self.stmt, node
++            try:
++                return super().visit(node)
++            finally:
++                self.stmt = saved
++        return super().visit(node)
+ 
+     # -- helpers ---------------------------------------------------------
+     def visit_body(self, statements):
+@@ -196,27 +267,38 @@
+             return scope
+         return self.scope
+ 
+-    def bind(self, name, form, line, **details):
++    def bind(self, name, form, line, node=None, position=None, **details):
+         scope = self._target_scope(name) if name else self.scope
+-        binding = Binding(name, form, line, _Counter.next(), scope, **details)
++        binding = Binding(name, form, line, _Counter.next(), scope, node=node,
++                          position=position, stmt=self.stmt, home=self.scope, **details)
+         scope.events.append(binding)
+         return binding
+ 
+-    def bind_target(self, target, line, value, path=(), annotation=None):
++    def bind_target(self, target, line, value, path=(), annotation=None, starred=False):
+         if isinstance(target, ast.Name):
+-            self.bind(target.id, ASSIGN, line, value=value, path=path, annotation=annotation)
++            self.bind(target.id, ASSIGN, line, node=target, position=_start(target),
++                      value=value, path=path, annotation=annotation, starred=starred)
+         elif isinstance(target, (ast.Tuple, ast.List)):
+             for index, element in enumerate(target.elts):
+                 self.bind_target(element, line, value, path + (index,))
+         elif isinstance(target, ast.Starred):
+-            self.bind_target(target.value, line, None)
++            self.bind_target(target.value, line, None, starred=True)
+         else:
+             self.visit(target)
+ 
+-    def bind_plain(self, target, line):
+-        for node in ast.walk(target):
+-            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+-                self.bind(node.id, OTHER, line)
++    def bind_plain(self, target, line, source=None, value=None, path=()):
++        if isinstance(target, ast.Name):
++            self.bind(target.id, OTHER, line, node=target, position=_start(target),
++                      source=source, value=value, path=path)
++        elif isinstance(target, (ast.Tuple, ast.List)):
++            for index, element in enumerate(target.elts):
++                self.bind_plain(element, line, source, value, path + (index,))
++        elif isinstance(target, ast.Starred):
++            self.bind_plain(target.value, line)
++        else:
++            for node in ast.walk(target):
++                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
++                    self.bind(node.id, OTHER, line, node=node, position=_start(node))
+ 
+     # -- scopes ----------------------------------------------------------
+     def _visit_function(self, node):
+@@ -225,35 +307,41 @@
+         args = node.args
+         for default in args.defaults + [d for d in args.kw_defaults if d is not None]:
+             self.visit(default)
+-        self.bind(node.name, DEF, node.lineno, node=node)
+-        child = Scope(Scope.FUNCTION, node, self.scope, self.scope.tree)
++        tree = self.scope.tree
++        self.bind(node.name, DEF, node.lineno, node=node,
++                  position=tree.definition_position(node))
++        child = Scope(Scope.FUNCTION, node, self.scope, tree)
+         self.scope.children.append(child)
+         positional = args.posonlyargs + args.args
++        defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+         index = 0
+-        for arg in positional:
+-            child_bind(child, arg.arg, node.lineno, function=child, index=index,
+-                       annotation=arg.annotation, star="")
++        for arg, default in zip(positional, defaults):
++            child_bind(child, arg, node, function=child, index=index,
++                       annotation=arg.annotation, default=default, star="")
+             index += 1
+         if args.vararg:
+-            child_bind(child, args.vararg.arg, node.lineno, function=child, index=index,
+-                       annotation=None, star="*")
++            child_bind(child, args.vararg, node, function=child, index=index,
++                       annotation=None, default=None, star="*")
+             index += 1
+-        for arg in args.kwonlyargs:
+-            child_bind(child, arg.arg, node.lineno, function=child, index=index,
+-                       annotation=arg.annotation, star="")
++        for arg, default in zip(args.kwonlyargs, args.kw_defaults):
++            child_bind(child, arg, node, function=child, index=index,
++                       annotation=arg.annotation, default=default, star="", keyword_only=True)
+             index += 1
+         if args.kwarg:
+-            child_bind(child, args.kwarg.arg, node.lineno, function=child, index=index,
+-                       annotation=None, star="**")
++            child_bind(child, args.kwarg, node, function=child, index=index,
++                       annotation=None, default=None, star="**")
+         collector = _Collector(child)
+         for statement in _walk_own(node.body):
+             if isinstance(statement, ast.Global):
+                 child.globals_declared.update(statement.names)
+         collector.visit_body(node.body)
+         parent_class = child.class_scope()
+-        if parent_class is not None and node.name == "__init__" and positional:
+-            self_name = positional[0].arg
+-            _collect_instance_attributes(parent_class, child, node.body, self_name)
++        if parent_class is not None and positional:
++            decorators = child.decorator_names()
++            if "staticmethod" not in decorators and "classmethod" not in decorators:
++                self_name = positional[0].arg
++                _collect_instance_attributes(parent_class, child, node.body, self_name,
++                                             initializer=node.name == "__init__")
+ 
+     visit_FunctionDef = _visit_function
+     visit_AsyncFunctionDef = _visit_function
+@@ -263,8 +351,10 @@
+             self.visit(deco)
+         for base in node.bases:
+             self.visit(base)
+-        self.bind(node.name, CLASS, node.lineno, node=node)
+-        child = Scope(Scope.CLASS, node, self.scope, self.scope.tree)
++        tree = self.scope.tree
++        self.bind(node.name, CLASS, node.lineno, node=node,
++                  position=tree.definition_position(node))
++        child = Scope(Scope.CLASS, node, self.scope, tree)
+         self.scope.children.append(child)
+         _Collector(child).visit_body(node.body)
+ 
+@@ -294,7 +384,8 @@
+         if node.value is not None:
+             self.visit(node.value)
+         if isinstance(node.target, ast.Name):
+-            self.bind(node.target.id, ASSIGN, node.lineno, value=node.value, path=(),
++            self.bind(node.target.id, ASSIGN, node.lineno, node=node.target,
++                      position=_start(node.target), value=node.value, path=(),
+                       annotation=node.annotation)
+         else:
+             self.visit(node.target)
+@@ -305,17 +396,21 @@
+             name = node.target.id
+             scope = self._target_scope(name)
+             if not any(e.name == name for e in scope.events):
+-                self.bind(name, OTHER, node.lineno)
++                self.bind(name, OTHER, node.lineno, node=node.target,
++                          position=_start(node.target))
++        else:
++            self.visit(node.target)
+ 
+     def visit_NamedExpr(self, node):
+         self.visit(node.value)
+         if isinstance(node.target, ast.Name):
+-            self.bind(node.target.id, ASSIGN, node.lineno, value=node.value, path=(),
++            self.bind(node.target.id, ASSIGN, node.lineno, node=node.target,
++                      position=_start(node.target), value=node.value, path=(),
+                       annotation=None)
+ 
+     def _visit_for(self, node):
+         self.visit(node.iter)
+-        self.bind_plain(node.target, node.lineno)
++        self.bind_plain(node.target, node.lineno, "for", node.iter)
+         self.visit_body(node.body)
+         self.visit_body(node.orelse)
+ 
+@@ -326,7 +421,7 @@
+         for item in node.items:
+             self.visit(item.context_expr)
+             if item.optional_vars is not None:
+-                self.bind_plain(item.optional_vars, node.lineno)
++                self.bind_plain(item.optional_vars, node.lineno, "with", item.context_expr)
+         self.visit_body(node.body)
+ 
+     visit_With = _visit_with
+@@ -336,73 +431,108 @@
+         if node.type is not None:
+             self.visit(node.type)
+         if node.name:
+-            self.bind(node.name, EXCEPT, node.lineno, type_expr=node.type)
++            tree = self.scope.tree
++            position = tree.find_identifier(node.name, node.lineno, node.col_offset, "as")
++            self.bind(node.name, EXCEPT, node.lineno, node=node, position=position,
++                      type_expr=node.type)
+         self.visit_body(node.body)
+ 
+     def visit_Import(self, node):
+         for alias in node.names:
+             if alias.asname:
+-                self.bind(alias.asname, IMPORT, node.lineno, module=alias.name, as_name=True)
++                self.bind(alias.asname, IMPORT, node.lineno, node=alias,
++                          position=_as_position(alias), module=alias.name, as_name=True)
+             else:
+                 first = alias.name.split(".")[0]
+-                self.bind(first, IMPORT, node.lineno, module=first, as_name=False)
++                self.bind(first, IMPORT, node.lineno, node=alias, position=_start(alias),
++                          module=first, as_name=False)
+ 
+     def visit_ImportFrom(self, node):
+         module = node.module or ""
+         for alias in node.names:
+             if alias.name == "*":
+-                self.bind(None, STAR, node.lineno, module=module, level=node.level)
++                self.bind(None, STAR, node.lineno, node=alias, module=module, level=node.level)
+             else:
+-                self.bind(alias.asname or alias.name, IMPORT_FROM, node.lineno,
+-                          module=module, level=node.level, attr=alias.name)
++                position = _as_position(alias) if alias.asname else _start(alias)
++                self.bind(alias.asname or alias.name, IMPORT_FROM, node.lineno, node=alias,
++                          position=position, module=module, level=node.level, attr=alias.name)
+ 
+     def visit_MatchAs(self, node):
+         if node.pattern is not None:
+             self.visit(node.pattern)
+         if node.name:
+-            self.bind(node.name, OTHER, node.lineno)
++            position = (node.end_lineno, node.end_col_offset - len(node.name))
++            self.bind(node.name, OTHER, node.lineno, node=node, position=position)
+ 
+     def visit_MatchStar(self, node):
+         if node.name:
+-            self.bind(node.name, OTHER, node.lineno)
++            position = (node.end_lineno, node.end_col_offset - len(node.name))
++            self.bind(node.name, OTHER, node.lineno, node=node, position=position)
+ 
+     def visit_MatchMapping(self, node):
+         self.generic_visit(node)
+         if node.rest:
+-            self.bind(node.rest, OTHER, node.lineno)
++            position = self.scope.tree.find_identifier(node.rest, node.lineno, node.col_offset)
++            self.bind(node.rest, OTHER, node.lineno, node=node, position=position)
+ 
+     def visit_TypeAlias(self, node):
+         if isinstance(node.name, ast.Name):
+-            self.bind(node.name.id, OTHER, node.lineno)
+-
+-
+-def child_bind(scope, name, line, **details):
+-    scope.events.append(Binding(name, PARAM, line, _Counter.next(), scope, **details))
+-
+-
+-def _collect_instance_attributes(class_scope, init_scope, body, self_name):
++            self.bind(node.name.id, OTHER, node.lineno, node=node.name,
++                      position=_start(node.name))
++
++
++def _start(node):
++    return (getattr(node, "lineno", 1), getattr(node, "col_offset", 0))
++
++
++def _as_position(alias):
++    """Position of the ``as`` name of an import alias."""
++    return (alias.end_lineno, alias.end_col_offset - len(alias.asname))
++
++
++def child_bind(scope, arg, function_node, **details):
++    scope.events.append(Binding(arg.arg, PARAM, function_node.lineno, _Counter.next(), scope,
++                                node=arg, position=_start(arg), stmt=function_node,
++                                home=scope, **details))
++
++
++def _collect_instance_attributes(class_scope, method_scope, body, self_name, initializer):
++    """Record ``<self>.<attr> = ...`` assignments of a method on its class."""
++    found = []
++
+     def is_self_attr(target):
+         return (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
+                 and target.value.id == self_name)
+ 
+-    def record(target, line, value, path, annotation=None):
++    def record(target, statement, value, path, annotation=None):
+         if is_self_attr(target):
+-            class_scope.instance_events.append(Binding(
+-                target.attr, ASSIGN, line, _Counter.next(), init_scope,
+-                value=value, path=path, annotation=annotation))
++            found.append(Binding(
++                target.attr, ASSIGN, statement.lineno, _Counter.next(), method_scope,
++                node=target, position=(target.end_lineno,
++                                       target.end_col_offset - len(target.attr)),
++                stmt=statement, home=method_scope, value=value, path=path,
++                annotation=annotation, owner=class_scope))
+         elif isinstance(target, (ast.Tuple, ast.List)):
+             for index, element in enumerate(target.elts):
+-                record(element, line, value, path + (index,))
++                record(element, statement, value, path + (index,))
+         elif isinstance(target, ast.Starred):
+-            record(target.value, line, None, ())
++            record(target.value, statement, None, ())
+ 
+     for node in _walk_own(body):
+         if isinstance(node, ast.Assign):
+             for target in node.targets:
+-                record(target, node.lineno, node.value, ())
++                record(target, node, node.value, ())
+         elif isinstance(node, ast.AnnAssign):
+-            record(node.target, node.lineno, node.value, (), node.annotation)
++            record(node.target, node, node.value, (), node.annotation)
+         elif isinstance(node, ast.AugAssign) and is_self_attr(node.target):
+-            if not any(e.name == node.target.attr for e in class_scope.instance_events):
+-                class_scope.instance_events.append(Binding(
+-                    node.target.attr, OTHER, node.lineno, _Counter.next(), init_scope))
++            if not any(e.name == node.target.attr for e in class_scope.instance_events + found):
++                target = node.target
++                found.append(Binding(
++                    target.attr, OTHER, node.lineno, _Counter.next(), method_scope,
++                    node=target, position=(target.end_lineno,
++                                           target.end_col_offset - len(target.attr)),
++                    stmt=node, home=method_scope, owner=class_scope))
++    if initializer:
++        class_scope.instance_events[:0] = found
++    else:
++        class_scope.instance_events.extend(found)
+
+### tests/test_navigation.py (created)
+--- tests/test_navigation.py
++++ tests/test_navigation.py
+@@ -0,0 +1,217 @@
++"""End-to-end tests for ``sith.py infer`` / ``goto`` / ``complete``."""
++
++import json
++import os
++import subprocess
++import sys
++import tempfile
++import textwrap
++import unittest
++
++SITH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sith.py")
++
++EXAMPLE = '''\
++import os
++from dataclasses import dataclass
++from typing import Optional
++
++
++class Calculator:
++    """A calculator."""
++
++    def __init__(self, start=0):
++        self.value = start
++
++    def add(self, a, b):
++        return a + b
++
++    def maybe(self, flag):
++        if flag:
++            return 1
++        return "one"
++
++    def nothing(self):
++        pass
++
++
++@dataclass(frozen=True)
++class Point:
++    x: int
++    label: str = "p"
++
++
++calc = Calculator()
++total = calc.add(1, 2)
++m = calc.maybe(True)
++z = calc.nothing()
++p = Point(1)
++v = calc.value
++num = 42
++if num > 3:
++    cond = 1
++else:
++    cond = "s"
++cond
++
++
++def narrow(obj, opt: Optional[Calculator] = None):
++    if isinstance(obj, Calculator):
++        obj
++    obj
++    if opt is None:
++        return
++    opt
++'''
++
++
++class SithTestCase(unittest.TestCase):
++    def setUp(self):
++        self.directory = tempfile.TemporaryDirectory()
++        self.path = os.path.join(self.directory.name, "example.py")
++        with open(self.path, "w") as handle:
++            handle.write(EXAMPLE)
++        self.lines = EXAMPLE.split("\n")
++
++    def tearDown(self):
++        self.directory.cleanup()
++
++    def run_sith(self, *args):
++        return subprocess.run([sys.executable, SITH] + [str(a) for a in args],
++                              capture_output=True, text=True)
++
++    def position(self, needle, name, occurrence=0):
++        for number, text in enumerate(self.lines, 1):
++            if needle in text:
++                col = -1
++                for _ in range(occurrence + 1):
++                    col = text.index(name, col + 1)
++                return number, col
++        raise AssertionError("needle not found: %r" % needle)
++
++    def definitions(self, command, needle, name, occurrence=0):
++        line, col = self.position(needle, name, occurrence)
++        result = self.run_sith(command, self.path, line, col)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        return json.loads(result.stdout)["definitions"]
++
++    def names(self, command, needle, name, occurrence=0):
++        return [(d["name"], d["type"])
++                for d in self.definitions(command, needle, name, occurrence)]
++
++
++class InferTest(SithTestCase):
++    def test_instance_of_class(self):
++        [found] = self.definitions("infer", "calc = Calculator()", "calc")
++        self.assertEqual(found, {
++            "name": "Calculator", "type": "instance", "full_name": "example.Calculator",
++            "module_path": "example.py", "line": 6, "column": 6,
++            "description": "instance of Calculator", "docstring": "A calculator."})
++
++    def test_literal_and_call_arguments(self):
++        [found] = self.definitions("infer", "num = 42", "num")
++        self.assertEqual((found["full_name"], found["module_path"], found["line"],
++                          found["column"]), ("builtins.int", "", 0, 0))
++        self.assertEqual(self.names("infer", "total = calc", "total"), [("int", "instance")])
++
++    def test_union_and_none_returns(self):
++        self.assertEqual(self.names("infer", "m = calc", "m"),
++                         [("int", "instance"), ("str", "instance")])
++        self.assertEqual(self.names("infer", "z = calc", "z"), [("None", "instance")])
++
++    def test_attributes_and_dataclass_fields(self):
++        self.assertEqual(self.names("infer", "v = calc.value", "v"), [("int", "instance")])
++        self.assertEqual(self.names("infer", "p = Point(1)", "p"), [("Point", "instance")])
++
++    def test_conditional_assignment(self):
++        self.assertEqual(self.names("infer", "cond", "cond", 0)[0], ("int", "instance"))
++        line = self.lines.index("cond") + 1
++        result = json.loads(self.run_sith("infer", self.path, line, 0).stdout)
++        self.assertEqual([d["name"] for d in result["definitions"]], ["int", "str"])
++
++    def test_narrowing(self):
++        line = self.lines.index("        obj") + 1
++        result = json.loads(self.run_sith("infer", self.path, line, 8).stdout)
++        self.assertEqual([d["name"] for d in result["definitions"]], ["Calculator"])
++        line = self.lines.index("    obj") + 1
++        result = json.loads(self.run_sith("infer", self.path, line, 4).stdout)
++        self.assertEqual(result["definitions"], [])
++        line = self.lines.index("    opt") + 1
++        result = json.loads(self.run_sith("infer", self.path, line, 4).stdout)
++        self.assertEqual([d["name"] for d in result["definitions"]], ["Calculator"])
++
++    def test_function_name(self):
++        [found] = self.definitions("infer", "total = calc.add", "add")
++        self.assertEqual((found["type"], found["full_name"], found["description"]),
++                         ("function", "example.Calculator.add", "def add(self, a, b)"))
++
++    def test_not_on_name(self):
++        line, _ = self.position("num = 42", "num")
++        self.assertEqual(self.run_sith("infer", self.path, line, 7).returncode, 1)
++        self.assertEqual(self.run_sith("goto", self.path, line, 7).returncode, 1)
++
++
++class GotoTest(SithTestCase):
++    def test_assignment_and_branches(self):
++        [found] = self.definitions("goto", "total = calc", "calc")
++        self.assertEqual((found["name"], found["type"], found["line"], found["column"]),
++                         ("calc", "statement", 30, 0))
++        line = self.lines.index("cond") + 1
++        result = json.loads(self.run_sith("goto", self.path, line, 0).stdout)
++        self.assertEqual([(d["line"], d["column"]) for d in result["definitions"]],
++                         [(38, 4), (40, 4)])
++
++    def test_import_and_class(self):
++        [found] = self.definitions("goto", "    opt", "opt")
++        self.assertEqual(found["type"], "param")
++        [found] = self.definitions("goto", "calc = Calculator()", "Calculator")
++        self.assertEqual((found["type"], found["line"], found["column"]), ("class", 6, 6))
++        [found] = self.definitions("goto", "class Point", "Point")
++        self.assertEqual(found["description"], "class Point")
++
++    def test_unresolved(self):
++        with open(self.path, "a") as handle:
++            handle.write("missing_name\n")
++        line = len(self.lines)
++        result = self.run_sith("goto", self.path, line, 0)
++        self.assertEqual((result.returncode, json.loads(result.stdout)["definitions"]),
++                         (0, []))
++
++
++class CompleteTest(SithTestCase):
++    def complete(self, source, line, col):
++        with open(self.path, "w") as handle:
++            handle.write(textwrap.dedent(source))
++        result = self.run_sith("complete", self.path, line, col)
++        return [c["name"] for c in json.loads(result.stdout)["completions"]]
++
++    def test_union_and_narrowing(self):
++        source = '''\
++        class A:
++            def a_method(self): pass
++        class B:
++            def b_method(self): pass
++        def f(flag, obj):
++            v = A() if flag else B()
++            v.
++            if isinstance(obj, B):
++                obj.
++        '''
++        self.assertTrue({"a_method", "b_method"} <= set(self.complete(source, 7, 6)))
++        names = self.complete(source, 9, 12)
++        self.assertIn("b_method", names)
++        self.assertNotIn("a_method", names)
++
++    def test_dataclass_fields(self):
++        source = '''\
++        import dataclasses as dc
++        @dc.dataclass
++        class P:
++            x: int
++            y: str = ""
++        P(1).
++        '''
++        self.assertTrue({"x", "y"} <= set(self.complete(source, 6, 5)))
++
++
++if __name__ == "__main__":
++    unittest.main()
+

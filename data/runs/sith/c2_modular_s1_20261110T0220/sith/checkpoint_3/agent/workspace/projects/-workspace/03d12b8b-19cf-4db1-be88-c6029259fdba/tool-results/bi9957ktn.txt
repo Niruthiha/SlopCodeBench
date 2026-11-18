@@ -1,0 +1,721 @@
+"""The `infer` and `goto` commands: what a name evaluates to, and where it is defined."""
+import ast
+import keyword
+import re
+from dataclasses import dataclass, field
+
+from . import context as cursor_context
+from .definitions import DefinitionFactory, char_column, find_word, sorted_unique
+from .errors import SithError
+from .inference import Inferrer, RuntimeInstance
+from .locate import find_scope
+from .modules import Importer, ModuleContext
+from .parsing import parse_tolerant, strip_comment
+from .source import load_document
+from .values import LocalClass, LocalFunction, LocalInstance, unique
+
+INFER = "infer"
+GOTO = "goto"
+
+
+@dataclass
+class Occurrence:
+    """An identifier in the source and the role it plays there."""
+
+    kind: str
+    name: str
+    start: int
+    end: int
+    node: ast.AST = None
+    extra: dict = field(default_factory=dict)
+
+
+def navigate(command, path, line, col, project=None):
+    """Definitions for `command` ("infer" or "goto") at the cursor in `path`."""
+    document = load_document(path)
+    document.check_position(line, col)
+    root = project or document.directory
+    importer = Importer(root, document.directory)
+    tree = parse_tolerant(document.text)
+    context = ModuleContext(document.path, "__main__", tree, document.text)
+    importer.register(context)
+    inferrer = Inferrer(importer)
+    navigator = Navigator(context, inferrer, DefinitionFactory(inferrer, root), line, col)
+    occurrence = navigator.occurrence()
+    if occurrence is None:
+        raise SithError(f"no name at line {line}, column {col}")
+    if command == GOTO:
+        sources = navigator.goto(occurrence)
+    else:
+        sources = navigator.infer(occurrence)
+    factory = navigator.factory
+    return sorted_unique(factory.from_source(source) for source in sources)
+
+
+class Navigator:
+    def __init__(self, context, inferrer, factory, line, col):
+        self.context = context
+        self.inferrer = inferrer
+        self.factory = factory
+        self.line = line
+        self.col = col
+        self.text = context.lines[line - 1] if line <= len(context.lines) else ""
+        self.parents = {}
+        for parent in ast.walk(context.tree):
+            for child in ast.iter_child_nodes(parent):
+                self.parents[id(child)] = parent
+
+    # -- locating the identifier under the cursor ---------------------------------
+
+    def occurrence(self):
+        candidates = list(self._occurrences())
+        inside = [o for o in candidates if o.start <= self.col < o.end]
+        touching = [o for o in candidates if o.start <= self.col <= o.end]
+        for group in (inside, touching):
+            if group:
+                return min(group, key=lambda o: o.end - o.start)
+        return self._textual_occurrence()
+
+    def _char(self, byte_col):
+        return char_column(self.context, self.line, byte_col)
+
+    def _occurrences(self):
+        line = self.line
+        for node in ast.walk(self.context.tree):
+            if isinstance(node, ast.Name):
+                if node.lineno == line == node.end_lineno:
+                    yield Occurrence("name", node.id, self._char(node.col_offset),
+                                     self._char(node.end_col_offset), node)
+            elif isinstance(node, ast.Attribute):
+                if node.end_lineno == line:
+                    end = self._char(node.end_col_offset)
+                    start = end - len(node.attr)
+                    if self.text[start:end] == node.attr:
+                        yield Occurrence("attr", node.attr, start, end, node)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.lineno == line:
+                    match = re.compile(r"(?:async\s+)?(?:def|class)\s+").match(
+                        self.text, self._char(node.col_offset))
+                    if match and self.text.startswith(node.name, match.end()):
+                        yield Occurrence("def", node.name, match.end(),
+                                         match.end() + len(node.name), node)
+            elif isinstance(node, ast.arg):
+                if node.lineno == line:
+                    start = self._char(node.col_offset)
+                    yield Occurrence("param", node.arg, start, start + len(node.arg), node)
+            elif isinstance(node, ast.alias):
+                yield from self._alias_occurrences(node)
+            elif isinstance(node, ast.ImportFrom):
+                yield from self._import_from_module(node)
+            elif isinstance(node, ast.keyword):
+                if node.arg is not None and node.lineno == line:
+                    start = self._char(node.col_offset)
+                    yield Occurrence("kwarg", node.arg, start, start + len(node.arg), node,
+                                     {"call": self.parents.get(id(node))})
+            elif isinstance(node, ast.ExceptHandler):
+                if node.name and node.lineno == line:
+                    match = re.search(r"\bas\s+(" + re.escape(node.name) + r")\b", self.text)
+                    if match:
+                        yield Occurrence("bound", node.name, match.start(1), match.end(1), node)
+            elif isinstance(node, (ast.MatchAs, ast.MatchStar, ast.MatchMapping)):
+                name = getattr(node, "name", None) or getattr(node, "rest", None)
+                if name and node.end_lineno == line:
+                    end = self._char(node.end_col_offset)
+                    start = self.text.rfind(name, 0, end)
+                    if start >= 0:
+                        yield Occurrence("bound", name, start, start + len(name), node)
+            elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                if node.lineno == line:
+                    position = self._char(node.col_offset)
+                    for name in node.names:
+                        found = find_word(self.text, name, position + 1)
+                        if found is not None:
+                            position = found
+                            yield Occurrence("name", name, found, found + len(name), node)
+            elif isinstance(node, ast.Constant):
+                if node.value is None or isinstance(node.value, bool):
+                    if node.lineno == line == node.end_lineno:
+                        yield Occurrence("constant", repr(node.value), self._char(node.col_offset),
+                                         self._char(node.end_col_offset), node)
+
+    def _alias_occurrences(self, alias):
+        if alias.lineno != self.line or alias.name == "*":
+            return
+        statement = self.parents.get(id(alias))
+        start = self._char(alias.col_offset)
+        if isinstance(statement, ast.Import):
+            position = start
+            parts = alias.name.split(".")
+            for index, part in enumerate(parts):
+                found = self.text.find(part, position)
+                if found < 0:
+                    break
+                if index == 0 and not alias.asname:
+                    yield Occurrence("bound", part, found, found + len(part), alias)
+                else:
+                    yield Occurrence("module", part, found, found + len(part), alias,
+                                     {"module": ".".join(parts[:index + 1]), "level": 0})
+                position = found + len(part)
+        elif isinstance(statement, ast.ImportFrom):
+            if alias.asname:
+                yield Occurrence("imported", alias.name, start, start + len(alias.name), alias,
+                                 {"statement": statement})
+        else:
+            return
+        if isinstance(statement, ast.ImportFrom) and not alias.asname:
+            yield Occurrence("bound", alias.name, start, start + len(alias.name), alias)
+        if alias.asname:
+            found = find_word(self.text, alias.asname, start + len(alias.name))
+            if found is not None:
+                yield Occurrence("bound", alias.asname, found, found + len(alias.asname), alias)
+
+    def _import_from_module(self, node):
+        if node.lineno != self.line:
+            return
+        match = re.compile(r"from\s+(\.*)\s*([\w.]*)").match(self.text, self._char(node.col_offset))
+        if not match or not match.group(2):
+            return
+        position = match.start(2)
+        parts = match.group(2).split(".")
+        for index, part in enumerate(parts):
+            yield Occurrence("module", part, position, position + len(part), node,
+                             {"module": ".".join(parts[:index + 1]), "level": node.level})
+            position += len(part) + 1
+
+    def _textual_occurrence(self):
+        """An identifier the parser lost (e.g. on a repaired line), if any."""
+        text = self.text
+        if self.col > len(strip_comment(text)) or self._in_string():
+            return None
+        start = end = self.col
+        while start > 0 and cursor_context.is_identifier_char(text[start - 1]):
+            start -= 1
+        while end < len(text) and cursor_context.is_identifier_char(text[end]):
+            end += 1
+        word = text[start:end]
+        if not word or word[0].isdigit() or keyword.iskeyword(word) or not word.isidentifier():
+            return None
+        receiver = None
+        if text[:start].rstrip().endswith("."):
+            before = "\n".join(self.context.lines[:self.line - 1] + [text[:start].rstrip()[:-1]])
+            receiver = cursor_context.extract_receiver(before)
+            if not receiver:
+                return None
+        return Occurrence("text", word, start, end, None, {"receiver": receiver})
+
+    def _in_string(self):
+        for node in ast.walk(self.context.tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+                start = (node.lineno, self._char(node.col_offset) if node.lineno == self.line else -1)
+                end = (node.end_lineno, self._char(node.end_col_offset)
+                       if node.end_lineno == self.line else 1 << 30)
+                if start <= (self.line, self.col) < end:
+                    return True
+        return False
+
+    # -- resolution ----------------------------------------------------------------
+
+    def scope(self):
+        return find_scope(self.context, self.line, self.col, self.text)
+
+    def _byte_position(self, col):
+        return (self.line, len(self.text[:col].encode("utf-8")))
+
+    def goto(self, occurrence):
+        """Bindings (or values, for runtime objects) defining the name at the cursor."""
+        handler = getattr(self, "_goto_" + occurrence.kind)
+        return handler(occurrence)
+
+    def infer(self, occurrence):
+        """Values the name at the cursor evaluates to."""
+        handler = getattr(self, "_infer_" + occurrence.kind)
+        return unique(handler(occurrence))
+
+    # names
+
+    def _name_facts(self, occurrence):
+        node = occurrence.node
+        position = (node.lineno, node.col_offset) if isinstance(node, ast.Name) else \
+            self._byte_position(occurrence.start)
+        return self.inferrer.name_facts(occurrence.name, self.scope(), position)
+
+    def _store_binding(self, occurrence):
+        node = occurrence.node
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            binding = self.context.binding_of(node)
+            if binding is not None:
+                return binding
+            parent = self.parents.get(id(node))
+            if isinstance(parent, ast.AugAssign):
+                scope = self.scope()
+                return self.inferrer.synthetic_binding(scope)("aug", parent, node.id)
+        return None
+
+    def _goto_name(self, occurrence):
+        binding = self._store_binding(occurrence)
+        if binding is not None:
+            return [binding]
+        return [fact.binding for fact in self._name_facts(occurrence)]
+
+    def _infer_name(self, occurrence):
+        binding = self._store_binding(occurrence)
+        if binding is not None and binding.kind != "augassign":
+            return self.inferrer.binding_values(binding)
+        values = []
+        for fact in self._name_facts(occurrence):
+            values += self.inferrer.fact_values(fact)
+        return values
+
+    # attributes
+
+    def _instance_attribute(self, occurrence, bases):
+        """The `self.attr = ...` binding at the cursor, with the instance it belongs to."""
+        node = occurrence.node
+        for base in bases:
+            if isinstance(base, LocalInstance):
+                for cls in self.inferrer.members.mro(base.cls):
+                    for binding in self.inferrer.members.instance_attribute_bindings(cls).get(
+                            occurrence.name, []):
+                        if binding.target is node:
+                            return binding, base
+        return None, None
+
+    def _goto_attr(self, occurrence):
+        node = occurrence.node
+        bases = self.inferrer.infer_values(node.value, self.scope())
+        if isinstance(node.ctx, ast.Store):
+            binding, _ = self._instance_attribute(occurrence, bases)
+            if binding is not None:
+                return [binding]
+        sources = []
+        for base in bases:
+            sources += self.inferrer.members.member_definitions(base, occurrence.name)
+        return sources
+
+    def _infer_attr(self, occurrence):
+        node = occurrence.node
+        bases = self.inferrer.infer_values(node.value, self.scope())
+        if isinstance(node.ctx, ast.Store):
+            binding, instance = self._instance_attribute(occurrence, bases)
+            if binding is not None:
+                return self.inferrer.members.instance_attribute_values(binding, instance)
+        values = []
+        for base in bases:
+            values += self.inferrer.members.member_values(base, occurrence.name)
+        return values
+
+    # definitions and other bound names
+
+    def _bound_binding(self, occurrence):
+        return self.context.binding_of(occurrence.node)
+
+    def _goto_bound(self, occurrence):
+        binding = self._bound_binding(occurrence)
+        return [binding] if binding is not None else []
+
+    def _infer_bound(self, occurrence):
+        binding = self._bound_binding(occurrence)
+        return self.inferrer.binding_values(binding) if binding is not None else []
+
+    _goto_def = _goto_param = _goto_bound
+    _infer_def = _infer_param = _infer_bound
+
+    # modules named in import statements
+
+    def _module_value(self, occurrence):
+        module = self.inferrer.importer.import_module(
+            self.context, occurrence.extra["module"], occurrence.extra["level"])
+        return [module] if module is not None else []
+
+    _goto_module = _infer_module = _module_value
+
+    def _goto_imported(self, occurrence):
+        statement = occurrence.extra["statement"]
+        base = self.inferrer.importer.import_module(self.context, statement.module or "",
+                                                    statement.level)
+        if base is not None:
+            found = self.inferrer.members.member_definitions(base, occurrence.name)
+            if found:
+                return found
+        return self._infer_imported(occurrence)
+
+    def _infer_imported(self, occurrence):
+        statement = occurrence.extra["statement"]
+        return self.inferrer.resolve_from_values(self.context, statement.module or "",
+                                                 statement.level, occurrence.name)
+
+    # keyword arguments
+
+    def _keyword_parameters(self, occurrence):
+        call = occurrence.extra.get("call")
+        if not isinstance(call, ast.Call):
+            return []
+        bindings = []
+        for function in self.inferrer.infer_values(call.func, self.scope()):
+            if isinstance(function, LocalClass):
+                init = self.inferrer.members.find_method(function, "__init__")
+                if init is None:
+                    # Generated `__init__` (dataclasses and the like): parameters are the fields.
+                    for cls in self.inferrer.members.mro(function):
+                        bindings += [b for b in cls.scope.bindings.get(occurrence.name, [])
+                                     if b.extra.get("annotation") is not None]
+                    continue
+                function = init
+            elif isinstance(function, LocalInstance):
+                function = self.inferrer.members.find_method(function.cls, "__call__")
+            if isinstance(function, LocalFunction):
+                bindings += [b for b in function.scope.bindings.get(occurrence.name, [])
+                             if b.kind == "param"]
+        return bindings
+
+    def _goto_kwarg(self, occurrence):
+        return self._keyword_parameters(occurrence)
+
+    def _infer_kwarg(self, occurrence):
+        values = []
+        for binding in self._keyword_parameters(occurrence):
+            values += self.inferrer.binding_values(binding)
+        return values
+
+    # literals
+
+    def _goto_constant(self, occurrence):
+        return []
+
+    def _infer_constant(self, occurrence):
+        return [RuntimeInstance(type(occurrence.node.value))]
+
+    # identifiers missing from the (repaired) syntax tree
+
+    def _text_receiver_values(self, occurrence):
+        try:
+            expression = ast.parse(occurrence.extra["receiver"].strip(), mode="eval").body
+        except (SyntaxError, ValueError):
+            return []
+        return self.inferrer.infer_values(expression, self.scope(),
+                                          pos=self._byte_position(occurrence.start))
+
+    def _goto_text(self, occurrence):
+        if occurrence.extra.get("receiver"):
+            sources = []
+            for base in self._text_receiver_values(occurrence):
+                sources += self.inferrer.members.member_definitions(base, occurrence.name)
+            return sources
+        return [fact.binding for fact in self._name_facts(occurrence)]
+
+    def _infer_text(self, occurrence):
+        if occurrence.extra.get("receiver"):
+            values = []
+            for base in self._text_receiver_values(occurrence):
+                values += self.inferrer.members.member_values(base, occurrence.name)
+            return values
+        values = []
+        for fact in self._name_facts(occurrence):
+            values += self.inferrer.fact_values(fact)
+        return values
+"""Attribute resolution: the members exposed by each kind of value."""
+import ast
+
+from .entries import BindingEntry, ValueEntry
+from .scopes import Binding, walk_local
+from .values import (
+    LocalClass,
+    LocalFunction,
+    LocalInstance,
+    LocalModule,
+    RuntimeClass,
+    RuntimeFunction,
+    RuntimeInstance,
+    RuntimeModule,
+    runtime_sample,
+    unique,
+    wrap_runtime,
+)
+
+
+def _sample_function():
+    """Stand-in used to list the attributes of locally defined functions."""
+
+
+def runtime_entries(obj):
+    """Entries for `dir(obj)`, each resolving the attribute lazily."""
+    try:
+        names = dir(obj)
+    except Exception:
+        return {}
+    return {name: ValueEntry(lambda name=name: wrap_runtime(getattr(obj, name))) for name in names}
+
+
+def is_public(name):
+    return not name.startswith("_")
+
+
+class MemberResolver:
+    def __init__(self, inferrer):
+        self.inferrer = inferrer
+        self._attribute_cache = {}
+
+    def all(self, value):
+        """Every attribute entry of `value`, keyed by name."""
+        if isinstance(value, LocalModule):
+            return self.inferrer.scope_entries(value.context.root)
+        if isinstance(value, RuntimeModule):
+            return runtime_entries(value.obj)
+        if isinstance(value, LocalClass):
+            return self.class_members(value)
+        if isinstance(value, LocalInstance):
+            return self.instance_members(value.cls)
+        if isinstance(value, (RuntimeClass, RuntimeFunction)):
+            return runtime_entries(value.obj)
+        if isinstance(value, RuntimeInstance):
+            return runtime_entries(runtime_sample(value.cls))
+        if isinstance(value, LocalFunction):
+            return runtime_entries(_sample_function)
+        return {}
+
+    def public(self, value):
+        return {name: entry for name, entry in self.all(value).items() if is_public(name)}
+
+    def member(self, value, name):
+        """The (first) value of attribute `name` of `value`, or None."""
+        values = self.member_values(value, name)
+        return values[0] if values else None
+
+    def member_values(self, value, name):
+        """Every value attribute `name` of `value` may have."""
+        inferrer = self.inferrer
+        importer = inferrer.importer
+        if isinstance(value, LocalModule):
+            root = value.context.root
+            if inferrer.binds(root, name):
+                return inferrer.scope_values(root, name)
+            submodule = importer.local_submodule(value, name)
+            return [submodule] if submodule is not None else []
+        if isinstance(value, LocalClass):
+            for cls in self.mro(value):
+                if name in cls.scope.bindings:
+                    values = []
+                    for member in inferrer.scope_values(cls.scope, name):
+                        values += self._bind_member(member, cls, value, None)
+                    return unique(values)
+            return self._runtime_base_member(value, name)
+        if isinstance(value, LocalInstance):
+            for cls in self.mro(value.cls):
+                attributes = self.instance_attribute_bindings(cls).get(name, [])
+                if not attributes and name not in cls.scope.bindings:
+                    continue
+                values = []
+                for binding in attributes:
+                    values += self.instance_attribute_values(binding, value)
+                if name in cls.scope.bindings:
+                    for member in inferrer.scope_values(cls.scope, name):
+                        values += self._bind_member(member, cls, value.cls, value)
+                return unique(values)
+            return self._runtime_base_member(value.cls, name)
+        entry = self.all(value).get(name)
+        if entry is not None:
+            member = entry.value()
+            return [member] if member is not None else []
+        if isinstance(value, RuntimeModule):
+            submodule = importer.runtime_submodule(value, name)
+            return [submodule] if submodule is not None else []
+        return []
+
+    def member_definitions(self, value, name):
+        """Where attribute `name` of `value` is defined: bindings, or values for runtime objects."""
+        inferrer = self.inferrer
+        if isinstance(value, LocalModule):
+            root = value.context.root
+            if inferrer.binds(root, name):
+                return [fact.binding for fact in inferrer.scope_facts(root, name)]
+            return self.member_values(value, name)
+        if isinstance(value, (LocalClass, LocalInstance)):
+            cls_value = value if isinstance(value, LocalClass) else value.cls
+            for cls in self.mro(cls_value):
+                found = []
+                if isinstance(value, LocalInstance):
+                    found += self.instance_attribute_bindings(cls).get(name, [])
+                if name in cls.scope.bindings:
+                    found += [_property_getter(cls.scope, fact.binding)
+                              for fact in inferrer.scope_facts(cls.scope, name)]
+                if found:
+                    return found
+        return self.member_values(value, name)
+
+    def instance_attribute_values(self, binding, instance):
+        """Values of a `self.attr = ...` binding for a particular instance."""
+        method = binding.scope
+        if not instance.init_args or method.node.name != "__init__":
+            return self.inferrer.binding_values(binding)
+        return self.inferrer.in_frame(method, instance.init_args, instance,
+                                      lambda: self.inferrer.binding_values(binding))
+
+    def _bind_member(self, member, owner, cls, instance):
+        """The value of a class-body member accessed on a class (`instance` None) or instance."""
+        if not isinstance(member, LocalFunction) or member.bound is not None:
+            return [member]
+        node = member.node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or member.scope.parent is not owner.scope:
+            return [member]
+        decorators = {_decorator_name(d) for d in node.decorator_list}
+        if "staticmethod" in decorators:
+            return [member]
+        if "classmethod" in decorators:
+            return [LocalFunction(member.scope, cls)]
+        if instance is None:
+            return [member]
+        if decorators & {"setter", "deleter"}:
+            binding = owner.scope.module.binding_of(node)
+            getter = _property_getter(owner.scope, binding) if binding is not None else None
+            if getter is not None and getter is not binding:
+                scope = owner.scope.module.scope_of(getter.node)
+                if scope is not None:
+                    member, decorators = LocalFunction(scope), {"property"}
+        if decorators & {"property", "cached_property"}:
+            return self.inferrer.return_values(LocalFunction(member.scope, instance))
+        return [LocalFunction(member.scope, instance)]
+
+    def find_method(self, cls, name):
+        """The (unbound) local function `name` defined in the MRO of `cls`, or None."""
+        for current in self.mro(cls):
+            for binding in reversed(current.scope.bindings.get(name, [])):
+                if binding.kind == "def":
+                    scope = current.scope.module.scope_of(binding.node)
+                    if scope is not None:
+                        return LocalFunction(scope)
+            if name in current.scope.bindings:
+                return None
+        return None
+
+    def runtime_bases(self, cls):
+        """The runtime (installed or builtin) classes among the direct bases of `cls`."""
+        bases = []
+        for base in cls.node.bases:
+            bases += [v for v in self.inferrer.infer_values(base, cls.scope.parent)
+                      if isinstance(v, RuntimeClass)]
+        return bases
+
+    def _runtime_base_member(self, cls, name):
+        for current in self.mro(cls):
+            for base in self.runtime_bases(current):
+                if base.obj is not object and hasattr(base.obj, name):
+                    member = wrap_runtime(getattr(base.obj, name))
+                    return [member] if member is not None else []
+        return []
+
+    # -- classes -----------------------------------------------------------
+
+    def mro(self, cls):
+        """The class followed by its locally defined bases (depth first)."""
+        order = []
+
+        def visit(current):
+            if any(current.scope is seen.scope for seen in order):
+                return
+            order.append(current)
+            node = current.node
+            for base in node.bases:
+                for value in self.inferrer.infer_values(base, current.scope.parent):
+                    if isinstance(value, LocalClass):
+                        visit(value)
+
+        visit(cls)
+        return order
+
+    def class_members(self, cls):
+        members = {}
+        for current in reversed(self.mro(cls)):
+            members.update(self.inferrer.scope_entries(current.scope))
+        return members
+
+    def instance_members(self, cls):
+        mro = self.mro(cls)
+        members = {}
+        for current in reversed(mro):
+            members.update(self.inferrer.scope_entries(current.scope))
+        for current in reversed(mro):
+            for name, bindings in self.instance_attribute_bindings(current).items():
+                members[name] = BindingEntry(bindings[0], self.inferrer)
+        return members
+
+    def instance_attribute_bindings(self, cls):
+        """{name: bindings} for `self.<name> = ...` assignments in the methods of `cls`.
+
+        Assignments in `__init__` come first.
+        """
+        key = id(cls.scope)
+        if key in self._attribute_cache:
+            return self._attribute_cache[key]
+        entries = {}
+        methods = []
+        for bindings in cls.scope.bindings.values():
+            methods += [b.node for b in bindings if b.kind == "def"]
+        methods.sort(key=lambda node: (node.name != "__init__", node.lineno))
+        for method in methods:
+            decorators = {_decorator_name(d) for d in method.decorator_list}
+            method_scope = cls.scope.module.scope_of(method)
+            positional = method.args.posonlyargs + method.args.args
+            if method_scope is None or not positional or decorators & {"staticmethod", "classmethod"}:
+                continue
+            self._collect_attributes(method, method_scope, positional[0].arg, cls, entries)
+        self._attribute_cache[key] = entries
+        return entries
+
+    def _collect_attributes(self, method, method_scope, self_name, cls, entries):
+        for node in walk_local(method.body):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    for attribute, target_node, value in _self_attributes(target, node.value, self_name):
+                        binding = Binding(attribute, target_node.lineno, "assign", node, method_scope,
+                                          value, {"owner": cls.scope}, target_node)
+                        entries.setdefault(attribute, []).append(binding)
+            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+                for attribute, target_node, _ in _self_attributes(node.target, None, self_name):
+                    if isinstance(node, ast.AugAssign) and attribute in entries:
+                        continue
+                    kind = "assign" if isinstance(node, ast.AnnAssign) else "augassign"
+                    value = node.value if isinstance(node, ast.AnnAssign) else None
+                    extra = {"owner": cls.scope}
+                    if isinstance(node, ast.AnnAssign):
+                        extra["annotation"] = node.annotation
+                    binding = Binding(attribute, target_node.lineno, kind, node, method_scope, value,
+                                      extra, target_node)
+                    entries.setdefault(attribute, []).append(binding)
+
+
+def _property_getter(class_scope, binding):
+    """For the `@<name>.setter`/`.deleter` def `binding`, the `@property` getter; else `binding`."""
+    if binding.kind != "def":
+        return binding
+    if not {_decorator_name(d) for d in binding.node.decorator_list} & {"setter", "deleter"}:
+        return binding
+    for candidate in class_scope.bindings.get(binding.name, []):
+        if candidate.kind == "def" and "property" in {
+                _decorator_name(d) for d in candidate.node.decorator_list}:
+            return candidate
+    return binding
+
+
+def _decorator_name(node):
+    if isinstance(node, ast.Call):
+        node = node.func
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
+
+
+def _self_attributes(target, value, self_name):
+    """Yield (attribute name, target node, value) for `self.attr` targets."""
+    if isinstance(target, ast.Attribute):
+        if isinstance(target.value, ast.Name) and target.value.id == self_name:
+            yield target.attr, target, value
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        values = None
+        if isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(target.elts):
+            values = value.elts
+        for index, element in enumerate(target.elts):
+            yield from _self_attributes(element, values[index] if values else None, self_name)
+    elif isinstance(target, ast.Starred):
+        yield from _self_attributes(target.value, None, self_name)

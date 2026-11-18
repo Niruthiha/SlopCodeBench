@@ -1,0 +1,1 @@
+- [Docker test environment](test-env-docker.md) — real docker daemon down + compose 2.26.1; use fake docker from tests/helpers.py

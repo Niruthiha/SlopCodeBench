@@ -1,0 +1,5150 @@
+{
+  "created": 1794375057.0205798,
+  "duration": 42.02362132072449,
+  "exitcode": 1,
+  "root": "/workspace",
+  "environment": {},
+  "summary": {
+    "passed": 131,
+    "failed": 20,
+    "total": 151,
+    "collected": 151
+  },
+  "collectors": [
+    {
+      "nodeid": "",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests",
+          "type": "Dir"
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_no_args_shows_help_text",
+          "type": "Function",
+          "lineno": 42
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_command_dispatch_top_level",
+          "type": "Function",
+          "lineno": 60
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_subcommand_dispatch",
+          "type": "Function",
+          "lineno": 68
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite",
+          "type": "Function",
+          "lineno": 78
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite_for_multi_level_command",
+          "type": "Function",
+          "lineno": 93
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_version_rewrite",
+          "type": "Function",
+          "lineno": 109
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_positional_arg_parsing",
+          "type": "Function",
+          "lineno": 120
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_unrecognized_command_error",
+          "type": "Function",
+          "lineno": 130
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_missing_required_positional_shows_usage",
+          "type": "Function",
+          "lineno": 149
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_excess_positional_args_error",
+          "type": "Function",
+          "lineno": 163
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_with_suggestion",
+          "type": "Function",
+          "lineno": 173
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_no_suggestion",
+          "type": "Function",
+          "lineno": 184
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_multiple_parameter_errors_collected",
+          "type": "Function",
+          "lineno": 195
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unrecognized_subcommand_error",
+          "type": "Function",
+          "lineno": 216
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_alphabetical_ordering_case_insensitive",
+          "type": "Function",
+          "lineno": 236
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_column_alignment",
+          "type": "Function",
+          "lineno": 250
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_parent_command_no_handler_shows_subcommands",
+          "type": "Function",
+          "lineno": 270
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_suggestion_trash_to_delete",
+          "type": "Function",
+          "lineno": 282
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_subcommand_synonym_example_allows_optional_delete_suggestion",
+          "type": "Function",
+          "lineno": 293
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_checked_before_levenshtein",
+          "type": "Function",
+          "lineno": 311
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_only_when_target_registered",
+          "type": "Function",
+          "lineno": 323
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_suggestion_within_distance_2",
+          "type": "Function",
+          "lineno": 334
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_no_suggestion_beyond_distance_2",
+          "type": "Function",
+          "lineno": 343
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_tiebreaker_sort_order",
+          "type": "Function",
+          "lineno": 353
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_optional_modifier",
+          "type": "Function",
+          "lineno": 367
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_repeating_modifier_accepts_multiple",
+          "type": "Function",
+          "lineno": 378
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_no_flag_sets_false",
+          "type": "Function",
+          "lineno": 388
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error",
+          "type": "Function",
+          "lineno": 398
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected",
+          "type": "Function",
+          "lineno": 411
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_error_messages_to_stderr",
+          "type": "Function",
+          "lineno": 426
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_exit_code_1_on_error",
+          "type": "Function",
+          "lineno": 437
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_for_specific_command",
+          "type": "Function",
+          "lineno": 445
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_generic_token_classification",
+          "type": "Function",
+          "lineno": 455
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_default_value_for_optional_arg",
+          "type": "Function",
+          "lineno": 467
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality",
+          "type": "Class"
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_config_precedence_changes_observable_behavior",
+          "type": "Function",
+          "lineno": 33
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_config_runtime_overrides_project",
+          "type": "Function",
+          "lineno": 47
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_config_project_overrides_global",
+          "type": "Function",
+          "lineno": 56
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_config_global_defaults_apply",
+          "type": "Function",
+          "lineno": 70
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_alias_invocation_applies_connection_params",
+          "type": "Function",
+          "lineno": 79
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_all_broadcast_alphabetical_order",
+          "type": "Function",
+          "lineno": 105
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_all_broadcast_case_insensitive_alphabetical_order",
+          "type": "Function",
+          "lineno": 128
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_disabled_command_error",
+          "type": "Function",
+          "lineno": 161
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_unknown_alias_error",
+          "type": "Function",
+          "lineno": 178
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_unknown_alias_with_suggestion",
+          "type": "Function",
+          "lineno": 189
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_all_no_aliases_error",
+          "type": "Function",
+          "lineno": 203
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_alias_group_invalid_member_error",
+          "type": "Function",
+          "lineno": 214
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_unwritable_config_error",
+          "type": "Function",
+          "lineno": 234
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority",
+          "type": "Function",
+          "lineno": 256
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority_overrides_project_disabled_command",
+          "type": "Function",
+          "lineno": 272
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_upward_search",
+          "type": "Function",
+          "lineno": 296
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_search_stops_at_first_matching_directory",
+          "type": "Function",
+          "lineno": 311
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_inherit_depth_first",
+          "type": "Function",
+          "lineno": 337
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_appended",
+          "type": "Function",
+          "lineno": 354
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_not_deduplicated",
+          "type": "Function",
+          "lineno": 374
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_auto_creation_locale_and_installer_version",
+          "type": "Function",
+          "lineno": 395
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_global_config_from_env_var",
+          "type": "Function",
+          "lineno": 411
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_global_config_default_path",
+          "type": "Function",
+          "lineno": 422
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_deprecated_param_emits_warning",
+          "type": "Function",
+          "lineno": 432
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_strict_args_mode",
+          "type": "Function",
+          "lineno": 443
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_hidden_param_excluded_from_help_but_functional",
+          "type": "Function",
+          "lineno": 458
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_runtime_alias_overrides_file_alias",
+          "type": "Function",
+          "lineno": 468
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_unknown_alias_does_not_suggest_far_match",
+          "type": "Function",
+          "lineno": 490
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_alias_name_regex_validation",
+          "type": "Function",
+          "lineno": 508
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_alias_group_deduplication_first_appearance",
+          "type": "Function",
+          "lineno": 521
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_local_path_absolutization",
+          "type": "Function",
+          "lineno": 549
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_uri_schemes_recognized",
+          "type": "Function",
+          "lineno": 563
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command",
+          "type": "Function",
+          "lineno": 577
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_exit_255_error",
+          "type": "Function",
+          "lineno": 601
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_packages_dir_from_env",
+          "type": "Function",
+          "lineno": 625
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_all_auto_registered_when_aliases_exist",
+          "type": "Function",
+          "lineno": 636
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_explicit_all_alias_is_not_overridden_by_auto_registration",
+          "type": "Function",
+          "lineno": 657
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality",
+          "type": "Class"
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_table_format_default",
+          "type": "Function",
+          "lineno": 30
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_json_format_4_space_indent",
+          "type": "Function",
+          "lineno": 43
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_field_single_value_raw_output",
+          "type": "Function",
+          "lineno": 57
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_quiet_suppresses_info_and_success",
+          "type": "Function",
+          "lineno": 69
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_error_to_stderr",
+          "type": "Function",
+          "lineno": 79
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_debug_elapsed_time_format",
+          "type": "Function",
+          "lineno": 88
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestErrors",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_field_name_error",
+          "type": "Function",
+          "lineno": 113
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_json_stdin_error",
+          "type": "Function",
+          "lineno": 123
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_confirmation_prompt_non_y_aborts",
+          "type": "Function",
+          "lineno": 136
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_fields_plural_error",
+          "type": "Function",
+          "lineno": 147
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_formats_preserve_same_underlying_values",
+          "type": "Function",
+          "lineno": 164
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_format_quoting",
+          "type": "Function",
+          "lineno": 174
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_serializes_complex_values_as_json_strings",
+          "type": "Function",
+          "lineno": 195
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_yaml_format_output",
+          "type": "Function",
+          "lineno": 209
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_count_format_integer",
+          "type": "Function",
+          "lineno": 222
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_ids_format_space_separated",
+          "type": "Function",
+          "lineno": 233
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_restricts_and_orders_columns",
+          "type": "Function",
+          "lineno": 245
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_case_insensitive",
+          "type": "Function",
+          "lineno": 256
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_color_auto_mode",
+          "type": "Function",
+          "lineno": 268
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_no_color_disables_formatting",
+          "type": "Function",
+          "lineno": 284
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_warning_to_stderr",
+          "type": "Function",
+          "lineno": 295
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_success_to_stdout_suppressed_by_quiet",
+          "type": "Function",
+          "lineno": 306
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_debug_group_filtering",
+          "type": "Function",
+          "lineno": 316
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_debug_group_prefix_format",
+          "type": "Function",
+          "lineno": 329
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_file_logging_timestamp_format",
+          "type": "Function",
+          "lineno": 341
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_file_logging_separator_per_invocation",
+          "type": "Function",
+          "lineno": 359
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_sensitive_error_not_logged",
+          "type": "Function",
+          "lineno": 382
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_json_stdin_supplies_missing_positional_argument",
+          "type": "Function",
+          "lineno": 396
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_yes_bypasses_confirmation",
+          "type": "Function",
+          "lineno": 416
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y",
+          "type": "Function",
+          "lineno": 426
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_blank_response_cancels",
+          "type": "Function",
+          "lineno": 440
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_suppresses_cancellation_warning",
+          "type": "Function",
+          "lineno": 454
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_does_not_suppress_debug_output",
+          "type": "Function",
+          "lineno": 467
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_complex_values_json_serialized_in_table",
+          "type": "Function",
+          "lineno": 480
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestErrors",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality",
+          "type": "Class"
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore::test_detailed_execution_captures_all_fields",
+          "type": "Function",
+          "lineno": 33
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore::test_success_only_execution_returns_boolean",
+          "type": "Function",
+          "lineno": 45
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_read_hit_returns_content",
+          "type": "Function",
+          "lineno": 55
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_read_expired_deletes_and_misses",
+          "type": "Function",
+          "lineno": 70
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_key_sanitization_non_url",
+          "type": "Function",
+          "lineno": 83
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestErrors",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestErrors::test_unsupported_archive_format_error",
+          "type": "Function",
+          "lineno": 105
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestErrors::test_non_writable_file_extraction_warning_then_error",
+          "type": "Function",
+          "lineno": 121
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestErrors::test_exit_code_negative_1_warning",
+          "type": "Function",
+          "lineno": 155
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestErrors::test_cache_dir_creation_failure_silent",
+          "type": "Function",
+          "lineno": 173
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_sensitive_arg_obfuscation_in_debug",
+          "type": "Function",
+          "lineno": 194
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_stdout_mode",
+          "type": "Function",
+          "lineno": 205
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_stderr_mode",
+          "type": "Function",
+          "lineno": 217
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_return_code_mode",
+          "type": "Function",
+          "lineno": 226
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_all_mode",
+          "type": "Function",
+          "lineno": 235
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_json_parse_mode",
+          "type": "Function",
+          "lineno": 244
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_write_stores_content",
+          "type": "Function",
+          "lineno": 258
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_miss_returns_false",
+          "type": "Function",
+          "lineno": 270
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_fresh_entry_not_expired",
+          "type": "Function",
+          "lineno": 279
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_cleanup_expire_pass",
+          "type": "Function",
+          "lineno": 293
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_cleanup_size_enforcement",
+          "type": "Function",
+          "lineno": 307
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_eviction_tiebreaker_alphabetical",
+          "type": "Function",
+          "lineno": 322
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_key_sanitization_url",
+          "type": "Function",
+          "lineno": 339
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_zip",
+          "type": "Function",
+          "lineno": 356
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_overwrites_existing_writable_file",
+          "type": "Function",
+          "lineno": 373
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_non_writable_nested_archive_entry_warns_with_relative_path",
+          "type": "Function",
+          "lineno": 398
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_non_writable_archive_entry_does_not_stop_other_files",
+          "type": "Function",
+          "lineno": 446
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_tar_gz",
+          "type": "Function",
+          "lineno": 496
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tar_gz_fallback_to_external_command",
+          "type": "Function",
+          "lineno": 514
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestErrors",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality",
+          "type": "Class"
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestCore",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestCore::test_db_auto_create_with_tables",
+          "type": "Function",
+          "lineno": 71
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestCore::test_option_read_missing_returns_false",
+          "type": "Function",
+          "lineno": 92
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestCore::test_option_write_insert_then_read",
+          "type": "Function",
+          "lineno": 107
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestCore::test_option_upsert_overwrites",
+          "type": "Function",
+          "lineno": 128
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestErrors",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestErrors::test_db_connection_failure_error",
+          "type": "Function",
+          "lineno": 160
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestErrors::test_table_creation_failure_error",
+          "type": "Function",
+          "lineno": 180
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_history_records_store_required_metadata",
+          "type": "Function",
+          "lineno": 202
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_history_table_starts_empty",
+          "type": "Function",
+          "lineno": 240
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_skipped_if_already_recorded",
+          "type": "Function",
+          "lineno": 257
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_all_values_stored_as_strings",
+          "type": "Function",
+          "lineno": 279
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_empty_string_value_is_not_treated_as_missing",
+          "type": "Function",
+          "lineno": 301
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_existing_empty_store_file_gets_required_tables",
+          "type": "Function",
+          "lineno": 332
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_timestamps_are_machine_parseable",
+          "type": "Function",
+          "lineno": 358
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migrations_table_schema",
+          "type": "Function",
+          "lineno": 393
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_options_table_schema",
+          "type": "Function",
+          "lineno": 409
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_parameterized_queries",
+          "type": "Function",
+          "lineno": 425
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_record_can_be_removed_after_rollback",
+          "type": "Function",
+          "lineno": 456
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_existing_db_opens_without_recreating",
+          "type": "Function",
+          "lineno": 496
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestCore",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestErrors",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality",
+          "type": "Class"
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py",
+          "type": "Module"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_2.py",
+          "type": "Module"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_3.py",
+          "type": "Module"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_4.py",
+          "type": "Module"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_5.py",
+          "type": "Module"
+        }
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_no_args_shows_help_text",
+      "lineno": 42,
+      "outcome": "passed",
+      "keywords": [
+        "test_no_args_shows_help_text",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.007581243000458926,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.49294789499253966,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018485900363884866,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_command_dispatch_top_level",
+      "lineno": 60,
+      "outcome": "passed",
+      "keywords": [
+        "test_command_dispatch_top_level",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002382072008913383,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24142349598696455,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001941929804161191,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_subcommand_dispatch",
+      "lineno": 68,
+      "outcome": "passed",
+      "keywords": [
+        "test_subcommand_dispatch",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002530352008761838,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24348154797917232,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001700489956419915,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite",
+      "lineno": 78,
+      "outcome": "passed",
+      "keywords": [
+        "test_help_rewrite",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002297183993505314,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.4582599389832467,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00020593401859514415,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite_for_multi_level_command",
+      "lineno": 93,
+      "outcome": "passed",
+      "keywords": [
+        "test_help_rewrite_for_multi_level_command",
+        "functionality",
+        "pytestmark",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0026735870051197708,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.47490084401215427,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016817901632748544,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_version_rewrite",
+      "lineno": 109,
+      "outcome": "passed",
+      "keywords": [
+        "test_version_rewrite",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0021960810117889196,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.48487778499838896,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017080799443647265,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_positional_arg_parsing",
+      "lineno": 120,
+      "outcome": "passed",
+      "keywords": [
+        "test_positional_arg_parsing",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0024602750199846923,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2368565660144668,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0005151379737071693,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_unrecognized_command_error",
+      "lineno": 130,
+      "outcome": "passed",
+      "keywords": [
+        "test_unrecognized_command_error",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003510905022267252,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2411716670030728,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017506099538877606,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_missing_required_positional_shows_usage",
+      "lineno": 149,
+      "outcome": "passed",
+      "keywords": [
+        "test_missing_required_positional_shows_usage",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0026209770003333688,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25240550498710945,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002804080140776932,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_excess_positional_args_error",
+      "lineno": 163,
+      "outcome": "passed",
+      "keywords": [
+        "test_excess_positional_args_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.006316976010566577,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.27113415699568577,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001776759745553136,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_with_suggestion",
+      "lineno": 173,
+      "outcome": "passed",
+      "keywords": [
+        "test_unknown_associative_with_suggestion",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002781749004498124,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.22931117500411347,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018981800531037152,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_no_suggestion",
+      "lineno": 184,
+      "outcome": "passed",
+      "keywords": [
+        "test_unknown_associative_no_suggestion",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005918023001868278,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24215392299811356,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001716650149319321,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_multiple_parameter_errors_collected",
+      "lineno": 195,
+      "outcome": "passed",
+      "keywords": [
+        "test_multiple_parameter_errors_collected",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003933144005713984,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.22915105198626406,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016243400750681758,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unrecognized_subcommand_error",
+      "lineno": 216,
+      "outcome": "passed",
+      "keywords": [
+        "test_unrecognized_subcommand_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002553212019847706,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.23033130500698462,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018005701713263988,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_alphabetical_ordering_case_insensitive",
+      "lineno": 236,
+      "outcome": "passed",
+      "keywords": [
+        "test_help_alphabetical_ordering_case_insensitive",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003155623999191448,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24273022898705676,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016120800864882767,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_column_alignment",
+      "lineno": 250,
+      "outcome": "passed",
+      "keywords": [
+        "test_help_column_alignment",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.00238966298638843,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.23805925200576894,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002314099983777851,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_parent_command_no_handler_shows_subcommands",
+      "lineno": 270,
+      "outcome": "passed",
+      "keywords": [
+        "test_parent_command_no_handler_shows_subcommands",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0036220159963704646,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2353484820050653,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016871499246917665,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_suggestion_trash_to_delete",
+      "lineno": 282,
+      "outcome": "passed",
+      "keywords": [
+        "test_synonym_suggestion_trash_to_delete",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002722291013924405,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2428497299843002,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017007399583235383,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_subcommand_synonym_example_allows_optional_delete_suggestion",
+      "lineno": 293,
+      "outcome": "passed",
+      "keywords": [
+        "test_subcommand_synonym_example_allows_optional_delete_suggestion",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004199659015284851,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2572507199947722,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002402460086159408,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_checked_before_levenshtein",
+      "lineno": 311,
+      "outcome": "passed",
+      "keywords": [
+        "test_synonym_checked_before_levenshtein",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003690865996759385,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.46129539399407804,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001695409882813692,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_only_when_target_registered",
+      "lineno": 323,
+      "outcome": "passed",
+      "keywords": [
+        "test_synonym_only_when_target_registered",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002466461999574676,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24066327800392173,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017689898959361017,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_suggestion_within_distance_2",
+      "lineno": 334,
+      "outcome": "passed",
+      "keywords": [
+        "test_levenshtein_suggestion_within_distance_2",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0047222730063367635,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2521619150065817,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017062301049008965,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_no_suggestion_beyond_distance_2",
+      "lineno": 343,
+      "outcome": "passed",
+      "keywords": [
+        "test_levenshtein_no_suggestion_beyond_distance_2",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003091652994044125,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2515756089997012,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00022584901307709515,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_tiebreaker_sort_order",
+      "lineno": 353,
+      "outcome": "passed",
+      "keywords": [
+        "test_levenshtein_tiebreaker_sort_order",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.006977788987569511,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24637825900572352,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016125300317071378,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_optional_modifier",
+      "lineno": 367,
+      "outcome": "passed",
+      "keywords": [
+        "test_optional_modifier",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004333729011705145,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2324223119940143,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00019463797798380256,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_repeating_modifier_accepts_multiple",
+      "lineno": 378,
+      "outcome": "passed",
+      "keywords": [
+        "test_repeating_modifier_accepts_multiple",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002274433005368337,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2444714389857836,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00020579202100634575,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_no_flag_sets_false",
+      "lineno": 388,
+      "outcome": "passed",
+      "keywords": [
+        "test_no_flag_sets_false",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004745915997773409,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2610976069991011,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00033873500069603324,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error",
+      "lineno": 398,
+      "outcome": "failed",
+      "keywords": [
+        "test_required_associative_missing_error",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004172015993390232,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.27515868601039983,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/conftest.py",
+          "lineno": 314,
+          "message": "AssertionError: Expected exit code 1, got 0.\n  stdout: \"Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\\n\"\n  stderr: ''\nassert 0 == 1\n +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout=\"Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\\n\", stderr='').returncode"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_1.py",
+            "lineno": 406,
+            "message": ""
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 314,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_1.TestFunctionality object at 0x7cb722bf0d40>\ncli = <function cli.<locals>._run at 0x7cb721e80360>\n\n    @pytest.mark.functionality\n    def test_required_associative_missing_error(self, cli):\n        \"\"\"Missing required ``--type=<type>`` \u2192 error.\n    \n        Spec: Error Summary table.\n        \"\"\"\n        result = cli([\"site\", \"create\", \"example.test\"])\n>       assert_exit_code(result, 1)\n\n.evaluation_tests/test_checkpoint_1.py:406: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nresult = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returnco... stdout=\"Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\\n\", stderr='')\ncode = 1\n\n    def assert_exit_code(\n        result: subprocess.CompletedProcess[str], code: int\n    ) -> None:\n        \"\"\"Assert the process exited with *code*.\"\"\"\n>       assert result.returncode == code, (\n            f\"Expected exit code {code}, got {result.returncode}.\\n\"\n            f\"stdout: {result.stdout!r}\\nstderr: {result.stderr!r}\"\n        )\nE       AssertionError: Expected exit code 1, got 0.\nE         stdout: \"Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\\n\"\nE         stderr: ''\nE       assert 0 == 1\nE        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout=\"Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\\n\", stderr='').returncode\n\n.evaluation_tests/conftest.py:314: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.00017134498921222985,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected",
+      "lineno": 411,
+      "outcome": "failed",
+      "keywords": [
+        "test_required_associative_empty_value_is_rejected",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0021652310097124428,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2579166619980242,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/conftest.py",
+          "lineno": 344,
+          "message": "AssertionError: Missing 'missing --type parameter' in stderr.\n  stderr: 'Error: Parameter errors:\\n --type parameter needs a value\\n'\nassert 'missing --type parameter' in 'Error: Parameter errors:\\n --type parameter needs a value\\n'\n +  where 'Error: Parameter errors:\\n --type parameter needs a value\\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=1, stdout='', stderr='Error: Parameter errors:\\n --type parameter needs a value\\n').stderr"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_1.py",
+            "lineno": 421,
+            "message": ""
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 344,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_1.TestFunctionality object at 0x7cb722d57710>\ncli = <function cli.<locals>._run at 0x7cb721e80ea0>\n\n    @pytest.mark.functionality\n    def test_required_associative_empty_value_is_rejected(self, cli):\n        \"\"\"Required associative args must have non-empty values.\n    \n        Spec: \"All required associative arguments must be present with\n        non-empty values.\"\n        \"\"\"\n        result = cli([\"site\", \"create\", \"example.test\", \"--type=\"])\n        assert_exit_code(result, 1)\n>       assert_stderr_contains(\n            result,\n            \"Error: Parameter errors:\",\n            \"missing --type parameter\",\n        )\n\n.evaluation_tests/test_checkpoint_1.py:421: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nresult = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=1, stdout='', stderr='Error: Parameter errors:\\n --type parameter needs a value\\n')\nfragments = ('Error: Parameter errors:', 'missing --type parameter')\n\n    def assert_stderr_contains(\n        result: subprocess.CompletedProcess[str], *fragments: str\n    ) -> None:\n        \"\"\"Assert all *fragments* appear in stderr.\"\"\"\n        for frag in fragments:\n>           assert frag in result.stderr, (\n                f\"Missing {frag!r} in stderr.\\nstderr: {result.stderr!r}\"\n            )\nE           AssertionError: Missing 'missing --type parameter' in stderr.\nE             stderr: 'Error: Parameter errors:\\n --type parameter needs a value\\n'\nE           assert 'missing --type parameter' in 'Error: Parameter errors:\\n --type parameter needs a value\\n'\nE            +  where 'Error: Parameter errors:\\n --type parameter needs a value\\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=1, stdout='', stderr='Error: Parameter errors:\\n --type parameter needs a value\\n').stderr\n\n.evaluation_tests/conftest.py:344: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.0004667390021495521,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_error_messages_to_stderr",
+      "lineno": 426,
+      "outcome": "passed",
+      "keywords": [
+        "test_error_messages_to_stderr",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004302712011849508,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25104993701097555,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002448319864924997,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_exit_code_1_on_error",
+      "lineno": 437,
+      "outcome": "passed",
+      "keywords": [
+        "test_exit_code_1_on_error",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0036700879863929003,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24859049799852073,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001657610118854791,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_for_specific_command",
+      "lineno": 445,
+      "outcome": "passed",
+      "keywords": [
+        "test_help_for_specific_command",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002488345024175942,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25872427099966444,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017212700913660228,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_generic_token_classification",
+      "lineno": 455,
+      "outcome": "passed",
+      "keywords": [
+        "test_generic_token_classification",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0026290660025551915,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2474910250166431,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016763401799835265,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_default_value_for_optional_arg",
+      "lineno": 467,
+      "outcome": "passed",
+      "keywords": [
+        "test_default_value_for_optional_arg",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002839841996319592,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2406604679999873,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00024975501582957804,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_config_precedence_changes_observable_behavior",
+      "lineno": 33,
+      "outcome": "passed",
+      "keywords": [
+        "test_config_precedence_changes_observable_behavior",
+        "TestCore",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003947718971176073,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2657791660167277,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002610829833429307,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_config_runtime_overrides_project",
+      "lineno": 47,
+      "outcome": "failed",
+      "keywords": [
+        "test_config_runtime_overrides_project",
+        "TestCore",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.00416090598446317,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2527006970194634,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/conftest.py",
+          "lineno": 314,
+          "message": "AssertionError: Expected exit code 0, got 1.\n  stdout: ''\n  stderr: 'Error: The --color global parameter does not accept a value.\\n'\nassert 1 == 0\n +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--color=auto', 'help'], returncode=1, stdout='', stderr='Error: The --color global parameter does not accept a value.\\n').returncode"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_2.py",
+            "lineno": 55,
+            "message": ""
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 322,
+            "message": "in assert_success"
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 314,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_2.TestCore object at 0x7cb722bf7050>\ncli = <function cli.<locals>._run at 0x7cb721e809a0>\nwrite_config = <function write_config.<locals>._write at 0x7cb721e81620>\n\n    def test_config_runtime_overrides_project(self, cli, write_config):\n        \"\"\"Runtime ``--color=auto`` overrides project ``color: true``.\n    \n        Spec: Example 1 \u2013 \"The resolved value of color is auto.\"\n        \"\"\"\n        write_config({\"color\": True}, kind=\"project\")\n        result = cli([\"--color=auto\", \"help\"])\n>       assert_success(result)\n\n.evaluation_tests/test_checkpoint_2.py:55: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n.evaluation_tests/conftest.py:322: in assert_success\n    assert_exit_code(result, 0)\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nresult = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--color=auto', 'help'], returncode=1, stdout='', stderr='Error: The --color global parameter does not accept a value.\\n')\ncode = 0\n\n    def assert_exit_code(\n        result: subprocess.CompletedProcess[str], code: int\n    ) -> None:\n        \"\"\"Assert the process exited with *code*.\"\"\"\n>       assert result.returncode == code, (\n            f\"Expected exit code {code}, got {result.returncode}.\\n\"\n            f\"stdout: {result.stdout!r}\\nstderr: {result.stderr!r}\"\n        )\nE       AssertionError: Expected exit code 0, got 1.\nE         stdout: ''\nE         stderr: 'Error: The --color global parameter does not accept a value.\\n'\nE       assert 1 == 0\nE        +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--color=auto', 'help'], returncode=1, stdout='', stderr='Error: The --color global parameter does not accept a value.\\n').returncode\n\n.evaluation_tests/conftest.py:314: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.00018685997929424047,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_config_project_overrides_global",
+      "lineno": 56,
+      "outcome": "passed",
+      "keywords": [
+        "test_config_project_overrides_global",
+        "TestCore",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002581137989182025,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2489652940130327,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00026481199893169105,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_config_global_defaults_apply",
+      "lineno": 70,
+      "outcome": "passed",
+      "keywords": [
+        "test_config_global_defaults_apply",
+        "TestCore",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004639235994545743,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24495324702002108,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018396499217487872,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_alias_invocation_applies_connection_params",
+      "lineno": 79,
+      "outcome": "passed",
+      "keywords": [
+        "test_alias_invocation_applies_connection_params",
+        "TestCore",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0030412230116780847,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25965639599598944,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00020469800801947713,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_all_broadcast_alphabetical_order",
+      "lineno": 105,
+      "outcome": "passed",
+      "keywords": [
+        "test_all_broadcast_alphabetical_order",
+        "TestCore",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005170406016986817,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2922060410201084,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017553800716996193,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_all_broadcast_case_insensitive_alphabetical_order",
+      "lineno": 128,
+      "outcome": "passed",
+      "keywords": [
+        "test_all_broadcast_case_insensitive_alphabetical_order",
+        "functionality",
+        "pytestmark",
+        "TestCore",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.00529696699231863,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2517890500021167,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002208090154454112,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestCore::test_disabled_command_error",
+      "lineno": 161,
+      "outcome": "passed",
+      "keywords": [
+        "test_disabled_command_error",
+        "TestCore",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005532279988983646,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2623057179735042,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002129969943780452,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_unknown_alias_error",
+      "lineno": 178,
+      "outcome": "passed",
+      "keywords": [
+        "test_unknown_alias_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004144725971855223,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25372290500672534,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002755919995252043,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_unknown_alias_with_suggestion",
+      "lineno": 189,
+      "outcome": "passed",
+      "keywords": [
+        "test_unknown_alias_with_suggestion",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.006727247004164383,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2559310079959687,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017374000162817538,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_all_no_aliases_error",
+      "lineno": 203,
+      "outcome": "passed",
+      "keywords": [
+        "test_all_no_aliases_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002579296997282654,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24055147598846816,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00023343798238784075,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_alias_group_invalid_member_error",
+      "lineno": 214,
+      "outcome": "passed",
+      "keywords": [
+        "test_alias_group_invalid_member_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003594964015064761,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2498232199868653,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018904899479821324,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_unwritable_config_error",
+      "lineno": 234,
+      "outcome": "passed",
+      "keywords": [
+        "test_unwritable_config_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003560404002200812,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.26099158299621195,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00026166700990870595,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority",
+      "lineno": 256,
+      "outcome": "passed",
+      "keywords": [
+        "test_project_config_local_yml_priority",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004501731978962198,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.26851466301013716,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002633450203575194,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority_overrides_project_disabled_command",
+      "lineno": 272,
+      "outcome": "passed",
+      "keywords": [
+        "test_project_config_local_yml_priority_overrides_project_disabled_command",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0026997390086762607,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.23567616901709698,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017853599274531007,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_upward_search",
+      "lineno": 296,
+      "outcome": "passed",
+      "keywords": [
+        "test_project_config_upward_search",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0024271750007756054,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24501434198464267,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002714610018301755,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_search_stops_at_first_matching_directory",
+      "lineno": 311,
+      "outcome": "passed",
+      "keywords": [
+        "test_project_config_search_stops_at_first_matching_directory",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003557852003723383,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2582987770147156,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002107860054820776,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_inherit_depth_first",
+      "lineno": 337,
+      "outcome": "passed",
+      "keywords": [
+        "test_yaml_inherit_depth_first",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0030469640041701496,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2563095749937929,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002370340225752443,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_appended",
+      "lineno": 354,
+      "outcome": "passed",
+      "keywords": [
+        "test_yaml_merge_arrays_appended",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005126109987031668,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24508141199476086,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001645430165808648,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_not_deduplicated",
+      "lineno": 374,
+      "outcome": "passed",
+      "keywords": [
+        "test_yaml_merge_arrays_not_deduplicated",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004651744005968794,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25590645099873655,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00020329499966464937,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_auto_creation_locale_and_installer_version",
+      "lineno": 395,
+      "outcome": "passed",
+      "keywords": [
+        "test_auto_creation_locale_and_installer_version",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0024527329951524734,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2508362790104002,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001890519924927503,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_global_config_from_env_var",
+      "lineno": 411,
+      "outcome": "passed",
+      "keywords": [
+        "test_global_config_from_env_var",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002615906996652484,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.27274231001501903,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00022197997896000743,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_global_config_default_path",
+      "lineno": 422,
+      "outcome": "passed",
+      "keywords": [
+        "test_global_config_default_path",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003789557988056913,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24343639900325797,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001769860100466758,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_deprecated_param_emits_warning",
+      "lineno": 432,
+      "outcome": "passed",
+      "keywords": [
+        "test_deprecated_param_emits_warning",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0025060340121854097,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24587631298345514,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018706699484027922,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_strict_args_mode",
+      "lineno": 443,
+      "outcome": "failed",
+      "keywords": [
+        "test_strict_args_mode",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0024602120101917535,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.5001283299934585,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_2.py",
+          "lineno": 457,
+          "message": "assert 'Debug:' in \"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.002s)\\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\\n\"\n +  where \"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.002s)\\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\\n\" = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--debug'], returncode=0, stdout='name  type      title         status\\nmain  standard  Main Site     active\\nblog  blog      Company Blog  active\\nshop  store     Shop          archived\\n', stderr=\"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.002s)\\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\\n\").stderr"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_2.py",
+            "lineno": 457,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_2.TestFunctionality object at 0x7cb722aaf7d0>\ncli = <function cli.<locals>._run at 0x7cb721e822a0>\n\n    @pytest.mark.functionality\n    def test_strict_args_mode(self, cli):\n        \"\"\"Strict mode treats post-positional args as command-specific.\n    \n        Spec: \"only arguments appearing before the first positional token\n        are treated as global runtime configuration flags.\"\n        \"\"\"\n        strict = cli(\n            [\"site\", \"list\", \"--debug\"],\n            env={\"APPCTL_STRICT_ARGS_MODE\": \"1\"},\n        )\n        non_strict = cli([\"site\", \"list\", \"--debug\"])\n        assert \"Debug:\" not in strict.stderr\n>       assert \"Debug:\" in non_strict.stderr\nE       assert 'Debug:' in \"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.002s)\\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\\n\"\nE        +  where \"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.002s)\\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\\n\" = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--debug'], returncode=0, stdout='name  type      title         status\\nmain  standard  Main Site     active\\nblog  blog      Company Blog  active\\nshop  store     Shop          archived\\n', stderr=\"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.002s)\\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\\n\").stderr\n\n.evaluation_tests/test_checkpoint_2.py:457: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.00021093999384902418,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_hidden_param_excluded_from_help_but_functional",
+      "lineno": 458,
+      "outcome": "passed",
+      "keywords": [
+        "test_hidden_param_excluded_from_help_but_functional",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0048810699954628944,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2434251660015434,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002330550050828606,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_runtime_alias_overrides_file_alias",
+      "lineno": 468,
+      "outcome": "passed",
+      "keywords": [
+        "test_runtime_alias_overrides_file_alias",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0044408350076992065,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.26801855000667274,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00033327098935842514,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_unknown_alias_does_not_suggest_far_match",
+      "lineno": 490,
+      "outcome": "passed",
+      "keywords": [
+        "test_unknown_alias_does_not_suggest_far_match",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0040563070215284824,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25051540599088185,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018518700380809605,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_alias_name_regex_validation",
+      "lineno": 508,
+      "outcome": "passed",
+      "keywords": [
+        "test_alias_name_regex_validation",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004179899988230318,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24897090898593888,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00020061898976564407,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_alias_group_deduplication_first_appearance",
+      "lineno": 521,
+      "outcome": "passed",
+      "keywords": [
+        "test_alias_group_deduplication_first_appearance",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003173428005538881,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25067541500902735,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00023980598780326545,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_local_path_absolutization",
+      "lineno": 549,
+      "outcome": "passed",
+      "keywords": [
+        "test_local_path_absolutization",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003487447975203395,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2719978009990882,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018609798280522227,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_uri_schemes_recognized",
+      "lineno": 563,
+      "outcome": "passed",
+      "keywords": [
+        "test_ssh_uri_schemes_recognized",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0053858480241615325,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.23800407600356266,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001712920202407986,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command",
+      "lineno": 577,
+      "outcome": "failed",
+      "keywords": [
+        "test_ssh_pre_cmd_injected_before_remote_command",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0034386390179861337,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2554062529816292,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_2.py",
+          "lineno": 600,
+          "message": "AssertionError: assert 'echo prepare && appctl site list' in '-T -q user@host echo prepare; appctl site list\\n'"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_2.py",
+            "lineno": 600,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_2.TestFunctionality object at 0x7cb722bf71a0>\ncli = <function cli.<locals>._run at 0x7cb721e82660>\nwrite_config = <function write_config.<locals>._write at 0x7cb721e809a0>\nfake_ssh_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_ssh_pre_cmd_injected_befo0/fake_ssh_bin:/tmp/uv-cache/archive-v0/TyNqTs6...usr/local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_ssh_pre_cmd_injected_befo0/ssh_calls.log'))\n\n    @pytest.mark.functionality\n    def test_ssh_pre_cmd_injected_before_remote_command(\n        self, cli, write_config, fake_ssh_env\n    ):\n        \"\"\"``APPCTL_SSH_PRE_CMD`` prefixes the remote command payload.\n    \n        Spec: \"``APPCTL_SSH_PRE_CMD`` injects a shell command that runs\n        before the main remote command.\"\n        \"\"\"\n        ssh_env, log_file = fake_ssh_env\n        write_config(\n            {\"@remote\": {\"ssh\": \"ssh://user@host\"}},\n            kind=\"global\",\n        )\n    \n        result = cli(\n            [\"@remote\", \"site\", \"list\"],\n            env={**ssh_env, \"APPCTL_SSH_PRE_CMD\": \"echo prepare\"},\n        )\n    \n        assert_success(result)\n        calls = log_file.read_text()\n>       assert \"echo prepare && appctl site list\" in calls\nE       AssertionError: assert 'echo prepare && appctl site list' in '-T -q user@host echo prepare; appctl site list\\n'\n\n.evaluation_tests/test_checkpoint_2.py:600: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.00019123198580928147,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_exit_255_error",
+      "lineno": 601,
+      "outcome": "passed",
+      "keywords": [
+        "test_ssh_exit_255_error",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004945446999045089,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24982901601470076,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016977000632323325,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_packages_dir_from_env",
+      "lineno": 625,
+      "outcome": "passed",
+      "keywords": [
+        "test_packages_dir_from_env",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0026600300043355674,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2661466989957262,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017194700194522738,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_all_auto_registered_when_aliases_exist",
+      "lineno": 636,
+      "outcome": "passed",
+      "keywords": [
+        "test_all_auto_registered_when_aliases_exist",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004974845011020079,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24532960599754006,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00020015498739667237,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_explicit_all_alias_is_not_overridden_by_auto_registration",
+      "lineno": 657,
+      "outcome": "passed",
+      "keywords": [
+        "test_explicit_all_alias_is_not_overridden_by_auto_registration",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_2.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004990532004740089,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2573586780054029,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00020292701083235443,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_table_format_default",
+      "lineno": 30,
+      "outcome": "passed",
+      "keywords": [
+        "test_table_format_default",
+        "TestCore",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002516995999030769,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2544481709774118,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001841879857238382,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_json_format_4_space_indent",
+      "lineno": 43,
+      "outcome": "passed",
+      "keywords": [
+        "test_json_format_4_space_indent",
+        "TestCore",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.00274540699319914,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.28573205700377,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016036699526011944,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_field_single_value_raw_output",
+      "lineno": 57,
+      "outcome": "passed",
+      "keywords": [
+        "test_field_single_value_raw_output",
+        "TestCore",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0026666439953260124,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24422018299810588,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00020946402219124138,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_quiet_suppresses_info_and_success",
+      "lineno": 69,
+      "outcome": "passed",
+      "keywords": [
+        "test_quiet_suppresses_info_and_success",
+        "TestCore",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004048475995659828,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.3189839689875953,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0003124639915768057,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_error_to_stderr",
+      "lineno": 79,
+      "outcome": "passed",
+      "keywords": [
+        "test_error_to_stderr",
+        "TestCore",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.006173022004077211,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2789594740024768,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017155302339233458,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestCore::test_debug_elapsed_time_format",
+      "lineno": 88,
+      "outcome": "passed",
+      "keywords": [
+        "test_debug_elapsed_time_format",
+        "TestCore",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004259631008608267,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2518233699956909,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00030930800130590796,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_field_name_error",
+      "lineno": 113,
+      "outcome": "passed",
+      "keywords": [
+        "test_invalid_field_name_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0041319729934912175,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25268408900592476,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0004794600245077163,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_json_stdin_error",
+      "lineno": 123,
+      "outcome": "failed",
+      "keywords": [
+        "test_invalid_json_stdin_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003880830015987158,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.27568951301509514,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_3.py",
+          "lineno": 135,
+          "message": "AssertionError: assert 'Error: Invalid JSON:' in 'Error: Parameter errors:\\n unknown --format parameter\\n'\n +  where 'Error: Parameter errors:\\n unknown --format parameter\\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--format=json'], returncode=1, stdout='', stderr='Error: Parameter errors:\\n unknown --format parameter\\n').stderr"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_3.py",
+            "lineno": 135,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_3.TestErrors object at 0x7cb72225d820>\ncli = <function cli.<locals>._run at 0x7cb721e83420>\n\n    @pytest.mark.error\n    def test_invalid_json_stdin_error(self, cli):\n        \"\"\"Invalid JSON on STDIN with ``--format=json`` \u2192 error.\n    \n        Spec: \"Error: Invalid JSON: <raw_input>.\"\n        \"\"\"\n        result = cli(\n            [\"site\", \"create\", \"--format=json\"],\n            input_text=\"not valid json{{{\",\n        )\n        assert_exit_code(result, 1)\n>       assert \"Error: Invalid JSON:\" in result.stderr\nE       AssertionError: assert 'Error: Invalid JSON:' in 'Error: Parameter errors:\\n unknown --format parameter\\n'\nE        +  where 'Error: Parameter errors:\\n unknown --format parameter\\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--format=json'], returncode=1, stdout='', stderr='Error: Parameter errors:\\n unknown --format parameter\\n').stderr\n\n.evaluation_tests/test_checkpoint_3.py:135: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.00020469902665354311,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_confirmation_prompt_non_y_aborts",
+      "lineno": 136,
+      "outcome": "passed",
+      "keywords": [
+        "test_confirmation_prompt_non_y_aborts",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0038989799795672297,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.4859425220056437,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00019973100279457867,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_fields_plural_error",
+      "lineno": 147,
+      "outcome": "passed",
+      "keywords": [
+        "test_invalid_fields_plural_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0051766689866781235,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2442570590064861,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00019322600564919412,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_formats_preserve_same_underlying_values",
+      "lineno": 164,
+      "outcome": "passed",
+      "keywords": [
+        "test_formats_preserve_same_underlying_values",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0025875110004562885,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.49679400998866186,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018835297669284046,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_format_quoting",
+      "lineno": 174,
+      "outcome": "passed",
+      "keywords": [
+        "test_csv_format_quoting",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002720299002248794,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2764542509976309,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00019361398881301284,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_serializes_complex_values_as_json_strings",
+      "lineno": 195,
+      "outcome": "failed",
+      "keywords": [
+        "test_csv_serializes_complex_values_as_json_strings",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004349864990217611,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2844515499891713,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/conftest.py",
+          "lineno": 314,
+          "message": "AssertionError: Expected exit code 0, got 1.\n  stdout: ''\n  stderr: 'Error: Invalid field: tags.\\n'\nassert 1 == 0\n +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--format=csv', '--fields=tags,meta'], returncode=1, stdout='', stderr='Error: Invalid field: tags.\\n').returncode"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_3.py",
+            "lineno": 204,
+            "message": ""
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 322,
+            "message": "in assert_success"
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 314,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_3.TestFunctionality object at 0x7cb722bf6660>\ncli = <function cli.<locals>._run at 0x7cb721e82340>\n\n    @pytest.mark.functionality\n    def test_csv_serializes_complex_values_as_json_strings(self, cli):\n        \"\"\"Complex values in CSV output are serialized as JSON strings.\n    \n        Spec: \"Complex values such as arrays and objects must be serialized\n        as JSON strings when they appear in table or csv output.\"\n        \"\"\"\n        result = cli([\"site\", \"list\", \"--format=csv\", \"--fields=tags,meta\"])\n>       assert_success(result)\n\n.evaluation_tests/test_checkpoint_3.py:204: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n.evaluation_tests/conftest.py:322: in assert_success\n    assert_exit_code(result, 0)\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nresult = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--format=csv', '--fields=tags,meta'], returncode=1, stdout='', stderr='Error: Invalid field: tags.\\n')\ncode = 0\n\n    def assert_exit_code(\n        result: subprocess.CompletedProcess[str], code: int\n    ) -> None:\n        \"\"\"Assert the process exited with *code*.\"\"\"\n>       assert result.returncode == code, (\n            f\"Expected exit code {code}, got {result.returncode}.\\n\"\n            f\"stdout: {result.stdout!r}\\nstderr: {result.stderr!r}\"\n        )\nE       AssertionError: Expected exit code 0, got 1.\nE         stdout: ''\nE         stderr: 'Error: Invalid field: tags.\\n'\nE       assert 1 == 0\nE        +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--format=csv', '--fields=tags,meta'], returncode=1, stdout='', stderr='Error: Invalid field: tags.\\n').returncode\n\n.evaluation_tests/conftest.py:314: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.0002837120264302939,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_yaml_format_output",
+      "lineno": 209,
+      "outcome": "passed",
+      "keywords": [
+        "test_yaml_format_output",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005091583007015288,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.267730585008394,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002534140076022595,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_count_format_integer",
+      "lineno": 222,
+      "outcome": "passed",
+      "keywords": [
+        "test_count_format_integer",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.00567477400181815,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24868279800284654,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002628729853313416,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_ids_format_space_separated",
+      "lineno": 233,
+      "outcome": "passed",
+      "keywords": [
+        "test_ids_format_space_separated",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0058132249978370965,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2730668130097911,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0003193369775544852,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_restricts_and_orders_columns",
+      "lineno": 245,
+      "outcome": "passed",
+      "keywords": [
+        "test_fields_restricts_and_orders_columns",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0038877239858265966,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2377383119892329,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0003313120105303824,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_case_insensitive",
+      "lineno": 256,
+      "outcome": "passed",
+      "keywords": [
+        "test_fields_case_insensitive",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005553808005061001,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.4886574650008697,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002199609880335629,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_color_auto_mode",
+      "lineno": 268,
+      "outcome": "passed",
+      "keywords": [
+        "test_color_auto_mode",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0029517340008169413,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2663097140030004,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017364701488986611,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_no_color_disables_formatting",
+      "lineno": 284,
+      "outcome": "passed",
+      "keywords": [
+        "test_no_color_disables_formatting",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0028014800045639277,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24509451899211854,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017313798889517784,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_warning_to_stderr",
+      "lineno": 295,
+      "outcome": "passed",
+      "keywords": [
+        "test_warning_to_stderr",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0038975639909040183,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2595355589874089,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016736699035391212,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_success_to_stdout_suppressed_by_quiet",
+      "lineno": 306,
+      "outcome": "passed",
+      "keywords": [
+        "test_success_to_stdout_suppressed_by_quiet",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0028102300129830837,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24016528300126083,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.000172364991158247,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_debug_group_filtering",
+      "lineno": 316,
+      "outcome": "passed",
+      "keywords": [
+        "test_debug_group_filtering",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004263937997166067,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25575606801430695,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002626180066727102,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_debug_group_prefix_format",
+      "lineno": 329,
+      "outcome": "passed",
+      "keywords": [
+        "test_debug_group_prefix_format",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002920767990872264,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2519999050127808,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00021363599807955325,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_file_logging_timestamp_format",
+      "lineno": 341,
+      "outcome": "passed",
+      "keywords": [
+        "test_file_logging_timestamp_format",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0034961380006279796,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.26548992801690474,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.000458547001471743,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_file_logging_separator_per_invocation",
+      "lineno": 359,
+      "outcome": "failed",
+      "keywords": [
+        "test_file_logging_separator_per_invocation",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005336656991858035,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.5043208619754296,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_3.py",
+          "lineno": 381,
+          "message": "assert 0 >= 2\n +  where 0 = len([])"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_3.py",
+            "lineno": 381,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_3.TestFunctionality object at 0x7cb72225dd90>\ncli = <function cli.<locals>._run at 0x7cb721d68180>\nlog_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_file_logging_separator_pe0/appctl_root/logs/appctl.log')\n\n    @pytest.mark.functionality\n    def test_file_logging_separator_per_invocation(self, cli, log_path):\n        \"\"\"Each invocation delimited with separator line.\n    \n        Spec: \"Each invocation is delimited with a separator line.\"\n        \"\"\"\n        cli([\"help\"])\n        cli([\"help\"])\n        if log_path.exists():\n            content = log_path.read_text()\n            # Should have separator lines between invocations\n            # EasyEngine uses \"::::::::::::::::::::::::ee invoked::::::::::::::::::::::::\"\n            separator_candidates = [\n                l\n                for l in content.splitlines()\n                if l.strip()\n                and set(l.strip()) <= set(\":= -_invoked appctl\")\n                or \"invoked\" in l.lower()\n                or l.startswith(\"---\")\n                or l.startswith(\"===\")\n            ]\n>           assert len(separator_candidates) >= 2\nE           assert 0 >= 2\nE            +  where 0 = len([])\n\n.evaluation_tests/test_checkpoint_3.py:381: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.00017141300486400723,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_sensitive_error_not_logged",
+      "lineno": 382,
+      "outcome": "passed",
+      "keywords": [
+        "test_sensitive_error_not_logged",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002791089005768299,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2456149609934073,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002793450257740915,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_json_stdin_supplies_missing_positional_argument",
+      "lineno": 396,
+      "outcome": "failed",
+      "keywords": [
+        "test_json_stdin_supplies_missing_positional_argument",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004815479012904689,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2693999919865746,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/conftest.py",
+          "lineno": 314,
+          "message": "AssertionError: Expected exit code 0, got 1.\n  stdout: ''\n  stderr: 'Error: Parameter errors:\\n unknown --format parameter\\n'\nassert 1 == 0\n +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--type=html', '--format=json'], returncode=1, stdout='', stderr='Error: Parameter errors:\\n unknown --format parameter\\n').returncode"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_3.py",
+            "lineno": 413,
+            "message": ""
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 322,
+            "message": "in assert_success"
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 314,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_3.TestFunctionality object at 0x7cb722bf0230>\ncli = <function cli.<locals>._run at 0x7cb721d687c0>\nfake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_json_stdin_supplies_missi0/fake_docker_bin:/tmp/uv-cache/archive-v0/TyNq.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_json_stdin_supplies_missi0/docker_calls.log'))\n\n    @pytest.mark.functionality\n    def test_json_stdin_supplies_missing_positional_argument(\n        self, cli, fake_docker_env\n    ):\n        \"\"\"Missing positional values are read from STDIN in JSON mode.\n    \n        Spec: \"If a positional argument value is missing from the command\n        line, the implementation attempts to read that value from STDIN...\n        When --format=json is active, STDIN is parsed as JSON.\"\n        \"\"\"\n        docker_env, _ = fake_docker_env\n        result = cli(\n            [\"site\", \"create\", \"--type=html\", \"--format=json\"],\n            input_text='{\"site-name\": \"stdin.test\"}\\n',\n            env=docker_env,\n        )\n>       assert_success(result)\n\n.evaluation_tests/test_checkpoint_3.py:413: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n.evaluation_tests/conftest.py:322: in assert_success\n    assert_exit_code(result, 0)\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nresult = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--type=html', '--format=json'], returncode=1, stdout='', stderr='Error: Parameter errors:\\n unknown --format parameter\\n')\ncode = 0\n\n    def assert_exit_code(\n        result: subprocess.CompletedProcess[str], code: int\n    ) -> None:\n        \"\"\"Assert the process exited with *code*.\"\"\"\n>       assert result.returncode == code, (\n            f\"Expected exit code {code}, got {result.returncode}.\\n\"\n            f\"stdout: {result.stdout!r}\\nstderr: {result.stderr!r}\"\n        )\nE       AssertionError: Expected exit code 0, got 1.\nE         stdout: ''\nE         stderr: 'Error: Parameter errors:\\n unknown --format parameter\\n'\nE       assert 1 == 0\nE        +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--type=html', '--format=json'], returncode=1, stdout='', stderr='Error: Parameter errors:\\n unknown --format parameter\\n').returncode\n\n.evaluation_tests/conftest.py:314: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.0002565199974924326,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_yes_bypasses_confirmation",
+      "lineno": 416,
+      "outcome": "passed",
+      "keywords": [
+        "test_yes_bypasses_confirmation",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0026224929897580296,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24966422902070917,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018237499170936644,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y",
+      "lineno": 426,
+      "outcome": "passed",
+      "keywords": [
+        "test_confirmation_accepts_trimmed_uppercase_y",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002780259004794061,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2653999470057897,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002607649948913604,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_blank_response_cancels",
+      "lineno": 440,
+      "outcome": "failed",
+      "keywords": [
+        "test_confirmation_blank_response_cancels",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.00470430898712948,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24615387700032443,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/conftest.py",
+          "lineno": 314,
+          "message": "AssertionError: Expected exit code 1, got 0.\n  stdout: \"Are you sure you want to delete the site 'example.test'? [y/n] \"\n  stderr: 'Warning: Operation cancelled.\\n'\nassert 0 == 1\n +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'example.test'], returncode=0, stdout=\"Are you sure you want to delete the site 'example.test'? [y/n] \", stderr='Warning: Operation cancelled.\\n').returncode"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_3.py",
+            "lineno": 452,
+            "message": ""
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 314,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_3.TestFunctionality object at 0x7cb722bf7260>\ncli = <function cli.<locals>._run at 0x7cb721d68860>\n\n    @pytest.mark.functionality\n    def test_confirmation_blank_response_cancels(self, cli):\n        \"\"\"Blank confirmation input still cancels the operation.\n    \n        Spec: \"Any response other than y, after trimming and case\n        normalization, must abort the operation.\"\n        \"\"\"\n        result = cli(\n            [\"site\", \"delete\", \"example.test\"],\n            input_text=\"\\n\",\n        )\n>       assert_exit_code(result, 1)\n\n.evaluation_tests/test_checkpoint_3.py:452: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nresult = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'example.test'], returncode=0, stdout=\"Are you sure you want to delete the site 'example.test'? [y/n] \", stderr='Warning: Operation cancelled.\\n')\ncode = 1\n\n    def assert_exit_code(\n        result: subprocess.CompletedProcess[str], code: int\n    ) -> None:\n        \"\"\"Assert the process exited with *code*.\"\"\"\n>       assert result.returncode == code, (\n            f\"Expected exit code {code}, got {result.returncode}.\\n\"\n            f\"stdout: {result.stdout!r}\\nstderr: {result.stderr!r}\"\n        )\nE       AssertionError: Expected exit code 1, got 0.\nE         stdout: \"Are you sure you want to delete the site 'example.test'? [y/n] \"\nE         stderr: 'Warning: Operation cancelled.\\n'\nE       assert 0 == 1\nE        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'example.test'], returncode=0, stdout=\"Are you sure you want to delete the site 'example.test'? [y/n] \", stderr='Warning: Operation cancelled.\\n').returncode\n\n.evaluation_tests/conftest.py:314: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.00047350701061077416,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_suppresses_cancellation_warning",
+      "lineno": 454,
+      "outcome": "failed",
+      "keywords": [
+        "test_quiet_suppresses_cancellation_warning",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0035685629991348833,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2958922930120025,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/conftest.py",
+          "lineno": 314,
+          "message": "AssertionError: Expected exit code 1, got 0.\n  stdout: \"Are you sure you want to delete the site 'example.test'? [y/n] \"\n  stderr: 'Warning: Operation cancelled.\\n'\nassert 0 == 1\n +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', 'site', 'delete', 'example.test'], returncode=0, stdout=\"Are you sure you want to delete the site 'example.test'? [y/n] \", stderr='Warning: Operation cancelled.\\n').returncode"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_3.py",
+            "lineno": 466,
+            "message": ""
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 314,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_3.TestFunctionality object at 0x7cb72225e540>\ncli = <function cli.<locals>._run at 0x7cb721d691c0>\n\n    @pytest.mark.functionality\n    def test_quiet_suppresses_cancellation_warning(self, cli):\n        \"\"\"Quiet mode still aborts cancellation paths with the same exit code.\n    \n        Spec: cancellation remains an error-path return while quiet mode\n        suppresses regular informational/success chatter.\n        \"\"\"\n        result = cli(\n            [\"--quiet\", \"site\", \"delete\", \"example.test\"],\n            input_text=\"n\\n\",\n        )\n>       assert_exit_code(result, 1)\n\n.evaluation_tests/test_checkpoint_3.py:466: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nresult = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', 'site', 'delete', 'example.test'...=0, stdout=\"Are you sure you want to delete the site 'example.test'? [y/n] \", stderr='Warning: Operation cancelled.\\n')\ncode = 1\n\n    def assert_exit_code(\n        result: subprocess.CompletedProcess[str], code: int\n    ) -> None:\n        \"\"\"Assert the process exited with *code*.\"\"\"\n>       assert result.returncode == code, (\n            f\"Expected exit code {code}, got {result.returncode}.\\n\"\n            f\"stdout: {result.stdout!r}\\nstderr: {result.stderr!r}\"\n        )\nE       AssertionError: Expected exit code 1, got 0.\nE         stdout: \"Are you sure you want to delete the site 'example.test'? [y/n] \"\nE         stderr: 'Warning: Operation cancelled.\\n'\nE       assert 0 == 1\nE        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', 'site', 'delete', 'example.test'], returncode=0, stdout=\"Are you sure you want to delete the site 'example.test'? [y/n] \", stderr='Warning: Operation cancelled.\\n').returncode\n\n.evaluation_tests/conftest.py:314: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.0001977680076379329,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_does_not_suppress_debug_output",
+      "lineno": 467,
+      "outcome": "failed",
+      "keywords": [
+        "test_quiet_does_not_suppress_debug_output",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0031179069774225354,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2562434049905278,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_3.py",
+          "lineno": 478,
+          "message": "assert 'Debug:' in \"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.010s)\\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.011s)\\n\"\n +  where \"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.010s)\\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.011s)\\n\" = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', '--debug', 'help'], returncode=0, stdout=\"usage: appctl <command> [<subcommand>] [<args>] [--<flags>]\\n\\nAvailable commands:\\n\\n  cache   Adds, removes, fetches, and flushes the object cache.\\n  cli     Reviews current appctl info and checks registered commands.\\n  config  Generates and reads the configuration file.\\n  help    Gets help for appctl commands.\\n  option  Retrieves and sets site options.\\n  plugin  Manages plugins, including installs, activations, and updates.\\n  post    Manages posts, content, and meta.\\n  site    Creates, deletes, empties, archives, and lists sites.\\n  user    Manages users, along with their roles and meta.\\n\\nSee 'appctl help <command>' for more information on a specific command.\\n\", stderr=\"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.010s)\\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.011s)\\n\").stderr"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_3.py",
+            "lineno": 478,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_3.TestFunctionality object at 0x7cb72225deb0>\ncli = <function cli.<locals>._run at 0x7cb721e809a0>\n\n    @pytest.mark.functionality\n    def test_quiet_does_not_suppress_debug_output(self, cli):\n        \"\"\"``--quiet`` does not suppress debug output.\n    \n        Spec: \"``--quiet`` must suppress informational messages, success\n        messages, and warnings.\" Debug output is enabled separately by\n        ``--debug``.\n        \"\"\"\n        result = cli([\"--quiet\", \"--debug\", \"help\"])\n        assert_success(result)\n>       assert \"Debug:\" in result.stderr\nE       assert 'Debug:' in \"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.010s)\\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.011s)\\n\"\nE        +  where \"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.010s)\\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.011s)\\n\" = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', '--debug', 'help'], returncode=0, stdout=\"usage: appctl <command> [<subcommand>] [<args>] [--<flags>]\\n\\nAvailable commands:\\n\\n  cache   Adds, removes, fetches, and flushes the object cache.\\n  cli     Reviews current appctl info and checks registered commands.\\n  config  Generates and reads the configuration file.\\n  help    Gets help for appctl commands.\\n  option  Retrieves and sets site options.\\n  plugin  Manages plugins, including installs, activations, and updates.\\n  post    Manages posts, content, and meta.\\n  site    Creates, deletes, empties, archives, and lists sites.\\n  user    Manages users, along with their roles and meta.\\n\\nSee 'appctl help <command>' for more information on a specific command.\\n\", stderr=\"Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.010s)\\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.011s)\\n\").stderr\n\n.evaluation_tests/test_checkpoint_3.py:478: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.00017533701611682773,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_complex_values_json_serialized_in_table",
+      "lineno": 480,
+      "outcome": "passed",
+      "keywords": [
+        "test_complex_values_json_serialized_in_table",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_3.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0025585289986338466,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24536926101427525,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00024404600844718516,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore::test_detailed_execution_captures_all_fields",
+      "lineno": 33,
+      "outcome": "failed",
+      "keywords": [
+        "test_detailed_execution_captures_all_fields",
+        "TestCore",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002594467019662261,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2412983300164342,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_4.py",
+          "lineno": 44,
+          "message": "assert 'return' in \"debug (bootstrap): loaded config file: /tmp/pytest-of-agent/pytest-0/test_detailed_execution_captur0/appctl_root/config/config.yml (0.010s)\\ndebug (bootstrap): resolved command 'help' with arguments [] (0.011s)\\n\""
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_4.py",
+            "lineno": 44,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_4.TestCore object at 0x7cb72225f4a0>\ncli = <function cli.<locals>._run at 0x7cb721e82ca0>\n\n    def test_detailed_execution_captures_all_fields(self, cli):\n        \"\"\"External command returns stdout, stderr, return_code, run_time.\n    \n        Spec: \"captures a structured result containing: stdout, stderr,\n        return_code, run_time.\"\n        \"\"\"\n        result = cli([\"--debug\", \"help\"])\n        assert_success(result)\n        debug = strip_ansi(result.stderr).lower()\n        assert \"command\" in debug\n>       assert \"return\" in debug\nE       assert 'return' in \"debug (bootstrap): loaded config file: /tmp/pytest-of-agent/pytest-0/test_detailed_execution_captur0/appctl_root/config/config.yml (0.010s)\\ndebug (bootstrap): resolved command 'help' with arguments [] (0.011s)\\n\"\n\n.evaluation_tests/test_checkpoint_4.py:44: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.00036393298069015145,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore::test_success_only_execution_returns_boolean",
+      "lineno": 45,
+      "outcome": "passed",
+      "keywords": [
+        "test_success_only_execution_returns_boolean",
+        "TestCore",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0051994659879710525,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.560361871990608,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00023165799211710691,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_read_hit_returns_content",
+      "lineno": 55,
+      "outcome": "passed",
+      "keywords": [
+        "test_cache_read_hit_returns_content",
+        "TestCore",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002888107002945617,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.3215602330164984,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001848319952841848,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_read_expired_deletes_and_misses",
+      "lineno": 70,
+      "outcome": "passed",
+      "keywords": [
+        "test_cache_read_expired_deletes_and_misses",
+        "TestCore",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0045545760076493025,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.0006339710089378059,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00015294700278900564,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_key_sanitization_non_url",
+      "lineno": 83,
+      "outcome": "passed",
+      "keywords": [
+        "test_cache_key_sanitization_non_url",
+        "TestCore",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002790334983728826,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.26179573399713263,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018389199976809323,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestErrors::test_unsupported_archive_format_error",
+      "lineno": 105,
+      "outcome": "passed",
+      "keywords": [
+        "test_unsupported_archive_format_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004208302998449653,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25029883900424466,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001742650056257844,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestErrors::test_non_writable_file_extraction_warning_then_error",
+      "lineno": 121,
+      "outcome": "passed",
+      "keywords": [
+        "test_non_writable_file_extraction_warning_then_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0034558289917185903,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2749159340164624,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00019534199964255095,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestErrors::test_exit_code_negative_1_warning",
+      "lineno": 155,
+      "outcome": "failed",
+      "keywords": [
+        "test_exit_code_negative_1_warning",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0025880190078169107,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2450526960019488,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_4.py",
+          "lineno": 172,
+          "message": "AssertionError: assert 'Warning' in ''\n +  where '' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='name  type      title         status\\nmain  standard  Main Site     active\\nblog  blog      Company Blog  active\\nshop  store     Shop          archived\\n', stderr='').stderr"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_4.py",
+            "lineno": 172,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_4.TestErrors object at 0x7cb72225daf0>\ncli = <function cli.<locals>._run at 0x7cb721d693a0>\ntmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_exit_code_negative_1_warn0')\n\n    @pytest.mark.error\n    def test_exit_code_negative_1_warning(self, cli, tmp_path):\n        \"\"\"Process returning -1 emits warning to STDERR.\n    \n        Spec: \"emits a warning to STDERR about signal handling configuration.\"\n        \"\"\"\n        bin_dir = tmp_path / \"signal_bin\"\n        bin_dir.mkdir()\n        docker = bin_dir / \"docker\"\n        docker.write_text(\"#!/usr/bin/env sh\\nkill -TERM $$\\n\")\n        docker.chmod(0o755)\n        compose = bin_dir / \"docker-compose\"\n        compose.write_text(\"#!/usr/bin/env sh\\nexit 0\\n\")\n        compose.chmod(0o755)\n        env = {\"PATH\": f\"{bin_dir}:{os.environ.get('PATH', '')}\"}\n        result = cli([\"site\", \"list\"], env=env)\n>       assert \"Warning\" in result.stderr\nE       AssertionError: assert 'Warning' in ''\nE        +  where '' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='name  type      title         status\\nmain  standard  Main Site     active\\nblog  blog      Company Blog  active\\nshop  store     Shop          archived\\n', stderr='').stderr\n\n.evaluation_tests/test_checkpoint_4.py:172: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.000395101000322029,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestErrors::test_cache_dir_creation_failure_silent",
+      "lineno": 173,
+      "outcome": "passed",
+      "keywords": [
+        "test_cache_dir_creation_failure_silent",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002677103999303654,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24068230198463425,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018914000247605145,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_sensitive_arg_obfuscation_in_debug",
+      "lineno": 194,
+      "outcome": "passed",
+      "keywords": [
+        "test_sensitive_arg_obfuscation_in_debug",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004254433006281033,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2479383829922881,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018719499348662794,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_stdout_mode",
+      "lineno": 205,
+      "outcome": "passed",
+      "keywords": [
+        "test_tool_redispatch_stdout_mode",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005249601992545649,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.23598958001821302,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00024579401360824704,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_stderr_mode",
+      "lineno": 217,
+      "outcome": "passed",
+      "keywords": [
+        "test_tool_redispatch_stderr_mode",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003918611007975414,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25957451498834416,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00022589598665945232,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_return_code_mode",
+      "lineno": 226,
+      "outcome": "passed",
+      "keywords": [
+        "test_tool_redispatch_return_code_mode",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003125746996374801,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25581569701898843,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.000258120009675622,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_all_mode",
+      "lineno": 235,
+      "outcome": "passed",
+      "keywords": [
+        "test_tool_redispatch_all_mode",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004463167977519333,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.26904460397781804,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00019809199147857726,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_json_parse_mode",
+      "lineno": 244,
+      "outcome": "passed",
+      "keywords": [
+        "test_tool_redispatch_json_parse_mode",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0049004339962266386,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2508934890211094,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00021033300436101854,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_write_stores_content",
+      "lineno": 258,
+      "outcome": "passed",
+      "keywords": [
+        "test_cache_write_stores_content",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005667549005011097,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24851102998945862,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00021690299035981297,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_miss_returns_false",
+      "lineno": 270,
+      "outcome": "passed",
+      "keywords": [
+        "test_cache_miss_returns_false",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.006141688005300239,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.0003157339815516025,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016813198453746736,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_fresh_entry_not_expired",
+      "lineno": 279,
+      "outcome": "passed",
+      "keywords": [
+        "test_cache_fresh_entry_not_expired",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003901841992046684,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2458987879799679,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00019736698595806956,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_cleanup_expire_pass",
+      "lineno": 293,
+      "outcome": "passed",
+      "keywords": [
+        "test_cache_cleanup_expire_pass",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.00733249299810268,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.0008464120037388057,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00015808799071237445,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_cleanup_size_enforcement",
+      "lineno": 307,
+      "outcome": "passed",
+      "keywords": [
+        "test_cache_cleanup_size_enforcement",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0036949850036762655,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.0008165499893948436,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001252040092367679,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_eviction_tiebreaker_alphabetical",
+      "lineno": 322,
+      "outcome": "passed",
+      "keywords": [
+        "test_cache_eviction_tiebreaker_alphabetical",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003758954000659287,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.00068774598184973,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001276449766010046,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_key_sanitization_url",
+      "lineno": 339,
+      "outcome": "passed",
+      "keywords": [
+        "test_cache_key_sanitization_url",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0033440559927839786,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.257772698008921,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00024809499154798687,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_zip",
+      "lineno": 356,
+      "outcome": "passed",
+      "keywords": [
+        "test_archive_extraction_zip",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0054610980150755495,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2921179620025214,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002038409875240177,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_overwrites_existing_writable_file",
+      "lineno": 373,
+      "outcome": "passed",
+      "keywords": [
+        "test_archive_extraction_overwrites_existing_writable_file",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004685120977228507,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2765046860149596,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017775502055883408,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_non_writable_nested_archive_entry_warns_with_relative_path",
+      "lineno": 398,
+      "outcome": "passed",
+      "keywords": [
+        "test_non_writable_nested_archive_entry_warns_with_relative_path",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004534899984719232,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2802450909803156,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00014652599929831922,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_non_writable_archive_entry_does_not_stop_other_files",
+      "lineno": 446,
+      "outcome": "passed",
+      "keywords": [
+        "test_non_writable_archive_entry_does_not_stop_other_files",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004473708977457136,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.3068439470080193,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001694450038485229,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_tar_gz",
+      "lineno": 496,
+      "outcome": "passed",
+      "keywords": [
+        "test_archive_extraction_tar_gz",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0049412370135542005,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2718080570048187,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00020396799664013088,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tar_gz_fallback_to_external_command",
+      "lineno": 514,
+      "outcome": "passed",
+      "keywords": [
+        "test_tar_gz_fallback_to_external_command",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_4.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005042580014560372,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.281820311996853,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017243498587049544,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestCore::test_db_auto_create_with_tables",
+      "lineno": 71,
+      "outcome": "passed",
+      "keywords": [
+        "test_db_auto_create_with_tables",
+        "TestCore",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004547343007288873,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2640029340109322,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002507889876142144,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestCore::test_option_read_missing_returns_false",
+      "lineno": 92,
+      "outcome": "passed",
+      "keywords": [
+        "test_option_read_missing_returns_false",
+        "TestCore",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.006101209000917152,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25689587998203933,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002952270151581615,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestCore::test_option_write_insert_then_read",
+      "lineno": 107,
+      "outcome": "failed",
+      "keywords": [
+        "test_option_write_insert_then_read",
+        "TestCore",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005819951999001205,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.27075911199790426,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_5.py",
+          "lineno": 116,
+          "message": "sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_5.py",
+            "lineno": 116,
+            "message": "IntegrityError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_5.TestCore object at 0x7cb7220e8290>\ncli = <function cli.<locals>._run at 0x7cb721d689a0>\ndb_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_option_write_insert_then_0/appctl_root/db/appctl.sqlite')\n\n    def test_option_write_insert_then_read(self, cli, db_path):\n        \"\"\"Write new key, read returns value.\n    \n        Spec: Example 1.\n        \"\"\"\n        db_dir = db_path.parent\n        cli([\"help\"])  # Ensure DB is initialized\n        conn = _open_store_connection(db_dir)\n>       conn.execute(\n            \"INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)\",\n            (\"test_key\", \"test_value\"),\n        )\nE       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on\n\n.evaluation_tests/test_checkpoint_5.py:116: IntegrityError"
+      },
+      "teardown": {
+        "duration": 0.00020745399524457753,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestCore::test_option_upsert_overwrites",
+      "lineno": 128,
+      "outcome": "failed",
+      "keywords": [
+        "test_option_upsert_overwrites",
+        "TestCore",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0051613450050354,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2657890779955778,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_5.py",
+          "lineno": 137,
+          "message": "sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_5.py",
+            "lineno": 137,
+            "message": "IntegrityError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_5.TestCore object at 0x7cb7220e9ee0>\ncli = <function cli.<locals>._run at 0x7cb721cf8360>\ndb_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_option_upsert_overwrites0/appctl_root/db/appctl.sqlite')\n\n    def test_option_upsert_overwrites(self, cli, db_path):\n        \"\"\"Write existing key with new value, read returns new value.\n    \n        Spec: Example 2.\n        \"\"\"\n        db_dir = db_path.parent\n        cli([\"help\"])  # Ensure DB is initialized\n        conn = _open_store_connection(db_dir)\n>       conn.execute(\n            \"INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)\",\n            (\"upsert_key\", \"old_value\"),\n        )\nE       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on\n\n.evaluation_tests/test_checkpoint_5.py:137: IntegrityError"
+      },
+      "teardown": {
+        "duration": 0.0001652540231589228,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestErrors::test_db_connection_failure_error",
+      "lineno": 160,
+      "outcome": "passed",
+      "keywords": [
+        "test_db_connection_failure_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003098673012573272,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.237038726976607,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001858309842646122,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestErrors::test_table_creation_failure_error",
+      "lineno": 180,
+      "outcome": "passed",
+      "keywords": [
+        "test_table_creation_failure_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003040579002117738,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.5055523320042994,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016879398026503623,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_history_records_store_required_metadata",
+      "lineno": 202,
+      "outcome": "passed",
+      "keywords": [
+        "test_migration_history_records_store_required_metadata",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0028826119960285723,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25034168901038356,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00027201100601814687,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_history_table_starts_empty",
+      "lineno": 240,
+      "outcome": "passed",
+      "keywords": [
+        "test_migration_history_table_starts_empty",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004293370991945267,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24947099000564776,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00021120900055393577,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_skipped_if_already_recorded",
+      "lineno": 257,
+      "outcome": "passed",
+      "keywords": [
+        "test_migration_skipped_if_already_recorded",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004371106013422832,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.5487821520073339,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002703569771256298,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_all_values_stored_as_strings",
+      "lineno": 279,
+      "outcome": "failed",
+      "keywords": [
+        "test_all_values_stored_as_strings",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0034078429744113237,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24478851901949383,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_5.py",
+          "lineno": 290,
+          "message": "sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_5.py",
+            "lineno": 290,
+            "message": "IntegrityError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_5.TestFunctionality object at 0x7cb7220e8980>\ncli = <function cli.<locals>._run at 0x7cb721cf8b80>\ndb_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_all_values_stored_as_stri0/appctl_root/db/appctl.sqlite')\n\n    def test_all_values_stored_as_strings(self, cli, db_path):\n        \"\"\"Stored values round-trip without implicit coercion.\n    \n        Spec: option values are returned as stored string content.\n        \"\"\"\n        db_dir = db_path.parent\n        cli([\"help\"])\n        if not any(candidate.is_file() for candidate in db_dir.rglob(\"*\")):\n            return\n        conn = _open_store_connection(db_dir)\n>       conn.execute(\n            \"INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)\",\n            (\"numeric_test\", \"42\"),\n        )\nE       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on\n\n.evaluation_tests/test_checkpoint_5.py:290: IntegrityError"
+      },
+      "teardown": {
+        "duration": 0.00017134399968199432,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_empty_string_value_is_not_treated_as_missing",
+      "lineno": 301,
+      "outcome": "failed",
+      "keywords": [
+        "test_empty_string_value_is_not_treated_as_missing",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004140450007980689,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2619580079917796,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_5.py",
+          "lineno": 315,
+          "message": "sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_5.py",
+            "lineno": 315,
+            "message": "IntegrityError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_5.TestFunctionality object at 0x7cb7220e8ef0>\ncli = <function cli.<locals>._run at 0x7cb721cf9120>\ndb_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_empty_string_value_is_not0/appctl_root/db/appctl.sqlite')\n\n    @pytest.mark.functionality\n    def test_empty_string_value_is_not_treated_as_missing(self, cli, db_path):\n        \"\"\"A stored empty string remains distinct from a missing key.\n    \n        Spec: missing reads return false, while existing keys return the\n        stored string value.\n        \"\"\"\n        db_dir = db_path.parent\n        assert_success(cli([\"help\"]))\n        if not any(candidate.is_file() for candidate in db_dir.rglob(\"*\")):\n            return\n    \n        conn = _open_store_connection(db_dir)\n>       conn.execute(\n            \"INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)\",\n            (\"empty_value_key\", \"\"),\n        )\nE       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on\n\n.evaluation_tests/test_checkpoint_5.py:315: IntegrityError"
+      },
+      "teardown": {
+        "duration": 0.0001945389958564192,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_existing_empty_store_file_gets_required_tables",
+      "lineno": 332,
+      "outcome": "passed",
+      "keywords": [
+        "test_existing_empty_store_file_gets_required_tables",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0029821409843862057,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.5769316449877806,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00026872800663113594,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_timestamps_are_machine_parseable",
+      "lineno": 358,
+      "outcome": "passed",
+      "keywords": [
+        "test_migration_timestamps_are_machine_parseable",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0027163560152985156,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24932760099181905,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017733400454744697,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migrations_table_schema",
+      "lineno": 393,
+      "outcome": "passed",
+      "keywords": [
+        "test_migrations_table_schema",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003156530001433566,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2472616840095725,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018105300841853023,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_options_table_schema",
+      "lineno": 409,
+      "outcome": "passed",
+      "keywords": [
+        "test_options_table_schema",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002589445997728035,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.24713767500361428,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017831902368925512,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_parameterized_queries",
+      "lineno": 425,
+      "outcome": "failed",
+      "keywords": [
+        "test_parameterized_queries",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0023068249865900725,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25819803902413696,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_5.py",
+          "lineno": 439,
+          "message": "sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_5.py",
+            "lineno": 439,
+            "message": "IntegrityError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_5.TestFunctionality object at 0x7cb7220e8170>\ncli = <function cli.<locals>._run at 0x7cb721cf9260>\ndb_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_parameterized_queries0/appctl_root/db/appctl.sqlite')\n\n    @pytest.mark.functionality\n    def test_parameterized_queries(self, cli, db_path):\n        \"\"\"Queries use parameter bindings, not string interpolation.\n    \n        Spec: \"All database queries use parameterized value bindings.\"\n        \"\"\"\n        # Verify by inserting a value with SQL injection attempt\n        db_dir = db_path.parent\n        cli([\"help\"])\n        if not any(candidate.is_file() for candidate in db_dir.rglob(\"*\")):\n            return\n        conn = _open_store_connection(db_dir)\n        dangerous_key = \"'; DROP TABLE options; --\"\n>       conn.execute(\n            \"INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)\",\n            (dangerous_key, \"safe\"),\n        )\nE       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on\n\n.evaluation_tests/test_checkpoint_5.py:439: IntegrityError"
+      },
+      "teardown": {
+        "duration": 0.000210668018553406,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_record_can_be_removed_after_rollback",
+      "lineno": 456,
+      "outcome": "passed",
+      "keywords": [
+        "test_migration_record_can_be_removed_after_rollback",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0032325460051652044,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.2691577539953869,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00039957501576282084,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_existing_db_opens_without_recreating",
+      "lineno": 496,
+      "outcome": "failed",
+      "keywords": [
+        "test_existing_db_opens_without_recreating",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_5.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.006009849981637672,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.25464474101318046,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/test_checkpoint_5.py",
+          "lineno": 510,
+          "message": "sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_5.py",
+            "lineno": 510,
+            "message": "IntegrityError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_5.TestFunctionality object at 0x7cb7220eb7d0>\ncli = <function cli.<locals>._run at 0x7cb721cf96c0>\ndb_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_existing_db_opens_without0/appctl_root/db/appctl.sqlite')\n\n    @pytest.mark.functionality\n    def test_existing_db_opens_without_recreating(self, cli, db_path):\n        \"\"\"Existing DB opens connection without recreating tables.\n    \n        Spec: \"If the database file already exists, a connection is opened.\"\n        \"\"\"\n        db_dir = db_path.parent\n        # First run creates DB\n        cli([\"help\"])\n        if not any(candidate.is_file() for candidate in db_dir.rglob(\"*\")):\n            return\n        # Insert a marker\n        conn = _open_store_connection(db_dir)\n>       conn.execute(\n            \"INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)\",\n            (\"marker\", \"preserved\"),\n        )\nE       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on\n\n.evaluation_tests/test_checkpoint_5.py:510: IntegrityError"
+      },
+      "teardown": {
+        "duration": 0.0016539969947189093,
+        "outcome": "passed"
+      }
+    }
+  ]
+}

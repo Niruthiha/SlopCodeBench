@@ -1,0 +1,610 @@
+[
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "4",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "cd /workspace/sithlib && python3 - <<'EOF'\np='navigation.py'\ns=open(p).read()\nold='''        if relative.endswith(\".py\"):\n            relative = relative[:-3]\n        parts = [p for p in relative.split(\"/\") if p]'''\nnew='''        if relative.endswith(\".pyi\"):\n            relative = relative[:-4]\n            if relative.startswith(\"stubs/\"):\n                relative = relative[len(\"stubs/\"):]\n        elif relative.endswith(\".py\"):\n            relative = relative[:-3]\n        parts = [p for p in relative.split(\"/\") if p]'''\nassert old in s\ns=s.replace(old,new)\nopen(p,'w').write(s)\nEOF",
+  "id": 1
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "cd /workspace; sed -i 's/    out.debug(f\"Running remote command: {shlex.join(argv)}\")/    out.debug(f\"Running remote command: {shlex.join(argv)}\", group=\"ssh\")/' appctl_core/remote.py; grep -n \"out.debug\" appctl_core/remote.py",
+  "id": 2
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "rm -rf /tmp/t2; mkdir -p /tmp/t2/bin /tmp/t2/proj/a/b && cd /tmp/t2/proj/a/b; export APPCTL_ROOT_DIR=/tmp/t2/root; A=\"python3 /workspace/appctl.py\"\ncat > /tmp/t2/bin/ssh <<'EOF'\n#!/bin/sh\necho \"fake-ssh: $*\"\nexit ${FAKE_SSH_EXIT:-0}\nEOF\nchmod +x /tmp/t2/bin/ssh\ncat > /tmp/t2/proj/appctl.yml <<'EOF'\n@b: {ssh: \"user@host:2222/var/www\", path: /srv}\n@a:\n  path: x\ndisabled_commands: [site list]\nEOF\nPATH=/tmp/t2/bin:$PATH $A @all config path --debug 2>&1; echo \"exit=$?\"\necho ---; PATH=/tmp/t2/bin:$PATH FAKE_SSH_EXIT=255 APPCTL_SSH_PRE_CMD=\"echo hi;\" $A @b site list; echo \"exit=$?\"\necho ---; $A site list; echo \"exit=$?\"; $A site ls; echo \"exit=$?\"; $A help site | grep -c \"list\"; $A cli has-command \"site list\"; echo \"has=$?\"\necho \"--- local overrides\"; printf '_:\\n  inherit: base.yml\\n  merge: true\\ndisabled_commands:\\n  - cache flush\\n' > /tmp/t2/proj/appctl.local.yml\nprintf 'disabled_commands: [db create]\\n' > /tmp/t2/proj/base.yml\nprintf 'disabled_commands: [option get]\\ncolor: false\\nlocale: fr_FR\\n' >> /tmp/t2/root/config/config.yml\ncat /tmp/t2/root/config/config.yml\n$A cli version --debug 2>&1 | grep -E \"Resolved|Using\"\n$A cache flush; $A db create; $A option get siteurl;  echo \"exit=$?\"\necho \"--- runtime\"; $A cli version --color --debug 2>&1 | grep -o '\"color\": [a-z]*'\n$A cli version --blog=x.com --debug 2>&1 | grep -E \"Warning|\\\"url\\\"\"",
+  "id": 3
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "6",
+  "cls": [
+   "edit_script",
+   "own_test_run"
+  ],
+  "cmd": "cd /workspace; cat >> tests/test_sith.py <<'EOF'\n\n\nclass InterpreterTests(CommandTestCase):\n    NAMESPACES = [\n        {\"data\": {\"type\": \"list\", \"value\": \"[1, 2]\"}, \"x\": {\"type\": \"str\"},\n         \"obj\": {\"type\": \"Foo\", \"attributes\": [\"alpha\", \"beta\"]},\n         \"jn\": {\"type\": \"function\", \"module\": \"os.path\", \"name\": \"join\"}},\n        {\"data\": {\"type\": \"dict\"}, \"zed\": {\"type\": \"int\", \"value\": \"5\"}},\n    ]\n\n    def setUp(self):\n        super().setUp()\n        self.namespaces = self.write(\"ns.json\", json.dumps(self.NAMESPACES))\n\n    def interpret(self, command, source, line, col, key):\n        path = self.write(\"main.py\", source)\n        return self.run_json(command, path, line, col, \"--interpreter\",\n                             \"--namespaces\", self.namespaces, key=key)\n\n    def test_completion_merges_namespaces(self):\n        source = \"x = 1\\n\\n\"\n        result = self.by_name(self.interpret(\"complete\", source, 2, 0, \"completions\"))\n        self.assertEqual(result[\"x\"][\"description\"], \"instance of int\")  # static wins\n        self.assertEqual(result[\"data\"], {\"name\": \"data\", \"complete\": \"data\", \"type\": \"list\",\n                                          \"description\": \"list (runtime)\"})\n        self.assertEqual(result[\"zed\"][\"description\"], \"int (runtime)\")\n\n    def test_attribute_completion(self):\n        names = self.names(self.interpret(\"complete\", \"data.app\", 1, 8, \"completions\"))\n        self.assertEqual(names, [\"append\"])\n        names = self.names(self.interpret(\"complete\", \"obj.\", 1, 4, \"completions\"))\n        self.assertEqual(names, [\"alpha\", \"beta\"])\n\n    def test_infer_and_goto_fallback(self):\n        for command in (\"infer\", \"goto\"):\n            [definition] = self.interpret(command, \"data\\n\", 1, 0, \"definitions\")\n            self.assertEqual((definition[\"name\"], definition[\"type\"], definition[\"description\"]),\n                             (\"data\", \"list\", \"list (runtime)\"))\n        [static] = self.interpret(\"infer\", \"x = 1\\nx\\n\", 2, 0, \"definitions\")\n        self.assertEqual(static[\"name\"], \"int\")\n        self.assertEqual(self.interpret(\"infer\", \"missing\\n\", 1, 0, \"definitions\"), [])\n\n    def test_signatures(self):\n        [signature] = self.interpret(\"signatures\", \"jn(\", 1, 3, \"signatures\")\n        self.assertEqual(signature[\"name\"], \"join\")\n\n    def test_namespaces_require_interpreter(self):\n        path = self.write(\"main.py\", \"data\\n\")\n        result = self.run_sith(path, 1, 0, \"--namespaces\", self.namespaces, command=\"infer\")\n        self.assertEqual(result.returncode, 1)\n        self.assertEqual(self.run_json(\"infer\", path, 1, 0, \"--interpreter\", key=\"definitions\"), [])\n\n\nclass SettingsTests(CommandTestCase):\n    def test_add_bracket_and_case(self):\n        path = self.write(\"main.py\", \"def fun(): pass\\nFu\\n\")\n        result = self.by_name(self.run_json(\"complete\", path, 2, 2, \"--setting\", \"add_bracket=TRUE\",\n                                            key=\"completions\"))\n        self.assertEqual(result[\"fun\"][\"complete\"], \"n(\")\n        result = self.run_json(\"complete\", path, 2, 2, \"--setting\", \"case_insensitive=false\",\n                               key=\"completions\")\n        self.assertNotIn(\"fun\", self.names(result))\n\n    def test_invalid_settings(self):\n        path = self.write(\"main.py\", \"x\\n\")\n        for setting in (\"bogus=true\", \"add_bracket=yes\", \"add_bracket\"):\n            self.assertEqual(self.run_sith(path, 1, 0, \"--setting\", setting).returncode, 1)\n\n    def test_dynamic_params(self):\n        path = self.write(\"main.py\", \"def f(a):\\n    return a\\nf(1)\\n\")\n        self.assertEqual(len(self.run_json(\"infer\", path, 2, 11, key=\"definitions\")), 1)\n        self.assertEqual(self.run_json(\"infer\", path, 2, 11, \"--setting\", \"dynamic_params=false\",\n                                       key=\"definitions\"), [])\n\n\nclass ProjectTests(CommandTestCase):\n    def init(self, *flags):\n        result = subprocess.run([sys.executable, SITH, \"project\", \"init\", self.dir, *flags],\n                                capture_output=True, text=True)\n        self.assertEqual(result.returncode, 0, result.stderr)\n        with open(os.path.join(self.dir, \".sith\", \"project.json\"), encoding=\"utf-8\") as handle:\n            return json.load(handle)\n\n    def test_init_and_merge(self):\n        self.assertEqual(self.init(), {\"environment_path\": \"\", \"sys_path\": [],\n                                       \"added_sys_path\": [], \"smart_sys_path\": True})\n        self.assertEqual(self.init(\"--added-sys-path\", \"lib,src\")[\"added_sys_path\"], [\"lib\", \"src\"])\n        config = self.init(\"--environment\", \"/usr/bin/python3\")\n        self.assertEqual((config[\"environment_path\"], config[\"added_sys_path\"]),\n                         (\"/usr/bin/python3\", [\"lib\", \"src\"]))\n\n    def test_sys_path_resolution(self):\n        self.write(\"lib/helper.py\", \"def helper_fn():\\n    pass\\n\")\n        self.write(\"local.py\", \"def local_fn():\\n    pass\\n\")\n        path = self.write(\"main.py\", \"import helper\\nimport local\\nhelper.helper_fn\\nlocal.local_fn\\n\")\n\n        def resolved(line, col, *flags):\n            return [d[\"module_path\"] for d in self.run_json(\"goto\", path, line, col, *flags,\n                                                            key=\"definitions\")]\n\n        self.assertEqual(resolved(3, 8), [])\n        self.assertEqual(resolved(4, 7), [\"local.py\"])\n        self.init(\"--added-sys-path\", \"lib\")\n        self.assertEqual(resolved(3, 8), [\"lib/helper.py\"])\n        self.assertEqual(resolved(4, 7, \"--setting\", \"smart_sys_path=false\"), [])\n        self.assertEqual(resolved(3, 8, \"--setting\", \"smart_sys_path=false\"), [\"lib/helper.py\"])\n\n\nclass ContextTests(CommandTestCase):\n    def test_context(self):\n        source = \"x = 1\\nclass A:\\n    def m(self):\\n        pass\\n\"\n        path = self.write(\"main.py\", source)\n        self.assertEqual(self.run_json(\"context\", path, 1, 0), [])\n        self.assertEqual(self.run_json(\"context\", path, 4, 8), [\n            {\"name\": \"A\", \"type\": \"class\", \"line\": 2, \"column\": 6},\n            {\"name\": \"m\", \"type\": \"function\", \"line\": 3, \"column\": 8},\n        ])\n\n\nclass EnvironmentTests(CommandTestCase):\n    def env(self, *args, key=\"environments\"):\n        return self.run_json(\"env\", *args, key=key)\n\n    def test_info(self):\n        info = self.env(\"info\", sys.executable, key=\"executable\")\n        self.assertEqual(os.path.realpath(info), os.path.realpath(sys.executable))\n        result = subprocess.run([sys.executable, SITH, \"env\", \"info\", \"/no/such/python\"],\n                                capture_output=True, text=True)\n        self.assertEqual(result.returncode, 1)\n\n    def test_list_sorted_and_unique(self):\n        environments = self.env(\"list\")\n        resolved = [os.path.realpath(e[\"executable\"]) for e in environments]\n        self.assertEqual(len(resolved), len(set(resolved)))\n        self.assertIn(os.path.realpath(sys.executable), resolved)\n\n    def test_find_virtualenvs(self):\n        for name in (\"one\", \"two\"):\n            subprocess.run([sys.executable, \"-m\", \"venv\", \"--without-pip\",\n                            os.path.join(self.dir, \"envs\", name)], check=True)\n        found = self.env(\"find-virtualenvs\", \"--path\", os.path.join(self.dir, \"envs\"))\n        executables = [e[\"executable\"] for e in found if e[\"executable\"].startswith(self.dir)]\n        self.assertEqual(len(executables), 2)\n        self.assertTrue(all(e[\"is_virtualenv\"] for e in found))\nEOF\ntimeout 600 python -m unittest tests.test_sith.InterpreterTests tests.test_sith.SettingsTests tests.test_sith.ProjectTests tests.test_sith.ContextTests tests.test_sith.EnvironmentTests 2>&1 | tail -15",
+  "id": 4
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/p1 && cat > comp.py <<'EOF'\nimport he\nimport pkg.\nimport pkg.sub.\nfrom helpers import \nfrom helpers import Hel\nfrom pkg import \nfrom pkg.core import \nfrom . import \nfrom .pkg import \nfrom pkg.sub import (deep,\n    \nimport helpers as \nfrom os import pa\nfrom pkg imp\nfrom pkg.sub.deep import \nimport helpers\nhelpers.\nimport pkg\npkg.\nimport ns\nns.\nfrom ns import \nimport \nEOF\nS=\"/workspace/.venv/bin/python /workspace/sith.py\"\nn=0; while IFS= read -r l; do n=$((n+1)); echo \"== $n: $l\"; $S complete comp.py $n ${#l} | head -c 600; echo; done < comp.py",
+  "id": 5
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /workspace; .venv/bin/python - <<'EOF'\nimport sys, ast, traceback\nsys.path.insert(0,'.')\nfrom sithlib.modules import Importer, ModuleContext\nfrom sithlib.inference import Inferrer\nfrom sithlib.parsing import parse_tolerant\nimp = Importer('/tmp/t3')\ntext=open('/tmp/t3/main.py').read()\ntree=parse_tolerant(text)\nprint(ast.dump(tree.body[12])[:200])\nprint(ast.unparse(tree))\nEOF",
+  "id": 6
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/agent_home/.claude/projects/-workspace/memory/ && ls; cat MEMORY.md 2>/dev/null",
+  "id": 7
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "edit_script",
+   "probe_run"
+  ],
+  "cmd": "python - <<'EOF'\np='cli.py'; s=open(p).read()\ns=s.replace('''from .recipe import RecipeError, RecipeResolver''','''from .recipe import MAX_MATERIAL_EFFICIENCY, MAX_TIME_EFFICIENCY, RecipeError, RecipeResolver''')\ns=s.replace('''def build_parser() -> argparse.ArgumentParser:''','''def _material_efficiency(value: str) -> int:\n    try:\n        me = int(value)\n    except ValueError:\n        raise argparse.ArgumentTypeError(f\"invalid integer: {value!r}\")\n    if not 0 <= me <= MAX_MATERIAL_EFFICIENCY:\n        raise argparse.ArgumentTypeError(\n            f\"must be an integer in [0,{MAX_MATERIAL_EFFICIENCY}], got {me}\"\n        )\n    return me\n\n\ndef _time_efficiency(value: str) -> int:\n    try:\n        te = int(value)\n    except ValueError:\n        raise argparse.ArgumentTypeError(f\"invalid integer: {value!r}\")\n    if not 0 <= te <= MAX_TIME_EFFICIENCY or te % 2:\n        raise argparse.ArgumentTypeError(\n            f\"must be an even integer in [0,{MAX_TIME_EFFICIENCY}], got {te}\"\n        )\n    return te\n\n\ndef build_parser() -> argparse.ArgumentParser:''')\ns=s.replace('''    recipe.add_argument(\"--sde\", required=True, help=\"Path to the SDE directory\")\n''','''    recipe.add_argument(\"--sde\", required=True, help=\"Path to the SDE directory\")\n    recipe.add_argument(\"--material-efficiency\", \"-me\", dest=\"me\", type=_material_efficiency,\n                        default=0, metavar=\"ME\",\n                        help=\"Blueprint material efficiency, integer in [0,10] (default 0)\")\n    recipe.add_argument(\"--time-efficiency\", \"-te\", dest=\"te\", type=_time_efficiency,\n                        default=0, metavar=\"TE\",\n                        help=\"Blueprint time efficiency, even integer in [0,20] (default 0)\")\n    recipe.add_argument(\"--display-waste\", \"-waste\", dest=\"waste\", action=\"store_true\",\n                        help=\"Show material wasted compared to ME 10\")\n''')\ns=s.replace('''def run_recipe(name: str, sde_dir: Path) -> str:''','''def run_recipe(name: str, sde_dir: Path, me: int = 0, te: int = 0, waste: bool = False) -> str:''')\ns=s.replace('''    recipe = RecipeResolver(inventory, industry).resolve(name)\n    return render(describe(inventory, recipe.product), recipe)''','''    recipe = RecipeResolver(inventory, industry).resolve(name, me=me, te=te)\n    return render(describe(inventory, recipe.product), recipe, show_waste=waste)''')\ns=s.replace('''            print(run_recipe(name, sde_dir))''','''            print(run_recipe(name, sde_dir, args.me, args.te, args.waste))''')\nopen(p,'w').write(s)\nEOF\ncd /workspace; source .venv/bin/activate\nfor a in \"\" \"-me 10\" \"--material-efficiency 5 -waste\" \"-te 20\" \"-me 10 --time-efficiency 20\"; do echo \"== $a\"; python industry.py recipe Naga --sde sde $a | tail -10; done\npython industry.py recipe Fullerides --sde sde -me 10 -te 20 -waste | tail -6\nfor a in \"-me 11\" \"-me -1\" \"-te 3\" \"-te 22\" \"-me x\"; do python industry.py recipe Naga --sde sde $a; echo \"exit $?\"; done",
+  "id": 8
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "2",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "python - <<'EOF'\np='sithlib/inference.py'\ns=open(p).read()\nold_a=s.index('    def subscript(self, index):\\n        analysis = self._where.scope.tree.analysis\\n        result = []')\nold_b=s.index('class UnresolvedModule')\ns=s[:old_a]+'''    def subscript(self, index):\n        analysis = self._where.scope.tree.analysis\n        pairs = [(k, v) for k, v in zip(self._node.keys, self._node.values) if k is not None]\n        if index is not UNKNOWN_INDEX and index is not SLICE:\n            for key, value in pairs:\n                if isinstance(key, ast.Constant) and type(key.value) is type(index) \\\\\n                        and key.value == index:\n                    return analysis.evaluate(value, self._where)\n        return _unique([v for _, value in pairs for v in analysis.evaluate(value, self._where)])\n\n\n'''+s[old_b:]\ns=s.replace('''        if form == scopes.DEF:\n            return [StaticFunction(self, self._scope_by_node[id(details[\"node\"])])] \\\\\n                if \"node\" in details else [StaticFunction(self, self.scope_of(binding.node))]''','''        if form == scopes.DEF:\n            return [StaticFunction(self, self.scope_of(binding.node))]''')\ns=s.replace('''    def binding_values(self, binding):\n        cached''','''    def binding_values(self, binding):\n        owner = binding.home.tree.analysis\n        if owner is not self:\n            return owner.binding_values(binding)\n        cached''')\nopen(p,'w').write(s)\nEOF",
+  "id": 9
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "2",
+  "cls": [
+   "edit_script",
+   "own_test_run"
+  ],
+  "cmd": "sed -i 's/        line = len(self.lines) + 1/        line = len(self.lines)/' tests/test_navigation.py && python -m unittest tests.test_navigation 2>&1 | tail -3",
+  "id": 10
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c3",
+  "ck": "4",
+  "cls": [
+   "probe_run"
+  ],
+  "cmd": "cd /workspace; source .venv/bin/activate; python -c \"\nimport catalog,volumes\nc=catalog.Catalog('sde'); v=volumes.VolumeResolver('sde',c)\nfor n in ['Accelerant Decryptor','Optimized Attainment Decryptor','Intact Hull Section','Datacore - Mechanical Engineering','Fernite Carbide','Fullerides']:\n  ids=c.ids_named(n); print(n, ids, [v.volume(i) for i in ids], [c.base_volume(i) for i in ids])\n\"; python industry.py invention Proteus --sde sde --skill 3 | head -20; python industry.py recipe Fernite Carbide --sde sde",
+  "id": 11
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c3",
+  "ck": "1",
+  "cls": [
+   "probe_run"
+  ],
+  "cmd": "cd /workspace/sde; python3 - <<'EOF'\nimport csv,bz2,io,collections\ndef r(n): return list(csv.DictReader(io.TextIOWrapper(bz2.open(n),encoding='utf-8')))\nt={x['typeID']:x for x in r('invTypes.csv.bz2')}\np=r('industryActivityProducts.csv.bz2')\np=[x for x in p if x['activityID'] in('1','11')]\nby=collections.defaultdict(list)\nfor x in p: by[x['productTypeID']].append(x)\nmulti={k:v for k,v in by.items() if len(v)>1}\nprint(len(multi))\nfor k,v in list(multi.items())[:15]:\n    print(t[k]['typeName'],t[k]['published'],[(t[x['typeID']]['typeName'],t[x['typeID']]['published'],x['activityID'],x['quantity']) for x in v])\n# blueprints with multiple products\nbb=collections.Counter((x['typeID'],x['activityID']) for x in p)\nprint([k for k,c in bb.items() if c>1][:5])\n# blueprints with both 1 and 11\nacts=collections.defaultdict(set)\nfor x in p: acts[x['typeID']].add(x['activityID'])\nprint([k for k,v in acts.items() if len(v)>1][:5])\n# unpublished bp producing published product\nup=[(t[x['typeID']]['typeName'],t[x['productTypeID']]['typeName']) for x in p if x['typeID'] in t and t[x['typeID']]['published']=='0' and t.get(x['productTypeID'],{}).get('published')=='1']\nprint(len(up),up[:20])\nmissing=[x for x in p if x['typeID'] not in t or x['productTypeID'] not in t]\nprint('missing',len(missing))\nnames=collections.Counter(x['typeName'] for x in t.values() if x['published']=='1')\nprint([k for k,c in names.items() if c>1][:20])\nEOF",
+  "id": 12
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "edit_script",
+   "own_test_run"
+  ],
+  "cmd": "python3 - <<'EOF'\np='tests/test_sith.py'\ns=open(p).read()\nfor old,new in [\n('''        self.assertEqual(index(18), 3)  # scale=\n        self.assertEqual(index(27), 4)  # unknown keyword -> **options\n        self.assertEqual(index(38), 4)  # **{} -> **options''','''        self.assertEqual(index(24), 3)  # scale=\n        self.assertEqual(index(33), 4)  # unknown keyword -> **options\n        self.assertEqual(index(39), 4)  # **{} -> **options'''),\n('''        self.assertEqual(self.signatures(source, 17, 34)[0][\"index\"], 2)''','''        self.assertEqual(self.signatures(source, 17, 21)[0][\"index\"], 2)\n        self.assertIsNone(self.signatures(source, 17, 34)[0][\"index\"])'''),\n('''self.infer_names(6, 25), [\"list\"]''','''self.infer_names(6, 20), [\"list\"]'''),\n('''(\"pkg/calc.py\", 6, 29, False)''','''(\"pkg/calc.py\", 6, 24, False)'''),\n('''self.infer_names(path, 5, 10), [\"stub_only\"]''','''self.infer_names(path, 5, 3), [\"stub_only\"]'''),\n]:\n    assert s.count(old)==1, old\n    s=s.replace(old,new)\nopen(p,'w').write(s)\nEOF\n.venv/bin/python -m unittest tests.test_sith 2>&1 | tail -15",
+  "id": 13
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /workspace; rm -rf /tmp/t2; mkdir /tmp/t2; .venv/bin/python - <<'EOF'\nimport io, os, time\nfrom appctl_cli.output import Output\nfrom appctl_cli.process import run_command, exec_command, launch_self, runcommand\nfrom appctl_cli.context import Context\nfrom appctl_cli.file_cache import FileCache, sanitize_key, get_cache\nerr=io.StringIO()\no=Output(debug=True, stderr=err, stdout=io.StringIO())\nr=run_command(\"echo hunter2; echo e >&2; exit 3\", o, obfuscate_list=[\"hunter2\"])\nprint(r.stdout, r.return_code, round(r.run_time,3)); print(err.getvalue())\nerr.truncate(0); err.seek(0)\nprint(exec_command([\"true\"], o), exec_command(\"false\", o))\nr=run_command(\"kill -HUP $$\", o); print(r.return_code); print(err.getvalue())\nctx=Context(root=None, command=None, output=Output(debug=True), runtime={\"debug\":True,\"quiet\":False,\"color\":\"auto\"}, config=type(\"C\",(),{\"global_path\":\"/tmp/t2/cfg.yml\"})())\nos.environ[\"APPCTL_ROOT_DIR\"]=\"/tmp/t2/root\"\nprint(runcommand(ctx, \"cli info --format=json\", parse=\"json\")[\"global_config_path\"])\nfor k in [\"core/wordpress-6.0.zip\",\"a b\",\"a-b\",\"https://example.com:8080/x/y.zip?v=1\",\"../etc/passwd\",\"\", \"C:\\\\x\\\\y\"]:\n    print(repr(k), \"->\", sanitize_key(k))\nc=FileCache(\"/tmp/t2/cache\", ttl=100, max_size=10)\nprint(c.read(\"k\"), c.write(\"k\",\"hello\"), c.read(\"k\"))\np=c.has(\"k\"); os.utime(p,(time.time()-200,time.time()-200)); print(c.read(\"k\"), os.path.exists(p))\nfor i,n in enumerate(\"abc\"):\n    c.write(n,\"xxxx\"); os.utime(c.filename(n),(1e9+i,1e9+i))\nc.ttl=0; c.clean(); print(sorted(os.listdir(\"/tmp/t2/cache\")))\nEOF",
+  "id": 14
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "5",
+  "cls": [
+   "probe_run"
+  ],
+  "cmd": ".venv/bin/python -c \"\nimport os, xxhash\nfrom mtl_core.fingerprints import xxh64\nfor n in [0,1,3,4,7,8,15,31,32,33,63,64,100,1000,4097]:\n    d=os.urandom(n)\n    assert xxh64(d)==xxhash.xxh64(d).intdigest(), n\nprint('ok')\n\"",
+  "id": 15
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "own_test_run"
+  ],
+  "cmd": "cd /workspace; .venv/bin/python -m unittest discover -s tests 2>&1 | tail -5",
+  "id": 16
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "cd /workspace; python - <<'EOF'\nimport re\np='sithlib/scopes.py'\ns=open(p).read()\nrep = [\n(\"\"\"    value: ast.AST = None\n    extra: dict = field(default_factory=dict)\n\"\"\",\"\"\"    value: ast.AST = None\n    extra: dict = field(default_factory=dict)\n    # The node naming the bound identifier (ast.Name, ast.arg, ast.alias, ...).\n    target: ast.AST = None\n\"\"\"),\n(\"\"\"        self.module_context = module_context\n        self.scope_by_node = {}\n\"\"\",\"\"\"        self.module_context = module_context\n        self.scope_by_node = {}\n        self.binding_by_target = {}\n\"\"\"),\n(\"\"\"    def _bind(self, scope, name, line, kind, node, value=None, **extra):\n        if PLACEHOLDER in name:\n            return\n        if scope.kind == FUNCTION:\n            if name in scope.nonlocal_names:\n                return\n            if name in scope.global_names:\n                scope = scope.root()\n        scope.add(Binding(name, line, kind, node, scope, value, extra))\n\"\"\",\"\"\"    def _bind(self, scope, name, line, kind, node, value=None, target=None, **extra):\n        if PLACEHOLDER in name:\n            return\n        if scope.kind == FUNCTION:\n            if name in scope.nonlocal_names:\n                return\n            if name in scope.global_names:\n                scope = scope.root()\n        binding = Binding(name, line, kind, node, scope, value, extra, target)\n        scope.add(binding)\n        self.binding_by_target.setdefault(id(target if target is not None else node), binding)\n\"\"\"),\n(\"\"\"            self._bind(scope, name_node.id, name_node.lineno, kind, node, element_value, **extra)\"\"\",\n\"\"\"            self._bind(scope, name_node.id, name_node.lineno, kind, node, element_value,\n                       target=name_node, **extra)\"\"\"),\n(\"\"\"            self._bind(scope, param.arg, function_node.lineno, \"param\", function_node,\n                       arg=param, index=index)\"\"\",\"\"\"            self._bind(scope, param.arg, function_node.lineno, \"param\", function_node,\n                       target=param, arg=param, index=index)\"\"\"),\n(\"\"\"            self._bind(scope, node.target.id, node.target.lineno, \"assign\", node, node.value,\n                       annotation=node.annotation)\"\"\",\"\"\"            self._bind(scope, node.target.id, node.target.lineno, \"assign\", node, node.value,\n                       target=node.target, annotation=node.annotation)\"\"\"),\n(\"\"\"                self._bind(scope, target.id, target.lineno, \"augassign\", node)\"\"\",\n\"\"\"                self._bind(scope, target.id, target.lineno, \"augassign\", node, target=target)\"\"\"),\n(\"\"\"                        self._bind(scope, name, pattern.lineno, \"pattern\", case)\"\"\",\n\"\"\"                        self._bind(scope, name, pattern.lineno, \"pattern\", case, target=pattern)\"\"\"),\n(\"\"\"                self._bind(scope, alias.asname, node.lineno, \"import\", node, module=alias.name)\n            else:\n                top = alias.name.split(\".\")[0]\n                self._bind(scope, top, node.lineno, \"import\", node, module=top)\"\"\",\n\"\"\"                self._bind(scope, alias.asname, node.lineno, \"import\", node, target=alias,\n                           module=alias.name)\n            else:\n                top = alias.name.split(\".\")[0]\n                self._bind(scope, top, node.lineno, \"import\", node, target=alias, module=top)\"\"\"),\n(\"\"\"                self._bind(scope, alias.asname or alias.name, node.lineno, \"importfrom\", node,\n                           module=node.module or \"\", level=node.level, attribute=alias.name)\"\"\",\n\"\"\"                self._bind(scope, alias.asname or alias.name, node.lineno, \"importfrom\", node,\n                           target=alias, module=node.module or \"\", level=node.level,\n                           attribute=alias.name)\"\"\"),\n(\"\"\"            self._bind(target_scope, node.target.id, node.target.lineno, \"assign\", node, node.value)\"\"\",\n\"\"\"            self._bind(target_scope, node.target.id, node.target.lineno, \"assign\", node, node.value,\n                       target=node.target)\"\"\"),\n]\nfor a,b in rep:\n    assert s.count(a)==1, a\n    s=s.replace(a,b)\nopen(p,'w').write(s)\nEOF",
+  "id": 17
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c1",
+  "ck": "3",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/t/data/sub && cd /tmp/t && cat > p.dsl <<'EOF'\nschema BaseSale {\n  timestamp: timestamp\n  location: string\n  item: string\n  price: float\n  quantity: float\n  unit: string\n  category: string\n}\n\nschema WideSale extends BaseSale {\n  revenue: float = price * quantity\n}\n\npipeline MixedIngest using WideSale {\n  params {\n    min_price: float = 0.0\n  }\n\n  calc ok = price >= param(\"min_price\") : bool @stage(pre)\n  filter(ok)\n\n  window(1h)\n  group_by(['location', 'category'])\n  aggregate sum(revenue) as total_rev,\n            average(price) as avg_price,\n            count(*) as n,\n            count(price) as nonnull_price\n}\nEOF\ncat > data/a.csv <<'EOF'\ntimestamp,location,item,price,quantity,unit,category,extra\n2025-09-01T10:05:00Z,NYC,apple,1.5,2,kg,fruit,x\n2025-09-01T10:15:00Z,NYC,pear,NaN,2,kg,fruit,x\n2025-09-01T10:20:00Z,NYC,pear,abc,2,kg,fruit,x\n2025-09-01T10:25:00Z,\"N\nYC\",pear,2.0,2,kg,fruit,x\nbad-ts,NYC,pear,2.0,2,kg,fruit,x\n2025-09-01T11:25:00Z,SF,kiwi,3,1,kg,fruit\nEOF\nprintf 'timestamp\\tlocation\\titem\\tprice\\tquantity\\tunit\\tcategory\\n2025-09-01T10:30:00Z\\tNYC\\tplum\\t0.1\\t3\\tkg\\tfruit\\n' | gzip > data/sub/b.tsv.gz\n.venv/bin/python -c 1 2>/dev/null; /workspace/.venv/bin/python - <<'EOF'\nimport pyarrow as pa, pyarrow.parquet as pq, datetime\nt = pa.table({\n \"timestamp\": pa.array([1756720800000000000, 1756724400000000000, None], pa.timestamp(\"ns\")),\n \"location\": [\"NYC\",\"SF\",\"SF\"], \"item\": [\"a\",\"b\",\"c\"],\n \"price\": pa.array([10, 20, 30], pa.int64()), \"quantity\": [1.0, 2.0, 3.0],\n \"category\": [\"fruit\",\"fruit\",\"veg\"], \"zzz\": [1,2,3]})\npq.write_table(t, \"data/sub/c.parquet\")\nt2 = pa.table({\n \"timestamp\": pa.array([1756720800000, 1756724400000], pa.timestamp(\"ms\", tz=\"America/New_York\")),\n \"location\": [\"NYC\",\"SF\"], \"item\": [\"a\",\"b\"],\n \"price\": [\"1.0\", \"x\"], \"quantity\": [1.0, 2.0], \"unit\": [\"kg\",\"kg\"],\n \"category\": [\"fruit\",\"fruit\"]})\npq.write_table(t2, \"data/d.parquet\")\nEOF\ncd /tmp/t && /workspace/.venv/bin/python /workspace/mtl.py --input data --recursive --dsl p.dsl --bad-records-out tmp/bad.jsonl; echo \"exit $?\"; cat tmp/bad.jsonl",
+  "id": 18
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "8",
+  "cls": [
+   "own_test_run"
+  ],
+  "cmd": "grep -rn \"runs_automatic_upgrade\\|needs_upgrade\\|PACKAGE_DIR\\b\" --include=*.py . | grep -v \"\\.venv\" ; timeout 900 .venv/bin/python -m unittest 2>&1 | grep -E \"^(FAIL|ERROR):|^Ran|^OK|^FAILED\"",
+  "id": 19
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c1",
+  "ck": "5",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "cd /workspace; python3 - <<'EOF'\np='mtl.py'; s=open(p).read()\nanchor='''# --------------------------------------------------------------------------- input discovery & loading\n'''\nassert s.count(anchor)==1\nnew='''# --------------------------------------------------------------------------- DSL versioning\n\nVERSION_LINE_RE = re.compile(r\"mtl_version(?![A-Za-z0-9_])\")\nVERSION_HEADER_RE = re.compile(r\"mtl_version[ \\\\t]+(\\\\d+)\\\\.(\\\\d+)\")\n\n# minimum DSL version of each feature family\nV_BLOCKS = (1, 2)  # schemas with inheritance, params, pre/post calcs, lag/lead\nV_NULLS = (1, 3)  # multi-format I/O, null/3VL, count(col)\nV_SOURCES = (1, 4)  # ingest config, sources, joins, UDFs\nV_RESUME = (1, 5)  # resumption + run metadata\n\n\ndef version_text(version):\n    return f\"{version[0]}.{version[1]}\"\n\n\ndef split_version_header(text):\n    \"\"\"Return ((major, minor), text without the header) for a DSL whose first non-comment line is the header.\n\n    The header line is blanked rather than removed so that diagnostics keep their line numbers.\"\"\"\n    lines = text.split(\"\\\\n\")\n    for i, raw in enumerate(lines):\n        stripped = raw.strip()\n        if not stripped or stripped.startswith(\"#\"):\n            continue\n        code = stripped.split(\"#\", 1)[0].strip()\n        if not VERSION_LINE_RE.match(code):\n            raise artifact_error(\n                f\"line {i + 1}: missing version header; the first non-comment line must be 'mtl_version <MAJOR>.<MINOR>'\")\n        m = VERSION_HEADER_RE.fullmatch(code)\n        if not m:\n            raise dsl_error(f\"line {i + 1}: invalid version header {code!r}; expected 'mtl_version <MAJOR>.<MINOR>'\")\n        version = (int(m.group(1)), int(m.group(2)))\n        if version[0] != SUPPORTED_MAJOR:\n            raise artifact_error(f\"unsupported mtl_version {version_text(version)}; this runtime supports \"\n                                 f\"{SUPPORTED_MAJOR}.x (up to {SUPPORTED_MAJOR}.{SUPPORTED_MINOR})\")\n        lines[i] = \"\"\n        return version, \"\\\\n\".join(lines)\n    raise artifact_error(\"missing version header; the DSL must begin with 'mtl_version <MAJOR>.<MINOR>'\")\n\n\ndef require_version(declared, needed, what):\n    if declared < needed:\n        raise dsl_error(f\"{what} requires mtl_version {version_text(needed)} or later \"\n                        f\"(the DSL declares mtl_version {version_text(declared)})\")\n\n\ndef program_expressions(program):\n    for step in program.steps:\n        yield step[1].expr if step[0] == \"calc\" else step[1]\n    for fields, _ in program.resolved_schemas.values():\n        for f in fields.values():\n            if f.expr is not None:\n                yield f.expr\n    for calc in program.post_calcs:\n        yield calc.expr\n    for _, steps in program.with_blocks:\n        for kind, item in steps:\n            yield item.expr if kind == \"calc\" else item\n    for j in program.joins:\n        yield j.on\n        for expr, _ in j.project or []:\n            yield expr\n\n\ndef check_feature_gates(program, declared):\n    \"\"\"Reject constructs that need a newer DSL minor version than the one declared (DSL error).\"\"\"\n    if program.block:\n        require_version(declared, V_BLOCKS, \"schema/pipeline blocks\")\n    for fn, col, _ in program.aggregates:\n        if fn == \"count\" and col is not None:\n            require_version(declared, V_NULLS, f\"count({col})\")\n    if program.sources is not None:\n        require_version(declared, V_SOURCES, \"'sources { ... }'\")\n    if program.with_blocks:\n        require_version(declared, V_SOURCES, \"'with <alias> { ... }'\")\n    if program.joins:\n        require_version(declared, V_SOURCES, \"join\")\n    for expr in program_expressions(program):\n        for n in walk(expr):\n            if isinstance(n, Call) and n.name in UDFS and n.name not in FUNCTION_ARITY:\n                require_version(declared, V_SOURCES, f\"user-defined function '{n.name}'\")\n\n\ndef version_warning(declared, args):\n    \"\"\"A single advisory line when the declared minor differs from this runtime's behaviour, else None.\"\"\"\n    notes = []\n    if declared < V_RESUME and (args.state_dir or args.meta_out):\n        notes.append(f\"resumable state and run metadata follow mtl_version {version_text(V_RESUME)} semantics\")\n    if declared[1] > SUPPORTED_MINOR:\n        notes.append(f\"this runtime implements mtl_version up to {SUPPORTED_MAJOR}.{SUPPORTED_MINOR}\")\n    if not notes:\n        return None\n    return f\"WARNING:version:DSL declares mtl_version {version_text(declared)}; \" + \"; \".join(notes)\n\n\n'''\ns=s.replace(anchor,new+anchor)\nopen(p,'w').write(s)\nEOF",
+  "id": 20
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "install_or_ref_lib",
+   "probe_run"
+  ],
+  "cmd": "cd /workspace; .venv/bin/pip install pyyaml 2>&1 | tail -2; which python python3; python3 -c \"import yaml\" 2>&1",
+  "id": 21
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "1",
+  "cls": [
+   "edit_script",
+   "install_or_ref_lib"
+  ],
+  "cmd": "cat > mtl_engine/cli.py <<'EOF'\n\"\"\"Command-line interface: argument parsing, stage orchestration and error reporting.\"\"\"\nimport argparse\nimport sys\n\nfrom . import csv_loader, output, pipeline\nfrom .errors import IOFailure, MTLError, RuntimeFailure\nfrom .parser import parse_program\nfrom .timeutil import TimestampParser, resolve_timezone\nfrom .typecheck import check_program\n\n\nclass _ArgumentParser(argparse.ArgumentParser):\n    def error(self, message):\n        raise IOFailure(f\"invalid arguments: {message}\")\n\n\ndef build_arg_parser():\n    parser = _ArgumentParser(\n        prog=\"mtl.py\",\n        description=\"Run an MTL pipeline over a CSV of sales events and emit JSON.\",\n    )\n    parser.add_argument(\"--csv\", required=True, help=\"path to the input CSV file\")\n    parser.add_argument(\"--dsl\", required=True, help=\"path to the DSL file, or '-' for STDIN\")\n    parser.add_argument(\"--out\", default=None, help=\"output file (default: STDOUT)\")\n    parser.add_argument(\"--tz\", default=\"UTC\", help=\"IANA timezone for naive timestamps\")\n    parser.add_argument(\"--timestamp-format\", dest=\"timestamp_format\", default=None,\n                        help=\"strptime format for timestamps (default: ISO 8601)\")\n    return parser\n\n\ndef run(argv):\n    \"\"\"Execute the CLI; returns the JSON text to write and the output destination.\"\"\"\n    args = build_arg_parser().parse_args(argv)\n    if args.csv == \"-\" and args.dsl == \"-\":\n        raise IOFailure(\"--csv and --dsl cannot both read from STDIN\")\n    try:\n        tz = resolve_timezone(args.tz)\n    except ValueError as exc:\n        raise IOFailure(str(exc)) from exc\n\n    program = parse_program(csv_loader.read_text(args.dsl))\n    table = csv_loader.load_csv(args.csv, TimestampParser(tz, args.timestamp_format))\n    check_program(program, table.schema)\n    buckets = pipeline.run(program, table.rows)\n    text = output.serialize(output.build_document(program, buckets))\n    _write(text, args.out)\n\n\ndef _write(text, destination):\n    if destination is None or destination == \"-\":\n        sys.stdout.write(text)\n        sys.stdout.flush()\n        return\n    try:\n        with open(destination, \"w\", encoding=\"utf-8\", newline=\"\\n\") as fh:\n            fh.write(text)\n    except OSError as exc:\n        raise IOFailure(f\"cannot write output '{destination}': {exc}\") from exc\n\n\ndef main(argv=None):\n    try:\n        run(sys.argv[1:] if argv is None else argv)\n    except MTLError as err:\n        return _report(err)\n    except RecursionError:\n        return _report(RuntimeFailure(\"expression nesting too deep\"))\n    except (ArithmeticError, ValueError) as exc:\n        return _report(RuntimeFailure(str(exc) or type(exc).__name__))\n    return 0\n\n\ndef _report(err):\n    sys.stderr.write(err.diagnostic() + \"\\n\")\n    return err.exit_code\nEOF\npython3 -m venv .venv && echo \"tzdata>=2024.1\" > requirements.txt && .venv/bin/pip install -q -r requirements.txt && echo ok",
+  "id": 22
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "5",
+  "cls": [
+   "own_test_run"
+  ],
+  "cmd": "cd /workspace; .venv/bin/python -m unittest discover -s tests 2>&1 | tail -30",
+  "id": 23
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "own_test_run"
+  ],
+  "cmd": "cd /workspace; .venv/bin/python -m unittest 2>&1 | tail -30",
+  "id": 24
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "5",
+  "cls": [
+   "edit_script",
+   "probe_tmp"
+  ],
+  "cmd": "python3 - <<'EOF'\np='/workspace/sith.py'\ns=open(p).read()\nold='''        changes.renames.append((os.path.realpath(mod), os.path.realpath(dest)))\n    elif _rename_collision(ctx, hits, new_name):'''\nnew='''        changes.renames.append((os.path.realpath(mod), os.path.realpath(dest)))\n    if _rename_collision(ctx, hits, new_name):'''\nassert old in s; s=s.replace(old,new)\nopen(p,'w').write(s)\nEOF\ncd /tmp/t1 && S=\"/workspace/venv/bin/python /workspace/sith.py\"; $S rename main.py 1 8 --new-name run; echo $?; $S rename main.py 4 17 --new-name sub3; echo; $S rename main.py 3 7 --new-name pk; echo; $S rename main.py 8 30 --new-name helper; echo $?",
+  "id": 25
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "4",
+  "cls": [
+   "own_test_run"
+  ],
+  "cmd": "cd /workspace; .venv/bin/python -m pytest -q 2>&1 | tail -15",
+  "id": 26
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "5",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/p5 && cd /tmp/p5 && cat > m.py <<'EOF'\nimport math\n\nx = 10\ny = 20\nz = x + y\nw = math.sqrt(z)\nprint(z, w)\n\n\ndef process(items, factor):\n    total = 0\n    count = 0\n    for item in items:\n        total += item * factor\n        count += 1\n    avg = total / count\n    return avg, count\n\n\nclass Shape:\n    def __init__(self, size):\n        self.size = size\n\n    def area(self, k):\n        s = self.size * k\n        a = s * s\n        return a\nEOF\nS=\"/workspace/.venv/bin/python /workspace/sith.py\"\n$S extract-function m.py 5 0 --until 6:16 --name compute --diff; echo \"exit $?\"\n$S extract-function m.py 5 0 --until 5:9 --name compute --diff; echo \"exit $?\"\n$S extract-function m.py 11 0 --until 15:18 --name accumulate --diff; echo \"exit $?\"\n$S extract-function m.py 25 0 --until 26:13 --name squared --diff; echo \"exit $?\"\n$S extract-function m.py 5 4 --until 6:5 --name bad; echo \"exit $?\"\n$S extract-function m.py 14 0 --until 14:30 --name bad; echo \"exit $?\"",
+  "id": 27
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "1",
+  "cls": [
+   "probe_run"
+  ],
+  "cmd": "P=\".venv/bin/python appctl.py\"; t(){ echo \"\\$ appctl $*\"; $P \"$@\"; echo \"[exit $?]\"; echo; }\nt; t site; t sit; t site creat foo; t site new foo; t site create foo --typ=x; t site create; t site create a b; t user create bob; t user create bob --email= --foo --rol=x\nt --version; t site create --help; t post trash 1; t post rm 1; t site rm x --yes; t plugin add x; t site create foo --no-private; t site create foo --private=1\nAPPCTL_STRICT_ARGS_MODE=1 $P site create foo --url=x; echo \"[exit $?]\"; APPCTL_STRICT_ARGS_MODE=1 $P --url=x site create foo; echo \"[exit $?]\"; $P site create foo --url=x; echo \"[exit $?]\"",
+  "id": 28
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "python3 - <<'EOF'\np='inference.py'\ns=open(p).read()\n\n# entity for values known up front or fetched lazily\ns=s.replace('''class BindingEntity(Entity):''','''class ValueEntity(Entity):\n    \"\"\"A name whose values are produced on demand (e.g. a submodule).\"\"\"\n\n    def __init__(self, name, fetch, kind=None):\n        self.name = name\n        self._fetch = fetch\n        self._kind = kind\n        self._values = None\n\n    def presentation(self):\n        if self._kind is not None:\n            return (self._kind, None)\n        values = self.values()\n        if not values:\n            return (STATEMENT, None)\n        if values[0].kind == INSTANCE:\n            return (INSTANCE, values[0].type_name)\n        if values[0].kind in (MODULE, CLASS, FUNCTION):\n            return (values[0].kind, None)\n        return (STATEMENT, None)\n\n    def values(self):\n        if self._values is None:\n            found = self._fetch()\n            self._values = [found] if isinstance(found, Value) else list(found or [])\n        return list(self._values)\n\n\nclass BindingEntity(Entity):''')\n\ns=s.replace('''    def star_members(self, event):\n        module = self.project.module_value(event.details[\"module\"], event.details[\"level\"],\n                                           self.path)\n        if module is None:\n            return {}\n        return {name: entity for name, entity in module.members().items()\n                if not name.startswith(\"_\")}\n''','''    def star_members(self, event):\n        module = self.project.module_value(event.details[\"module\"], event.details[\"level\"],\n                                           self.path)\n        if module is None:\n            return {}\n        return self.project.exported_members(module)\n\n    def dunder_all(self):\n        \"\"\"Names listed in this module's ``__all__``, or None without one.\"\"\"\n        key = (\"__all__\", self.path)\n        if not self.project.enter(key):\n            return None\n        try:\n            names = None\n            for node in _module_level_nodes(self.tree.module.node.body):\n                if isinstance(node, (ast.Assign, ast.AnnAssign)):\n                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]\n                    if any(isinstance(t, ast.Name) and t.id == \"__all__\" for t in targets) \\\\\n                            and node.value is not None:\n                        names = self._all_names(node.value) or []\n                elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) \\\\\n                        and node.target.id == \"__all__\" and isinstance(node.op, ast.Add):\n                    names = (names or []) + (self._all_names(node.value) or [])\n                elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \\\\\n                        and isinstance(node.func.value, ast.Name) \\\\\n                        and node.func.value.id == \"__all__\" and names is not None \\\\\n                        and len(node.args) == 1:\n                    method, arg = node.func.attr, node.args[0]\n                    if method == \"extend\":\n                        names = names + (self._all_names(arg) or [])\n                    elif method == \"append\" and isinstance(arg, ast.Constant) \\\\\n                            and isinstance(arg.value, str):\n                        names = names + [arg.value]\n                    elif method == \"remove\" and isinstance(arg, ast.Constant):\n                        names = [n for n in names if n != arg.value]\n            return list(dict.fromkeys(names)) if names is not None else None\n        finally:\n            self.project.leave(key)\n\n    def _all_names(self, node):\n        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):\n            return [e.value for e in node.elts\n                    if isinstance(e, ast.Constant) and isinstance(e.value, str)]\n        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):\n            return (self._all_names(node.left) or []) + (self._all_names(node.right) or [])\n        if isinstance(node, ast.Attribute) and node.attr == \"__all__\":\n            names = []\n            for value in self.evaluate(node.value, Where(self.tree.module)):\n                found = self.project.dunder_all(value)\n                if found:\n                    names.extend(found)\n            return names\n        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \\\\\n                and node.func.id in (\"list\", \"tuple\") and len(node.args) == 1:\n            return self._all_names(node.args[0])\n        return None\n''')\n\ns=s.replace('''def _fact_order(fact):''','''def _module_level_nodes(statements):\n    \"\"\"Nodes executed at module level (nested scopes are not entered).\"\"\"\n    stack = list(reversed(statements))\n    while stack:\n        node = stack.pop()\n        yield node\n        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):\n            continue\n        stack.extend(reversed(list(ast.iter_child_nodes(node))))\n\n\ndef _fact_order(fact):''')\n\ns=s.replace('''    def submodule_value(self, directory, name):\n        return self._wrap(self._locator.locate_in_directory(directory, name))\n''','''    def submodule_value(self, directory, name):\n        return self._wrap(self._locator.locate_in_directory(directory, name))\n\n    # -- module contents -------------------------------------------------\n    def dunder_all(self, module):\n        \"\"\"The ``__all__`` names of a module value, or None.\"\"\"\n        if isinstance(module, StaticModule):\n            return module.analysis.dunder_all()\n        if isinstance(module, RuntimeValue) and module.kind == MODULE:\n            ok, names = introspect.get_attribute(module.obj, \"__all__\")\n            if ok and isinstance(names, (list, tuple)):\n                return [n for n in names if isinstance(n, str)]\n        return None\n\n    def exported_members(self, module):\n        \"\"\"Names ``from <module> import *`` binds: dict of name -> Entity.\"\"\"\n        if module.kind != MODULE:\n            return {}\n        members = module.members()\n        names = self.dunder_all(module)\n        if names is None:\n            return {name: entity for name, entity in members.items()\n                    if not name.startswith(\"_\")}\n        result = {}\n        for name in names:\n            if name in members:\n                result[name] = members[name]\n            else:\n                result[name] = ValueEntity(name, lambda n=name: module.attribute(n))\n        return result\n\n    def importable_members(self, module):\n        \"\"\"Names offered after ``from <module> import``: dict of name -> Entity.\"\"\"\n        result = self.exported_members(module)\n        if self.dunder_all(module) is not None:\n            return result\n        for name, entity in self.submodule_entities(module).items():\n            if not name.startswith(\"_\"):\n                result.setdefault(name, entity)\n        return result\n\n    def submodule_entities(self, module):\n        \"\"\"Submodules of a package value: dict of name -> Entity.\"\"\"\n        names = set()\n        directory = None\n        if isinstance(module, StaticModule):\n            directory = module.analysis.package_dir()\n        elif isinstance(module, DirectoryModule):\n            directory = module.directory\n        elif isinstance(module, RuntimeValue) and module.kind == MODULE:\n            names = runtime_submodule_names(module.obj)\n            prefix = module.obj.__name__\n            return {name: ValueEntity(name, lambda n=name: self.module_value(prefix + \".\" + n),\n                                      MODULE) for name in names}\n        if directory is None:\n            return {}\n        names = directory_module_names(directory)\n        return {name: ValueEntity(name, lambda n=name: self.submodule_value(directory, n),\n                                  MODULE) for name in names}\n\n    def module_names(self, dotted=\"\", level=0):\n        \"\"\"Modules importable as ``[.*]<dotted>.<name>``: dict of name -> Entity.\"\"\"\n        if not dotted and level == 0:\n            return {name: ValueEntity(name, lambda n=name: self.module_value(n), MODULE)\n                    for name in self._locator.top_level_names(self._main_path)}\n        if not dotted:\n            base = self._locator.relative_base(level, self._main_path)\n            if base is None:\n                return {}\n            return self.submodule_entities(DirectoryModule(self, base))\n        module = self.module_value(dotted, level)\n        return self.submodule_entities(module) if module is not None else {}\n''')\ns=s.replace('''from .modules import DIRECTORY, RUNTIME, SOURCE, ModuleLocator''','''from .modules import (DIRECTORY, RUNTIME, SOURCE, ModuleLocator, directory_module_names,\n                      runtime_submodule_names)''')\nopen(p,'w').write(s)\nEOF\ngrep -n \"def members\" inference.py",
+  "id": 29
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "2",
+  "cls": [
+   "install_or_ref_lib",
+   "probe_run"
+  ],
+  "cmd": "cd /workspace; ls -la sithlib; python -c \"import jedi\" 2>&1; timeout 15 .venv/bin/pip download jedi --no-deps -d /tmp/jd 2>&1 | tail -2; ls /tmp/agent_home; ls -la /tmp",
+  "id": 30
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "7",
+  "cls": [
+   "locate"
+  ],
+  "cmd": "cd /workspace; grep -n -E 'packages_dir|MIGRATIONS|run_migrations|Option\\.|Migration\\.|DockerError|docker_run|delem|5GB|disk' appctl.py | grep -v '^3[01][0-9][0-9]:' ",
+  "id": 31
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && cat requirements.txt 2>/dev/null; ls -a .. ; find . -maxdepth 2 -not -path './.venv*' -not -path './venv*' | head -50",
+  "id": 32
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat /usr/bin/docker | head -50; file /usr/bin/docker /usr/bin/docker-compose; cat /usr/bin/docker-compose | head -50; docker info 2>&1 | head -5",
+  "id": 33
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; sed -n 140,262p tests/test_config.py",
+  "id": 34
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "8",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && find . -path ./.venv -prune -o -type f -print | grep -v '/\\.git/' | head -100; cat requirements.txt 2>/dev/null; ls /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null",
+  "id": 35
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "8",
+  "cls": [
+   "read"
+  ],
+  "cmd": "sed -n 2694,2710p appctl.py",
+  "id": 36
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "5",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; sed -n 55,130p sithlib/definitions.py; sed -n 112,200p sithlib/modules.py; grep -n \"class\\|def \" tests/test_sith.py | sed -n 1,200p | grep -i \"refer\\|class \" ",
+  "id": 37
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; sed -n 4650,4674p sith.py; grep -n \"def visible\\|\\.visible(\" sith.py; ls venv/bin; cat venv/pyvenv.cfg",
+  "id": 38
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "1",
+  "cls": [
+   "locate"
+  ],
+  "cmd": "ls -la && python3 --version && ls /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null",
+  "id": 39
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat sithlib/scopes.py sithlib/parsing.py",
+  "id": 40
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat sithlib/completion.py; sed -n 1,80p sithlib/flow.py",
+  "id": 41
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "wc -l sith.py sithlib/*.py tests/*.py; cat sith.py; ls .venv/bin; .venv/bin/python --version",
+  "id": 42
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "7",
+  "cls": [
+   "install_or_ref_lib"
+  ],
+  "cmd": "cat appctl.py pytest.ini requirements.txt; wc -l appctl_core/*.py tests/*.py; cat .pytest_cache/v/cache/lastfailed; ls .venv/lib/*/site-packages",
+  "id": 43
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; grep -n \"hidden\\|GLOBAL_PARAMS\\|GLOBAL_SPEC\" appctl.py | head -30; sed -n 1395,1500p appctl.py",
+  "id": 44
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cat mtl_core/sources.py mtl_core/inputs.py mtl_core/dataset.py",
+  "id": 45
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; sed -n 1,140p tests/test_sith.py; grep -n \"def test\" tests/test_sith.py | wc -l; grep -n \"^def \\|^class \" tests/test_sith.py | head -60",
+  "id": 46
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; sed -n 900,1603p sith.py",
+  "id": 47
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "sed -n 200,320p sithlib/navigation.py; grep -n \"class _Describer\" -A 200 sithlib/navigation.py | head -260",
+  "id": 48
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cat tests/test_imports.py | head -120; head -80 tests/test_features.py",
+  "id": 49
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "7",
+  "cls": [
+   "locate"
+  ],
+  "cmd": "cd /workspace; ls -la __pycache__ .venv/bin; ls -la /workspace/..; ls /tmp /tmp/agent_home 2>/dev/null",
+  "id": 50
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cat tests/test_navigation.py",
+  "id": 51
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "8",
+  "cls": [
+   "read"
+  ],
+  "cmd": "sed -n 1,60p tests/test_output.py; grep -n \"def run\\|env\\|stdout ==\\|assertEqual(result.stdout\" tests/test_output.py | head -40",
+  "id": 52
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c2",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && cat requirements.txt 2>/dev/null; find . -maxdepth 2 -not -path './.venv*' -not -path './venv*' | head -50",
+  "id": 53
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "install_or_ref_lib"
+  ],
+  "cmd": "cd /workspace; .venv/bin/python --version; .venv/bin/pip install pyyaml 2>&1 | tail -2; cat appctl_cli/commands/help.py appctl_cli/formatter.py | head -80; which ssh",
+  "id": 54
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c2",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat eve_industry/industry_data.py eve_industry/sde_loader.py",
+  "id": 55
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "8",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat appctl_core/runtime_config.py appctl_core/config_spec.py appctl_core/config_files.py",
+  "id": 56
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cat mtl_core/quality.py mtl_core/valuetypes.py mtl_core/timestamps.py mtl_core/output.py mtl_core/aggregates.py mtl_core/windowing.py",
+  "id": 57
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "1",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && find . -maxdepth 3 -not -path './.git*' | head -50; python3 --version",
+  "id": 58
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat appctl_cli/registry.py appctl_cli/command.py appctl_cli/config_loader.py appctl_cli/commands/_extensions.py; cat tests/test_cli.py tests/test_core.py | head -150; ls tests",
+  "id": 59
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "8",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cat config_loader.py output.py logger.py",
+  "id": 60
+ }
+]

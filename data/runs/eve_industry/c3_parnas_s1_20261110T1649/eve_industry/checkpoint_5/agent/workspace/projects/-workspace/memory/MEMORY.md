@@ -1,0 +1,1 @@
+- [Split boundary is strict](split-boundary-strict.md) — jobs must take < split_days; spec examples contradict its '>' wording

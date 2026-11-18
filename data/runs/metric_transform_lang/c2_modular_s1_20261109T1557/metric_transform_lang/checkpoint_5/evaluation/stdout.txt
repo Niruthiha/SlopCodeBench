@@ -1,0 +1,252 @@
+
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.16, pytest-9.2.0, pluggy-1.7.0 -- /tmp/uv-cache/archive-v0/JC8AXi1R53YyuJEt/bin/python
+cachedir: .pytest_cache
+metadata: {'Python': '3.12.16', 'Platform': 'Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41', 'Packages': {'pytest': '9.2.0', 'pluggy': '1.7.0'}, 'Plugins': {'timeout': '2.4.0', 'json-report': '1.5.0', 'metadata': '3.1.1', 'json-ctrf': '0.6.1'}}
+rootdir: /workspace
+configfile: pytest.ini
+plugins: timeout-2.4.0, json-report-1.5.0, metadata-3.1.1, json-ctrf-0.6.1
+timeout: 20.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 74 items
+
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_spec_correct[01_fresh_run_basic] PASSED [  1%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_spec_error[01_missing_version_header] PASSED [  2%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_spec_error[02_unsupported_major] PASSED [  4%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_spec_error[03_minor_gating_join_requires_14] PASSED [  5%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_resume_error[01_resume_requires_state_dir] PASSED [  6%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_resume_error[02_resume_missing_state_file] PASSED [  8%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_file_output[01_outputs_and_state] PASSED [  9%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[01_join_left_outer] PASSED [ 10%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[02_join_right_outer] PASSED [ 12%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[03_join_full_outer] FAILED [ 13%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[04_with_calcs_filters] PASSED [ 14%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[05_mapping_comprehensive] PASSED [ 16%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[06_chained_joins] PASSED [ 17%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[07_glob_formats] PASSED [ 18%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[08_temporal_within_delta] PASSED [ 20%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[09_alias_calc_filter] PASSED [ 21%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[10_param_threshold] PASSED [ 22%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[11_mapping_defaults] PASSED [ 24%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[12_single_source_window_params] PASSED [ 25%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[13_result_alias_chain] PASSED [ 27%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[14_multi_file_glob] PASSED [ 28%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[15_single_source_aggregates] PASSED [ 29%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[16_multisource_group_only] PASSED [ 31%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[17_post_agg_lag] PASSED [ 32%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[01_group_by_single] PASSED [ 33%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[02_group_by_multi] PASSED [ 35%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[03_window_various] PASSED [ 36%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[04_comparison_ops] PASSED [ 37%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[05_logical_ops] PASSED [ 39%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[06_in_operator] PASSED [ 40%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[07_column_compare] PASSED [ 41%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[08_timestamp_transforms] PASSED [ 43%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[09_round_function] PASSED [ 44%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[10_apply_order] PASSED [ 45%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[11_null_aggregates] FAILED [ 47%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[12_cli_timezone] PASSED [ 48%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[13_schema_inheritance_pre_calc] PASSED [ 50%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[14_params_and_filter] PASSED [ 51%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[15_post_agg_lag] PASSED [ 52%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[16_group_by_pre_calc_key] PASSED [ 54%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[17_post_agg_lead_param_coalesce] PASSED [ 55%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[18_string_ops_basic] PASSED [ 56%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[19_string_ops_with_params] PASSED [ 58%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[20_multiple_params_various_types] PASSED [ 59%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[21_type_widening_override] PASSED [ 60%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[22_multiple_pre_calcs] PASSED [ 62%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[23_multiple_post_agg_calcs] PASSED [ 63%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[24_post_agg_calc_simple] PASSED [ 64%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[25_lag_with_group_by_only] PASSED [ 66%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[26_window_group_lag_combined] PASSED [ 67%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[27_cast_basic] PASSED [ 68%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[28_regression_filter_apply] PASSED [ 70%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[29_regression_window_group] PASSED [ 71%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[30_regression_all_aggregates] PASSED [ 72%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[31_multi_input_union] PASSED [ 74%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[32_tsv_and_format_flag] PASSED [ 75%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[33_recursive_directory] FAILED [ 77%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[34_null_markers_and_filter] PASSED [ 78%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[35_order_independence_window] PASSED [ 79%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[36_count_col_with_nulls] PASSED [ 81%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[37_three_valued_logic_filter] PASSED [ 82%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[38_null_aware_aggregations] PASSED [ 83%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[39_mixed_formats] PASSED [ 85%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[40_glob_pattern] PASSED [ 86%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[41_non_strict_bad_records_out] PASSED [ 87%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[42_non_strict_without_bad_out] PASSED [ 89%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[43_custom_null_markers] PASSED [ 90%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[44_regression_multi_file_with_calcs] PASSED [ 91%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[45_regression_multi_file_lag_lead] PASSED [ 93%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[46_regression_multi_file_params] PASSED [ 94%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[47_join_inner_simple] PASSED [ 95%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[48_temporal_within_join] PASSED [ 97%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_edge_meta_out_omitted PASSED [ 98%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_edge_resume_output_stable PASSED [100%]
+
+=================================== FAILURES ===================================
+_________________ test_checkpoint_5_hidden[03_join_full_outer] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/03_join_full_outer')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_03_jo0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.evaluation_tests/case_utils.py:250: in run_case
+    assert_json_equal(actual_output, expected_output)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = [{'window_start': '2024-01-01T10:00:00Z', 'window_end': '2024-01-01T11:00:00Z', 'location': 'NYC', 'item': 'apple', .....window_start': '2024-01-01T10:00:00Z', 'window_end': '2024-01-01T11:00:00Z', 'location': 'NYC', 'item': 'banana', ...}]
+expected = [{'window_start': '2024-01-01T10:00:00Z', 'window_end': '2024-01-01T11:00:00Z', 'location': None, 'item': None, ...}, ...window_start': '2024-01-01T10:00:00Z', 'window_end': '2024-01-01T11:00:00Z', 'location': 'NYC', 'item': 'banana', ...}]
+
+    def assert_json_equal(actual: Any, expected: Any) -> None:
+        if isinstance(expected, dict):
+            assert isinstance(actual, dict)
+            assert actual.keys() == expected.keys()
+            for key, expected_value in expected.items():
+                assert_json_equal(actual[key], expected_value)
+            return
+        if isinstance(expected, list):
+            assert isinstance(actual, list)
+>           assert len(actual) == len(expected)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError
+
+.evaluation_tests/case_utils.py:173: AssertionError
+_______________ test_checkpoint_5_regression[11_null_aggregates] _______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/11_null_aggregates')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_11')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.evaluation_tests/case_utils.py:250: in run_case
+    assert_json_equal(actual_output, expected_output)
+.evaluation_tests/case_utils.py:169: in assert_json_equal
+    assert_json_equal(actual[key], expected_value)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = None, expected = 0
+
+    def assert_json_equal(actual: Any, expected: Any) -> None:
+        if isinstance(expected, dict):
+            assert isinstance(actual, dict)
+            assert actual.keys() == expected.keys()
+            for key, expected_value in expected.items():
+                assert_json_equal(actual[key], expected_value)
+            return
+        if isinstance(expected, list):
+            assert isinstance(actual, list)
+            assert len(actual) == len(expected)
+            for actual_value, expected_value in zip(actual, expected):
+                assert_json_equal(actual_value, expected_value)
+            return
+        if isinstance(expected, bool) or isinstance(actual, bool):
+            assert actual == expected
+            return
+        if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
+            assert math.isclose(
+                actual,
+                expected,
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
+            return
+>       assert actual == expected
+               ^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:188: AssertionError
+_____________ test_checkpoint_5_regression[33_recursive_directory] _____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/33_recursive_directory')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_33')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.evaluation_tests/case_utils.py:250: in run_case
+    assert_json_equal(actual_output, expected_output)
+.evaluation_tests/case_utils.py:169: in assert_json_equal
+    assert_json_equal(actual[key], expected_value)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = 2, expected = 3
+
+    def assert_json_equal(actual: Any, expected: Any) -> None:
+        if isinstance(expected, dict):
+            assert isinstance(actual, dict)
+            assert actual.keys() == expected.keys()
+            for key, expected_value in expected.items():
+                assert_json_equal(actual[key], expected_value)
+            return
+        if isinstance(expected, list):
+            assert isinstance(actual, list)
+            assert len(actual) == len(expected)
+            for actual_value, expected_value in zip(actual, expected):
+                assert_json_equal(actual_value, expected_value)
+            return
+        if isinstance(expected, bool) or isinstance(actual, bool):
+            assert actual == expected
+            return
+        if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
+>           assert math.isclose(
+                actual,
+                expected,
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
+E           AssertionError
+
+.evaluation_tests/case_utils.py:181: AssertionError
+--------------------------------- JSON report ----------------------------------
+report saved to: .scbench/pytest-report.json
+=========================== short test summary info ============================
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[03_join_full_outer] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[11_null_aggregates] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[33_recursive_directory] - AssertionError
+======================== 3 failed, 71 passed in 23.45s =========================

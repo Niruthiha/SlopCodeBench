@@ -1,0 +1,69 @@
+From 7ac5c3f401d32685bb32be417ea5ca3ca5e07f8f Mon Sep 17 00:00:00 2001
+From: anon <anon@example.com>
+Date: Mon, 9 Nov 2026 23:42:49 -0500
+Subject: [PATCH 5/5] Remove DESIGN.md planning line from Parnas prompts;
+ rename c1_planning to c1_default
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ configs/prompts/parnas/{c1_planning.jinja => c1_default.jinja} | 1 -
+ configs/prompts/parnas/c2_modular.jinja                        | 1 -
+ configs/prompts/parnas/c3_parnas.jinja                         | 1 -
+ configs/prompts/parnas/c4_performance.jinja                    | 1 -
+ 4 files changed, 4 deletions(-)
+ rename configs/prompts/parnas/{c1_planning.jinja => c1_default.jinja} (85%)
+
+diff --git a/configs/prompts/parnas/c1_planning.jinja b/configs/prompts/parnas/c1_default.jinja
+similarity index 85%
+rename from configs/prompts/parnas/c1_planning.jinja
+rename to configs/prompts/parnas/c1_default.jinja
+index 5290279..73e3b91 100644
+--- a/configs/prompts/parnas/c1_planning.jinja
++++ b/configs/prompts/parnas/c1_default.jinja
+@@ -1,7 +1,6 @@
+ Implement a program that 100% solves the specification. That is all you need to do.
+ {% if not is_continuation -%}
+ Use a virtual environment and ensure that a `requirements.txt` is present with any dependencies you need to solve the problem.
+-Before coding, write a brief design plan in `DESIGN.md`, then implement.
+ {% else -%}
+ Keep using the same virtual environment you started with, update `requirements.txt` with any new dependencies you need.
+ {% endif -%}
+diff --git a/configs/prompts/parnas/c2_modular.jinja b/configs/prompts/parnas/c2_modular.jinja
+index 8f75b3c..39056e7 100644
+--- a/configs/prompts/parnas/c2_modular.jinja
++++ b/configs/prompts/parnas/c2_modular.jinja
+@@ -1,7 +1,6 @@
+ Implement a program that 100% solves the specification. That is all you need to do.
+ {% if not is_continuation -%}
+ Use a virtual environment and ensure that a `requirements.txt` is present with any dependencies you need to solve the problem.
+-Before coding, write a brief design plan in `DESIGN.md`, then implement.
+ Write the program in a modular way: split it into well-organised modules with clear, single responsibilities.
+ {% else -%}
+ Keep using the same virtual environment you started with, update `requirements.txt` with any new dependencies you need.
+diff --git a/configs/prompts/parnas/c3_parnas.jinja b/configs/prompts/parnas/c3_parnas.jinja
+index 1092be8..7ca6274 100644
+--- a/configs/prompts/parnas/c3_parnas.jinja
++++ b/configs/prompts/parnas/c3_parnas.jinja
+@@ -1,7 +1,6 @@
+ Implement a program that 100% solves the specification. That is all you need to do.
+ {% if not is_continuation -%}
+ Use a virtual environment and ensure that a `requirements.txt` is present with any dependencies you need to solve the problem.
+-Before coding, write a brief design plan in `DESIGN.md`, then implement.
+ Decompose by information hiding. First list the design decisions that are hard to make or likely to change. Give each its own module whose secret is that decision, and state the secret in one sentence. Other modules use it only through an interface that stays valid if the secret changes. Never share internal data structures across modules.
+ {% else -%}
+ Keep using the same virtual environment you started with, update `requirements.txt` with any new dependencies you need.
+diff --git a/configs/prompts/parnas/c4_performance.jinja b/configs/prompts/parnas/c4_performance.jinja
+index 8e9141e..3a51b42 100644
+--- a/configs/prompts/parnas/c4_performance.jinja
++++ b/configs/prompts/parnas/c4_performance.jinja
+@@ -1,7 +1,6 @@
+ Implement a program that 100% solves the specification. That is all you need to do.
+ {% if not is_continuation -%}
+ Use a virtual environment and ensure that a `requirements.txt` is present with any dependencies you need to solve the problem.
+-Before coding, write a brief design plan in `DESIGN.md`, then implement.
+ The most important quality of this program is runtime speed and low memory use. Optimise for that.
+ {% else -%}
+ Keep using the same virtual environment you started with, update `requirements.txt` with any new dependencies you need.
+-- 
+2.43.0
+

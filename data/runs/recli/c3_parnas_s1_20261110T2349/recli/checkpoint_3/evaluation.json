@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "problem_name": "recli",
+  "problem_version": 2,
+  "checkpoint_name": "checkpoint_3",
+  "checkpoint_version": 1,
+  "duration": 31.766539096832275,
+  "entrypoint": "uv run appctl.py",
+  "tests": {
+    "checkpoint_1-Regression": {
+      "passed": [
+        "TestCore::test_command_dispatch_top_level",
+        "TestCore::test_help_rewrite",
+        "TestCore::test_help_rewrite_for_multi_level_command",
+        "TestCore::test_no_args_shows_help_text",
+        "TestCore::test_positional_arg_parsing",
+        "TestCore::test_subcommand_dispatch",
+        "TestCore::test_unrecognized_command_error",
+        "TestCore::test_version_rewrite",
+        "TestErrors::test_excess_positional_args_error",
+        "TestErrors::test_missing_required_positional_shows_usage",
+        "TestErrors::test_multiple_parameter_errors_collected",
+        "TestErrors::test_unknown_associative_no_suggestion",
+        "TestErrors::test_unknown_associative_with_suggestion",
+        "TestErrors::test_unrecognized_subcommand_error",
+        "TestFunctionality::test_default_value_for_optional_arg",
+        "TestFunctionality::test_error_messages_to_stderr",
+        "TestFunctionality::test_exit_code_1_on_error",
+        "TestFunctionality::test_generic_token_classification",
+        "TestFunctionality::test_help_alphabetical_ordering_case_insensitive",
+        "TestFunctionality::test_help_column_alignment",
+        "TestFunctionality::test_help_for_specific_command",
+        "TestFunctionality::test_levenshtein_no_suggestion_beyond_distance_2",
+        "TestFunctionality::test_levenshtein_suggestion_within_distance_2",
+        "TestFunctionality::test_levenshtein_tiebreaker_sort_order",
+        "TestFunctionality::test_no_flag_sets_false",
+        "TestFunctionality::test_optional_modifier",
+        "TestFunctionality::test_parent_command_no_handler_shows_subcommands",
+        "TestFunctionality::test_repeating_modifier_accepts_multiple",
+        "TestFunctionality::test_subcommand_synonym_example_allows_optional_delete_suggestion",
+        "TestFunctionality::test_synonym_checked_before_levenshtein",
+        "TestFunctionality::test_synonym_only_when_target_registered",
+        "TestFunctionality::test_synonym_suggestion_trash_to_delete"
+      ],
+      "failed": [
+        "TestFunctionality::test_required_associative_empty_value_is_rejected",
+        "TestFunctionality::test_required_associative_missing_error"
+      ],
+      "skipped": []
+    },
+    "checkpoint_2-Regression": {
+      "passed": [
+        "TestCore::test_alias_invocation_applies_connection_params",
+        "TestCore::test_all_broadcast_alphabetical_order",
+        "TestCore::test_all_broadcast_case_insensitive_alphabetical_order",
+        "TestCore::test_config_global_defaults_apply",
+        "TestCore::test_config_precedence_changes_observable_behavior",
+        "TestCore::test_config_project_overrides_global",
+        "TestCore::test_disabled_command_error",
+        "TestErrors::test_alias_group_invalid_member_error",
+        "TestErrors::test_all_no_aliases_error",
+        "TestErrors::test_unknown_alias_error",
+        "TestErrors::test_unknown_alias_with_suggestion",
+        "TestErrors::test_unwritable_config_error",
+        "TestFunctionality::test_alias_group_deduplication_first_appearance",
+        "TestFunctionality::test_alias_name_regex_validation",
+        "TestFunctionality::test_all_auto_registered_when_aliases_exist",
+        "TestFunctionality::test_auto_creation_locale_and_installer_version",
+        "TestFunctionality::test_deprecated_param_emits_warning",
+        "TestFunctionality::test_explicit_all_alias_is_not_overridden_by_auto_registration",
+        "TestFunctionality::test_global_config_default_path",
+        "TestFunctionality::test_global_config_from_env_var",
+        "TestFunctionality::test_hidden_param_excluded_from_help_but_functional",
+        "TestFunctionality::test_local_path_absolutization",
+        "TestFunctionality::test_packages_dir_from_env",
+        "TestFunctionality::test_project_config_local_yml_priority",
+        "TestFunctionality::test_project_config_local_yml_priority_overrides_project_disabled_command",
+        "TestFunctionality::test_project_config_search_stops_at_first_matching_directory",
+        "TestFunctionality::test_project_config_upward_search",
+        "TestFunctionality::test_runtime_alias_overrides_file_alias",
+        "TestFunctionality::test_ssh_exit_255_error",
+        "TestFunctionality::test_ssh_uri_schemes_recognized",
+        "TestFunctionality::test_unknown_alias_does_not_suggest_far_match",
+        "TestFunctionality::test_yaml_inherit_depth_first",
+        "TestFunctionality::test_yaml_merge_arrays_appended",
+        "TestFunctionality::test_yaml_merge_arrays_not_deduplicated"
+      ],
+      "failed": [
+        "TestCore::test_config_runtime_overrides_project",
+        "TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command",
+        "TestFunctionality::test_strict_args_mode"
+      ],
+      "skipped": []
+    },
+    "checkpoint_3-Core": {
+      "passed": [
+        "TestCore::test_debug_elapsed_time_format",
+        "TestCore::test_error_to_stderr",
+        "TestCore::test_field_single_value_raw_output",
+        "TestCore::test_json_format_4_space_indent",
+        "TestCore::test_quiet_suppresses_info_and_success",
+        "TestCore::test_table_format_default",
+        "TestFunctionality::test_yes_bypasses_confirmation"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "checkpoint_3-Error": {
+      "passed": [
+        "TestErrors::test_confirmation_prompt_non_y_aborts",
+        "TestErrors::test_invalid_field_name_error",
+        "TestErrors::test_invalid_fields_plural_error"
+      ],
+      "failed": [
+        "TestErrors::test_invalid_json_stdin_error"
+      ],
+      "skipped": []
+    },
+    "checkpoint_3-Functionality": {
+      "passed": [
+        "TestFunctionality::test_color_auto_mode",
+        "TestFunctionality::test_complex_values_json_serialized_in_table",
+        "TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y",
+        "TestFunctionality::test_count_format_integer",
+        "TestFunctionality::test_csv_format_quoting",
+        "TestFunctionality::test_debug_group_filtering",
+        "TestFunctionality::test_debug_group_prefix_format",
+        "TestFunctionality::test_fields_case_insensitive",
+        "TestFunctionality::test_fields_restricts_and_orders_columns",
+        "TestFunctionality::test_file_logging_timestamp_format",
+        "TestFunctionality::test_formats_preserve_same_underlying_values",
+        "TestFunctionality::test_ids_format_space_separated",
+        "TestFunctionality::test_no_color_disables_formatting",
+        "TestFunctionality::test_sensitive_error_not_logged",
+        "TestFunctionality::test_success_to_stdout_suppressed_by_quiet",
+        "TestFunctionality::test_warning_to_stderr",
+        "TestFunctionality::test_yaml_format_output"
+      ],
+      "failed": [
+        "TestFunctionality::test_confirmation_blank_response_cancels",
+        "TestFunctionality::test_csv_serializes_complex_values_as_json_strings",
+        "TestFunctionality::test_file_logging_separator_per_invocation",
+        "TestFunctionality::test_json_stdin_supplies_missing_positional_argument",
+        "TestFunctionality::test_quiet_does_not_suppress_debug_output",
+        "TestFunctionality::test_quiet_suppresses_cancellation_warning"
+      ],
+      "skipped": []
+    }
+  },
+  "pass_counts": {
+    "Core": 7,
+    "Functionality": 17,
+    "Regression": 66,
+    "Error": 3
+  },
+  "total_counts": {
+    "Core": 7,
+    "Functionality": 23,
+    "Regression": 71,
+    "Error": 4
+  },
+  "pytest_exit_code": 1,
+  "pytest_collected": 105,
+  "test_collection_hash": "3b27b3f59bd4c736739f646b8b6483c1a3a3bf4e0c20126172655e5de7b64ae8",
+  "infrastructure_failure": false
+}

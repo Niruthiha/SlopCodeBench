@@ -1,0 +1,860 @@
+=== app
+     1	"""Pipeline wiring.
+     2	
+     3	Secret: the order in which the stages run (alias split, lex, rewrite,
+     4	extract globals, load config, expand aliases, resolve, bind, run or hand
+     5	off to a remote transport) and how failures map to output and exit codes.
+     6	"""
+     7	
+     8	import os
+     9	
+    10	from . import (aliases, binding, catalog, config_files, dispatch, help_text,
+    11	               remote, rewrites, runtime_config, tokens)
+    12	from .command_tree import CommandTree
+    13	from .errors import CliError, MissingPositional
+    14	from .output import Output
+    15	
+    16	
+    17	class CommandContext:
+    18	    """Everything a command handler may use."""
+    19	
+    20	    def __init__(self, command, args, out, config, tree):
+    21	        self.command = command
+    22	        self.args = args
+    23	        self.out = out
+    24	        self.config = config
+    25	        self.tree = tree
+    26	
+    27	
+    28	def build_tree():
+    29	    tree = CommandTree()
+    30	    catalog.register_all(tree)
+    31	    return tree
+    32	
+    33	
+    34	def _split_alias(argv):
+    35	    """Remove a leading ``@alias`` word; return ``(alias, argv)``."""
+    36	    for index, raw in enumerate(argv):
+    37	        if raw == "--":
+    38	            break
+    39	        if raw.startswith("--") and len(raw) > 2:
+    40	            continue
+    41	        if aliases.is_alias_name(raw):
+    42	            return raw, argv[:index] + argv[index + 1:]
+    43	        break
+    44	    return None, argv
+    45	
+    46	
+    47	class _Invocation:
+    48	    def __init__(self, argv, env, stdout, stderr, tree, cwd):
+    49	        self.argv = argv
+    50	        self.env = env
+    51	        self.stdout = stdout
+    52	        self.stderr = stderr
+    53	        self.tree = tree
+    54	        self.cwd = cwd
+    55	
+    56	    def start(self, alias):
+    57	        out = Output(self.stdout, self.stderr)
+    58	        try:
+    59	            items = rewrites.apply(tokens.lex(self.argv))
+    60	            self.runtime, self.items = runtime_config.extract(items, self.env)
+    61	        except CliError as exc:
+    62	            out.error(exc.message)
+    63	            return exc.exit_code
+    64	        self.out = out = Output(self.stdout, self.stderr,
+    65	                                quiet=self.runtime.quiet(), debug=self.runtime.debug())
+    66	        for warning in self.runtime.warnings:
+    67	            out.warning(warning)
+    68	        try:
+    69	            self.locations = config_files.Locations(self.env)
+    70	            self.loaded = config_files.load(self.locations, self.cwd)
+    71	            self.registry = aliases.AliasRegistry(
+    72	                self.loaded.aliases, aliases.runtime_aliases(self.env))
+    73	            for path in self.loaded.files:
+    74	                out.debug(f"Loaded config file: {path}")
+    75	            return self.execute(alias, ())
+    76	        except CliError as exc:
+    77	            out.error(exc.message)
+    78	            return exc.exit_code
+    79	
+    80	    def execute(self, alias, stack):
+    81	        if alias is None:
+    82	            return self.invoke({})
+    83	        target = self.registry.resolve(alias)
+    84	        if not target.is_group():
+    85	            return self.invoke(target.connection)
+    86	        code = 0
+    87	        for member in target.members:
+    88	            if member == alias or member in stack:
+    89	                continue
+    90	            self.out.log(member)
+    91	            try:
+    92	                result = self.execute(member, stack + (alias,))
+    93	            except CliError as exc:
+    94	                self.out.error(exc.message)
+    95	                result = exc.exit_code
+    96	            code = result or code
+    97	        return code
+    98	
+    99	    def invoke(self, connection):
+   100	        config = runtime_config.layer(
+   101	            self.runtime, self.loaded.values, connection,
+   102	            locations=self.locations, loaded=self.loaded, aliases=self.registry)
+   103	        if config.ssh():
+   104	            return remote.run(config.ssh(), self.argv, connection,
+   105	                              self.runtime.values, config, self.env, self.out,
+   106	                              self.stdout, self.stderr)
+   107	        return self.run_local(config)
+   108	
+   109	    def run_local(self, config):
+   110	        out = self.out
+   111	        if self.tree is None:
+   112	            self.tree = build_tree()
+   113	        tree = self.tree
+   114	        items = self.items
+   115	        words = [t.text for t in items if not t.is_option()] or ["help"]
+   116	        options = [(t.name, t.value) for t in items if t.is_option()]
+   117	        node = None
+   118	        try:
+   119	            node, remaining = dispatch.resolve(tree, words, config.disabled_commands())
+   120	            out.debug(f"Resolved command '{node.path}' with arguments {remaining}")
+   121	            if not node.is_runnable():
+   122	                out.usage(help_text.composite_usage(node))
+   123	                return 0
+   124	            bound = binding.bind(node.path, node.synopsis, node.defaults(),
+   125	                                 remaining, options)
+   126	            result = node.run(CommandContext(node, bound, out, config, tree))
+   127	            return int(result or 0)
+   128	        except MissingPositional:
+   129	            out.usage(help_text.usage_line(node))
+   130	            return 1
+   131	
+   132	
+   133	def run(argv, env, stdout, stderr, tree=None, cwd=None):
+   134	    """Run one invocation and return its exit code."""
+   135	    alias, argv = _split_alias(list(argv))
+   136	    invocation = _Invocation(argv, env, stdout, stderr, tree,
+   137	                             cwd if cwd is not None else os.getcwd())
+   138	    return invocation.start(alias)
+=== messages
+     1	"""User-facing message wording.
+     2	
+     3	Secret: the exact text of every error and notice, and the program's display
+     4	name.
+     5	"""
+     6	
+     7	_PROGRAM = "appctl"
+     8	
+     9	
+    10	def program_name():
+    11	    return _PROGRAM
+    12	
+    13	
+    14	def _with_suggestion(message, suggestion):
+    15	    if suggestion:
+    16	        return f"{message}\nDid you mean '{suggestion}'?"
+    17	    return message
+    18	
+    19	
+    20	def unregistered_command(name, suggestion=None):
+    21	    return _with_suggestion(
+    22	        f"'{name}' is not a registered {_PROGRAM} command. "
+    23	        f"See '{_PROGRAM} help' for available commands.",
+    24	        suggestion,
+    25	    )
+    26	
+    27	
+    28	def unregistered_subcommand(name, parent, suggestion=None):
+    29	    return _with_suggestion(
+    30	        f"'{name}' is not a registered subcommand of '{parent}'. "
+    31	        f"See '{_PROGRAM} help {parent}' for available subcommands.",
+    32	        suggestion,
+    33	    )
+    34	
+    35	
+    36	def too_many_positionals(words):
+    37	    return "Too many positional arguments: " + " ".join(words)
+    38	
+    39	
+    40	def parameter_errors(lines):
+    41	    return "Parameter errors:" + "".join(f"\n {line}" for line in lines)
+    42	
+    43	
+    44	def missing_parameter(key):
+    45	    return f"missing --{key} parameter"
+    46	
+    47	
+    48	def parameter_needs_value(key):
+    49	    return f"--{key} parameter needs a value"
+    50	
+    51	
+    52	def parameter_takes_no_value(key):
+    53	    return f"--{key} parameter does not accept a value"
+    54	
+    55	
+    56	def unknown_parameter(key, suggestion=None):
+    57	    message = f"unknown --{key} parameter"
+    58	    if suggestion:
+    59	        message += f"\nDid you mean '--{suggestion}'?"
+    60	    return message
+    61	
+    62	
+    63	def invalid_synopsis(path, parts):
+    64	    return (f"The '{path}' command has an invalid synopsis: "
+    65	            + ", ".join(parts))
+    66	
+    67	
+    68	def global_parameter_error(key, needs_value):
+    69	    if needs_value:
+    70	        return f"The --{key} global parameter needs a value."
+    71	    return f"The --{key} global parameter does not accept a value."
+    72	
+    73	
+    74	def command_disabled(path):
+    75	    return f"The '{path}' command has been disabled."
+    76	
+    77	
+    78	def deprecated_global_parameter(key):
+    79	    return f"The --{key} global parameter is deprecated."
+    80	
+    81	
+    82	def alias_not_found(name, suggestion=None):
+    83	    return _with_suggestion(f"Alias '{name}' not found.", suggestion)
+    84	
+    85	
+    86	def alias_group_invalid(group, invalid):
+    87	    return (f"Group '{group}' contains one or more invalid aliases: "
+    88	            + ", ".join(invalid) + ".")
+    89	
+    90	
+    91	def alias_all_without_aliases():
+    92	    return "Cannot use '@all' when no aliases are registered."
+    93	
+    94	
+    95	def ssh_connection_failed():
+    96	    return "Cannot connect over SSH using provided configuration."
+    97	
+    98	
+    99	def _reason(exc):
+   100	    return getattr(exc, "strerror", None) or str(exc)
+   101	
+   102	
+   103	def config_unwritable(path, exc):
+   104	    return f"Unable to write the global config file '{path}': {_reason(exc)}."
+   105	
+   106	
+   107	def config_unreadable(path, exc):
+   108	    return f"Unable to read the config file '{path}': {_reason(exc)}."
+   109	
+   110	
+   111	def config_unparsable(path, exc):
+   112	    return f"Unable to parse the config file '{path}': {exc}"
+=== output
+     1	"""Output streams.
+     2	
+     3	Secret: which stream each kind of output goes to, the prefix it carries,
+     4	and how quiet and debug modes affect it.
+     5	"""
+     6	
+     7	
+     8	class Output:
+     9	    def __init__(self, stdout, stderr, quiet=False, debug=False):
+    10	        self._stdout = stdout
+    11	        self._stderr = stderr
+    12	        self._quiet = quiet
+    13	        self._debug = debug
+    14	
+    15	    def _write(self, stream, text):
+    16	        stream.write(text if text.endswith("\n") else text + "\n")
+    17	
+    18	    def line(self, text=""):
+    19	        """Command result data; always shown."""
+    20	        self._write(self._stdout, text)
+    21	
+    22	    def usage(self, text):
+    23	        """Help and usage text; always shown."""
+    24	        self._write(self._stdout, text)
+    25	
+    26	    def log(self, text):
+    27	        if not self._quiet:
+    28	            self._write(self._stdout, text)
+    29	
+    30	    def success(self, text):
+    31	        if not self._quiet:
+    32	            self._write(self._stdout, f"Success: {text}")
+    33	
+    34	    def warning(self, text):
+    35	        if not self._quiet:
+    36	            self._write(self._stderr, f"Warning: {text}")
+    37	
+    38	    def error(self, text):
+    39	        self._write(self._stderr, f"Error: {text}")
+    40	
+    41	    def debug(self, text):
+    42	        if self._debug:
+    43	            self._write(self._stderr, f"Debug: {text}")
+=== formatter
+     1	"""Record rendering.
+     2	
+     3	Secret: how a list of records is rendered in each supported output format.
+     4	"""
+     5	
+     6	import csv
+     7	import io
+     8	import json
+     9	
+    10	_FORMATS = ("table", "json", "csv", "yaml", "ids", "count")
+    11	
+    12	
+    13	def supported_formats():
+    14	    return list(_FORMATS)
+    15	
+    16	
+    17	def _table(records, fields):
+    18	    rows = [[str(r.get(f, "")) for f in fields] for r in records]
+    19	    widths = [max([len(f)] + [len(row[i]) for row in rows])
+    20	              for i, f in enumerate(fields)]
+    21	    lines = ["  ".join(c.ljust(w) for c, w in zip(fields, widths)).rstrip()]
+    22	    lines += ["  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip()
+    23	              for row in rows]
+    24	    return "\n".join(lines)
+    25	
+    26	
+    27	def _csv(records, fields):
+    28	    buffer = io.StringIO()
+    29	    writer = csv.writer(buffer, lineterminator="\n")
+    30	    writer.writerow(fields)
+    31	    for record in records:
+    32	        writer.writerow([record.get(f, "") for f in fields])
+    33	    return buffer.getvalue().rstrip("\n")
+    34	
+    35	
+    36	def _yaml(records, fields):
+    37	    lines = ["---"]
+    38	    for record in records:
+    39	        for index, field in enumerate(fields):
+    40	            lead = "- " if index == 0 else "  "
+    41	            lines.append(f"{lead}{field}: {json.dumps(record.get(field, ''))}")
+    42	    return "\n".join(lines)
+    43	
+    44	
+    45	def render(records, fields, fmt):
+    46	    """Render ``records`` (dicts) restricted to ``fields`` in format ``fmt``.
+    47	
+    48	    Raises ``ValueError`` for an unsupported format.
+    49	    """
+    50	    fields = list(fields)
+    51	    if fmt == "table":
+    52	        return _table(records, fields)
+    53	    if fmt == "json":
+    54	        return json.dumps([{f: r.get(f) for f in fields} for r in records])
+    55	    if fmt == "csv":
+    56	        return _csv(records, fields)
+    57	    if fmt == "yaml":
+    58	        return _yaml(records, fields)
+    59	    if fmt == "ids":
+    60	        return " ".join(str(r.get(fields[0], "")) for r in records)
+    61	    if fmt == "count":
+    62	        return str(len(records))
+    63	    raise ValueError(fmt)
+    64	
+    65	
+    66	_MAPPING_FORMATS = ("list", "json", "yaml")
+    67	
+    68	
+    69	def supported_mapping_formats():
+    70	    return list(_MAPPING_FORMATS)
+    71	
+    72	
+    73	def render_mapping(mapping, fmt):
+    74	    """Render a single key/value mapping. Raises ``ValueError`` for an
+    75	    unsupported format."""
+    76	    if fmt == "list":
+    77	        width = max((len(k) for k in mapping), default=0)
+    78	        return "\n".join(f"{k.ljust(width)}  {v}" for k, v in mapping.items())
+    79	    if fmt == "json":
+    80	        return json.dumps(mapping)
+    81	    if fmt == "yaml":
+    82	        return "\n".join(["---"] + [f"{k}: {json.dumps(v)}" for k, v in mapping.items()])
+    83	    raise ValueError(fmt)
+=== errors
+     1	"""Exception types shared by several module interfaces."""
+     2	
+     3	
+     4	class CliError(Exception):
+     5	    """A user-facing failure: the message is reported as an error and the
+     6	    process exits with ``exit_code``."""
+     7	
+     8	    def __init__(self, message, exit_code=1):
+     9	        super().__init__(message)
+    10	        self.message = message
+    11	        self.exit_code = exit_code
+    12	
+    13	
+    14	class MissingPositional(Exception):
+    15	    """Raised when a command did not receive all of its required positional
+    16	    arguments; the caller is expected to show that command's usage."""
+=== dispatch
+     1	"""Command resolution.
+     2	
+     3	Secret: how positional words are walked down the command tree, and when
+     4	leftover words become arguments of the matched command rather than unknown
+     5	subcommands.
+     6	"""
+     7	
+     8	from . import messages as _messages
+     9	from .errors import CliError
+    10	from .suggest import suggest
+    11	
+    12	
+    13	def resolve(tree, words, disabled=()):
+    14	    """Find the deepest command matching the leading ``words``.
+    15	
+    16	    Returns ``(node, remaining_words)``. Raises ``CliError`` for an unknown
+    17	    top-level command, an unknown subcommand under a group that cannot
+    18	    itself run, or a command whose path is listed in ``disabled``.
+    19	    """
+    20	    disabled = set(disabled)
+    21	    node = tree.root
+    22	    words = list(words)
+    23	    consumed = 0
+    24	    for word in words:
+    25	        if not node.has_children():
+    26	            break
+    27	        child = node.find_child(word)
+    28	        if child is None:
+    29	            if node.is_runnable() and not node.is_root():
+    30	                break
+    31	            suggestion = suggest(word, node.child_names())
+    32	            if node.is_root():
+    33	                raise CliError(_messages.unregistered_command(word, suggestion))
+    34	            raise CliError(_messages.unregistered_subcommand(
+    35	                word, node.path, suggestion))
+    36	        node = child
+    37	        consumed += 1
+    38	        if node.path in disabled:
+    39	            raise CliError(_messages.command_disabled(node.path))
+    40	    return node, words[consumed:]
+=== runtime_config
+     1	"""Global runtime parameters.
+     2	
+     3	Secret: which environment variable enables strict arguments mode, which
+     4	argv positions may supply global parameters in each mode, and how the
+     5	runtime flags, config files, alias parameters and built-in defaults are
+     6	layered into one configuration.
+     7	"""
+     8	
+     9	from . import config_spec
+    10	from . import messages as _messages
+    11	from .errors import CliError
+    12	from .synopsis import Synopsis
+    13	
+    14	_STRICT_ENV = "APPCTL_STRICT_ARGS_MODE"
+    15	_GLOBALS = config_spec.runtime_synopsis()
+    16	
+    17	
+    18	class RuntimeValues:
+    19	    """Global parameters given on the command line."""
+    20	
+    21	    def __init__(self, values, strict, warnings):
+    22	        self.values = dict(values)
+    23	        self.strict = strict
+    24	        self.warnings = list(warnings)
+    25	
+    26	    def debug(self):
+    27	        return bool(self.values.get("debug", False))
+    28	
+    29	    def quiet(self):
+    30	        return bool(self.values.get("quiet", False))
+    31	
+    32	
+    33	class RuntimeConfig:
+    34	    """Read-only view of the effective global configuration."""
+    35	
+    36	    def __init__(self, values, strict, locations=None, loaded=None, aliases=None):
+    37	        self._values = config_spec.defaults()
+    38	        self._values.update(values)
+    39	        self._strict = strict
+    40	        self._locations = locations
+    41	        self._loaded = loaded
+    42	        self._aliases = aliases
+    43	
+    44	    def get(self, name, default=None):
+    45	        return self._values.get(name, default)
+    46	
+    47	    def values(self):
+    48	        return dict(self._values)
+    49	
+    50	    def path(self):
+    51	        return self._values.get("path")
+    52	
+    53	    def url(self):
+    54	        return self._values.get("url")
+    55	
+    56	    def user(self):
+    57	        return self._values.get("user")
+    58	
+    59	    def ssh(self):
+    60	        return self._values.get("ssh")
+    61	
+    62	    def color(self):
+    63	        return self._values.get("color")
+    64	
+    65	    def debug(self):
+    66	        return bool(self._values.get("debug", False))
+    67	
+    68	    def quiet(self):
+    69	        return bool(self._values.get("quiet", False))
+    70	
+    71	    def strict(self):
+    72	        return self._strict
+    73	
+    74	    def disabled_commands(self):
+    75	        entries = self._values.get("disabled_commands") or []
+    76	        if not isinstance(entries, list):
+    77	            entries = [entries]
+    78	        return [" ".join(str(e).split()) for e in entries if e is not None]
+    79	
+    80	    def aliases(self):
+    81	        """The alias registry, or ``None`` when none was loaded."""
+    82	        return self._aliases
+    83	
+    84	    def global_config_path(self):
+    85	        return self._loaded.global_config_path if self._loaded else None
+    86	
+    87	    def project_config_path(self):
+    88	        return self._loaded.project_config_path if self._loaded else None
+    89	
+    90	    def packages_dir(self):
+    91	        return self._locations.packages_dir if self._locations else None
+    92	
+    93	    def root_dir(self):
+    94	        return self._locations.root_dir if self._locations else None
+    95	
+    96	    def as_dict(self):
+    97	        return {
+    98	            "path": self.path(),
+    99	            "url": self.url(),
+   100	            "user": self.user(),
+   101	            "color": self.color(),
+   102	            "debug": self.debug(),
+   103	            "quiet": self.quiet(),
+   104	            "strict_args_mode": self.strict(),
+   105	            "global_config_path": self.global_config_path(),
+   106	            "project_config_path": self.project_config_path(),
+   107	            "packages_dir": self.packages_dir(),
+   108	        }
+   109	
+   110	
+   111	def extract(items, env):
+   112	    """Split global parameters out of ``items``.
+   113	
+   114	    Returns ``(RuntimeValues, remaining_tokens)``. In strict mode only tokens
+   115	    before the first positional word are considered global.
+   116	    """
+   117	    strict = bool(env.get(_STRICT_ENV, ""))
+   118	    values = {}
+   119	    warnings = []
+   120	    remaining = []
+   121	    seen_positional = False
+   122	    for token in items:
+   123	        if not token.is_option():
+   124	            seen_positional = True
+   125	            remaining.append(token)
+   126	            continue
+   127	        if strict and seen_positional:
+   128	            remaining.append(token)
+   129	            continue
+   130	        key, value, status = _GLOBALS.interpret(token.name, token.value)
+   131	        if status == Synopsis.UNKNOWN:
+   132	            remaining.append(token)
+   133	        elif status == Synopsis.OK:
+   134	            values[key] = value
+   135	            if config_spec.is_deprecated(key):
+   136	                warnings.append(_messages.deprecated_global_parameter(key))
+   137	        else:
+   138	            raise CliError(_messages.global_parameter_error(
+   139	                key, needs_value=(status == Synopsis.NEEDS_VALUE)))
+   140	    return RuntimeValues(values, strict, list(dict.fromkeys(warnings))), remaining
+   141	
+   142	
+   143	def layer(runtime, file_values=None, alias_values=None, **context):
+   144	    """Combine the sources: runtime > alias > config files > defaults."""
+   145	    values = {}
+   146	    for key, value in (file_values or {}).items():
+   147	        param = config_spec.get(key)
+   148	        if param is not None and param.file:
+   149	            values[key] = value
+   150	    for key, value in (alias_values or {}).items():
+   151	        if config_spec.get(key) is not None and key not in ("debug", "quiet"):
+   152	            values[key] = value
+   153	    values.update(runtime.values)
+   154	    return RuntimeConfig(values, runtime.strict, **context)
+=== config_spec
+     1	"""Global parameter specification.
+     2	
+     3	Secret: which global parameters exist, whether each may be given as a
+     4	runtime flag and/or in a config file, their defaults, runtime syntax, and
+     5	which are deprecated or hidden.
+     6	"""
+     7	
+     8	from .synopsis import Synopsis
+     9	
+    10	
+    11	class Param:
+    12	    __slots__ = ("name", "runtime", "file", "default", "kind", "deprecated",
+    13	                 "hidden", "description")
+    14	
+    15	    def __init__(self, name, *, runtime=None, file=True, default=None,
+    16	                 kind="value", deprecated=False, hidden=False, description=""):
+    17	        self.name = name
+    18	        self.runtime = runtime        # synopsis fragment, or None
+    19	        self.file = file
+    20	        self.default = default
+    21	        self.kind = kind              # "value", "list" or "bool"
+    22	        self.deprecated = deprecated
+    23	        self.hidden = hidden
+    24	        self.description = description
+    25	
+    26	
+    27	_PARAMS = [
+    28	    Param("path", runtime="[--path=<path>]",
+    29	          description="Path to the application files."),
+    30	    Param("url", runtime="[--url=<url>]",
+    31	          description="Pretend request came from given URL."),
+    32	    Param("user", runtime="[--user=<id>]",
+    33	          description="Set the user."),
+    34	    Param("ssh", runtime="[--ssh=<ssh>]",
+    35	          description="Perform operation against a remote server over SSH "
+    36	                      "(or a container using scheme of \"docker\", "
+    37	                      "\"docker-compose\", \"docker-compose-run\", \"vagrant\")."),
+    38	    Param("disabled_commands", default=[], kind="list",
+    39	          description="(Sub)commands to disable."),
+    40	    Param("projects_path", description="Directory in which projects are stored."),
+    41	    Param("locale", default="en_US", description="Locale to use."),
+    42	    Param("cert-email", description="E-mail address used for certificates."),
+    43	    Param("env", description="Environment name."),
+    44	    Param("admin-email", description="Administrator e-mail address."),
+    45	    Param("sysctl", description="Kernel parameters to apply."),
+    46	    Param("skip-tty", default=False, kind="bool",
+    47	          description="Do not allocate a TTY for remote commands."),
+    48	    Param("custom-compose", description="Custom compose file."),
+    49	    Param("installer_version", default="stable",
+    50	          description="Installer release channel."),
+    51	    Param("color", runtime="[--[no-]color]", default="auto",
+    52	          description="Whether to colorize the output."),
+    53	    Param("debug", runtime="[--debug[=<group>]]", file=False, default=False,
+    54	          description="Show all errors and add verbosity to bootstrap."),
+    55	    Param("quiet", runtime="[--quiet]", file=False, default=False,
+    56	          kind="bool", description="Suppress informational messages."),
+    57	]
+    58	
+    59	_BY_NAME = {p.name: p for p in _PARAMS}
+    60	
+    61	
+    62	def params():
+    63	    return list(_PARAMS)
+    64	
+    65	
+    66	def get(name):
+    67	    return _BY_NAME.get(name)
+    68	
+    69	
+    70	def defaults():
+    71	    return {p.name: (list(p.default) if isinstance(p.default, list) else p.default)
+    72	            for p in _PARAMS}
+    73	
+    74	
+    75	def file_param(name):
+    76	    """The parameter named ``name`` if it may be set from a config file."""
+    77	    param = _BY_NAME.get(name)
+    78	    return param if param is not None and param.file else None
+    79	
+    80	
+    81	def runtime_synopsis():
+    82	    return Synopsis(" ".join(p.runtime for p in _PARAMS if p.runtime))
+    83	
+    84	
+    85	def is_deprecated(name):
+    86	    param = _BY_NAME.get(name)
+    87	    return bool(param and param.deprecated)
+    88	
+    89	
+    90	def visible():
+    91	    """Parameters that may be shown in help output."""
+    92	    return [p for p in _PARAMS if not p.hidden]
+=== tokens
+     1	"""Lexical syntax of the command line.
+     2	
+     3	Secret: how raw argv strings are split into option tokens (``--key=value``,
+     4	``--flag``) and positional words, including the ``--`` terminator.
+     5	"""
+     6	
+     7	
+     8	class Token:
+     9	    """One lexical unit of the command line."""
+    10	
+    11	    __slots__ = ("_text", "_name", "_value", "_option")
+    12	
+    13	    def __init__(self, text, name=None, value=None, option=False):
+    14	        self._text = text
+    15	        self._name = name
+    16	        self._value = value
+    17	        self._option = option
+    18	
+    19	    def is_option(self):
+    20	        return self._option
+    21	
+    22	    @property
+    23	    def text(self):
+    24	        """The token exactly as the user typed it."""
+    25	        return self._text
+    26	
+    27	    @property
+    28	    def name(self):
+    29	        """Option name without leading dashes (``None`` for positionals)."""
+    30	        return self._name
+    31	
+    32	    @property
+    33	    def value(self):
+    34	        """Option value as a string, or ``None`` when no ``=`` was given."""
+    35	        return self._value
+    36	
+    37	    def __repr__(self):
+    38	        return f"Token({self._text!r})"
+    39	
+    40	
+    41	def positional(text):
+    42	    """Build a positional word token."""
+    43	    return Token(text)
+    44	
+    45	
+    46	def lex(argv):
+    47	    """Split raw argv strings into tokens."""
+    48	    result = []
+    49	    options_ended = False
+    50	    for raw in argv:
+    51	        if options_ended:
+    52	            result.append(positional(raw))
+    53	        elif raw == "--":
+    54	            options_ended = True
+    55	        elif raw.startswith("--") and len(raw) > 2:
+    56	            body = raw[2:]
+    57	            if "=" in body:
+    58	                name, value = body.split("=", 1)
+    59	            else:
+    60	                name, value = body, None
+    61	            result.append(Token(raw, name, value, option=True))
+    62	        else:
+    63	            result.append(positional(raw))
+    64	    return result
+=== binding
+     1	"""Argument validation and binding.
+     2	
+     3	Secret: the order in which argument checks run, which conditions count as
+     4	errors, how associative-argument errors are batched, and when defaults are
+     5	filled in.
+     6	"""
+     7	
+     8	from . import messages as _messages
+     9	from .errors import CliError, MissingPositional
+    10	from .suggest import suggest
+    11	from .synopsis import Synopsis
+    12	
+    13	
+    14	class BoundArguments:
+    15	    """Validated arguments with defaults applied."""
+    16	
+    17	    def __init__(self, positionals, options):
+    18	        self._positionals = list(positionals)
+    19	        self._options = dict(options)
+    20	
+    21	    @property
+    22	    def positionals(self):
+    23	        return list(self._positionals)
+    24	
+    25	    def positional(self, index, default=None):
+    26	        if index < len(self._positionals):
+    27	            return self._positionals[index]
+    28	        return default
+    29	
+    30	    def option(self, name, default=None):
+    31	        return self._options.get(name, default)
+    32	
+    33	    def has_option(self, name):
+    34	        return name in self._options
+    35	
+    36	    def options(self):
+    37	        return dict(self._options)
+    38	
+    39	
+    40	def _check_positionals(synopsis, words):
+    41	    if len(words) < synopsis.required_positional_count():
+    42	        raise MissingPositional()
+    43	    limit = synopsis.positional_limit()
+    44	    if limit is not None and len(words) > limit:
+    45	        raise CliError(_messages.too_many_positionals(words[limit:]))
+    46	
+    47	
+    48	def _bind_options(synopsis, options):
+    49	    bound = {}
+    50	    needs_value, takes_no_value, unknown = [], [], []
+    51	    for name, value in options:
+    52	        key, interpreted, status = synopsis.interpret(name, value)
+    53	        if status == Synopsis.OK:
+    54	            bound[key] = interpreted
+    55	        elif status == Synopsis.NEEDS_VALUE:
+    56	            bound.pop(key, None)
+    57	            needs_value.append(key)
+    58	        elif status == Synopsis.TAKES_NO_VALUE:
+    59	            takes_no_value.append(key)
+    60	        elif name not in unknown:
+    61	            unknown.append(name)
+    62	
+    63	    required = synopsis.required_option_names()
+    64	    errors = [_messages.missing_parameter(key)
+    65	              for key in required if key not in bound]
+    66	    errors += [_messages.parameter_needs_value(key)
+    67	               for key in dict.fromkeys(needs_value)
+    68	               if key not in required and key not in bound]
+    69	    errors += [_messages.parameter_takes_no_value(key)
+    70	               for key in dict.fromkeys(takes_no_value)]
+    71	    generic = synopsis.requires_generic_option()
+    72	    if generic and not any(k not in synopsis.option_names() for k in bound):
+    73	        errors.append(_messages.missing_parameter(generic))
+    74	    known = synopsis.option_names()
+    75	    errors += [_messages.unknown_parameter(key, suggest(key, known))
+    76	               for key in unknown]
+    77	    if errors:
+    78	        raise CliError(_messages.parameter_errors(errors))
+    79	    return bound
+    80	
+    81	
+    82	def _apply_defaults(synopsis, words, options, defaults):
+    83	    words = list(words)
+    84	    names = synopsis.positional_names()
+    85	    for name in names[len(words):]:
+    86	        if name not in defaults:
+    87	            break
+    88	        words.append(defaults[name])
+    89	    for name in synopsis.option_names():
+    90	        if name not in options and name in defaults:
+    91	            options[name] = defaults[name]
+    92	    return words, options
+    93	
+    94	
+    95	def bind(path, synopsis, defaults, words, options):
+    96	    """Validate ``words`` and ``options`` against ``synopsis``.
+    97	
+    98	    ``options`` is a sequence of ``(name, value)`` pairs where ``value`` is a
+    99	    string or ``None`` (no ``=`` given). Raises ``MissingPositional`` when
+   100	    required positionals are absent and ``CliError`` for other problems.
+   101	    """
+   102	    malformed = synopsis.malformed_parts()
+   103	    if malformed:
+   104	        raise CliError(_messages.invalid_synopsis(path, malformed))
+   105	    _check_positionals(synopsis, list(words))
+   106	    bound = _bind_options(synopsis, options)
+   107	    words, bound = _apply_defaults(synopsis, words, bound, dict(defaults))
+   108	    return BoundArguments(words, bound)

@@ -1,0 +1,231 @@
+### industry.py (modified)
+--- industry.py
++++ industry.py
+@@ -270,6 +270,18 @@
+ 
+     def is_buildable(self, tid):
+         return bool(self.producers_of(tid))
++
++    def recipe_for(self, tid):
++        """Preferred (blueprintID, activityID) building a product."""
++        prods = self.producers_of(tid)
++        prods.sort(key=lambda x: (BUILD_ACTIVITIES.index(x[1]), x[0]))
++        return prods[0]
++
++    def output_quantity(self, bp, aid, tid):
++        for pid, qty in self.products.get((bp, aid), []):
++            if pid == tid:
++                return max(1, qty)
++        return 1
+ 
+     def category_group(self, tid):
+         t = self.types[tid]
+@@ -588,6 +600,9 @@
+ 
+ SECONDS_PER_DAY = 86400
+ MAX_TE = 20
++MAX_SPLIT_DAYS = 30
++CAPITAL_GROUPS = {"Capital Industrial Ship", "Carrier", "Dreadnought", "Force Auxiliary", "Freighter",
++                  "Supercarrier", "Titan"}
+ 
+ 
+ class PlanError(Exception):
+@@ -616,8 +631,8 @@
+     if not isinstance(data, dict):
+         raise PlanError("Config file must be a mapping")
+ 
+-    def get_int(key, default, low, high):
+-        value = data.get(key, default)
++    def get_int(key, default, low, high, source=data):
++        value = source.get(key, default)
+         if value is None:
+             value = default
+         if isinstance(value, bool):
+@@ -630,9 +645,31 @@
+             raise PlanError(f"{key} must be in range [{low},{high}], got {num}")
+         return num
+ 
++    def get_float(key, default):
++        value = data.get(key, default)
++        if value is None:
++            value = default
++        if isinstance(value, bool):
++            raise PlanError(f"{key} must be a number")
++        try:
++            num = float(value) if isinstance(value, (int, float)) else float(str(value).strip())
++        except ValueError:
++            raise PlanError(f"{key} must be a number, got '{value}'")
++        if not (num > 0 and math.isfinite(num)):
++            raise PlanError(f"{key} must be a positive number, got '{value}'")
++        return num
++
++    defaults = data.get("component_bpo_defaults")
++    if defaults is None:
++        defaults = {}
++    if not isinstance(defaults, dict):
++        raise PlanError("component_bpo_defaults must be a mapping")
+     return {
+         "te_bonus": get_int("te_bonus", 0, 0, 30),
+         "invention_skill": get_int("invention_skill", 5, 1, 5),
++        "split_days": min(MAX_SPLIT_DAYS, get_float("split_days", 3.0)),
++        "component_me": get_int("me", 10, 0, MAX_ME, defaults),
++        "component_te": get_int("te", 20, 0, MAX_TE, defaults),
+     }
+ 
+ 
+@@ -777,7 +814,62 @@
+     return BASE_ME + dme, BASE_TE + dte, max_runs, mats
+ 
+ 
+-def build_plan(sde, req, config):
++def split_runs(runs, days_per_run, split_days):
++    """Split a job into [(runs, count)] so every part finishes within split_days."""
++    if runs <= 1 or days_per_run <= 0:
++        return [(runs, 1)]
++    limit = Fraction(str(split_days))
++    # Most runs a single job may take while staying under the limit.
++    max_runs = max(1, math.ceil(limit / days_per_run) - 1)
++    if runs <= max_runs:
++        return [(runs, 1)]
++    parts = -(-runs // max_runs)
++    base, extra = divmod(runs, parts)
++    if base + 1 == max_runs and extra > parts / 2 and runs // (parts + 1) + 1 < max_runs:
++        parts += 1
++        base, extra = divmod(runs, parts)
++    return [(r, c) for r, c in ((base + 1, extra), (base, parts - extra)) if c > 0]
++
++
++def is_t1_capital(sde, tid):
++    category, group = sde.category_group(tid)
++    if category != "Ship" or sde.tech_level(tid) != "Tech I":
++        return False
++    return group in CAPITAL_GROUPS or sde.market_path(tid).startswith("Ships > Capital Ships")
++
++
++def component_efficiency(sde, tid, aid, config):
++    """ME/TE used for the blueprint building a component."""
++    if aid != MANUFACTURING or is_t1_capital(sde, tid):
++        return 0, 0
++    return config["component_me"], config["component_te"]
++
++
++def component_order(sde, roots, exclude):
++    """Buildable components reachable from roots, every consumer before its inputs."""
++    order = []
++    state = {tid: 2 for tid in exclude}
++    for root in roots:
++        if root in state or not sde.is_buildable(root):
++            continue
++        state[root] = 1
++        stack = [(root, iter(sorted(sde.materials.get(sde.recipe_for(root), {}))))]
++        while stack:
++            tid, children = stack[-1]
++            for child in children:
++                if child not in state and sde.is_buildable(child):
++                    state[child] = 1
++                    stack.append((child, iter(sorted(sde.materials.get(sde.recipe_for(child), {})))))
++                    break
++            else:
++                stack.pop()
++                state[tid] = 2
++                order.append(tid)
++    order.reverse()
++    return order
++
++
++def build_plan(sde, req, config, build_all=False):
+     """Return (materials rows, jobs rows) for a parsed build request."""
+     product, bp, aid = req["product"], req["bp"], req["aid"]
+     jobs = req["jobs"]
+@@ -803,27 +895,56 @@
+             raise PlanError(f"Time efficiency must be in range [0,{MAX_TE}], got {te}")
+     if aid != MANUFACTURING:
+         me = te = 0
+-    runs = req["runs"]
+-
+-    for mid, qty in sde.materials.get((bp, aid), {}).items():
+-        if qty <= 0:
+-            continue
+-        mats[mid] = mats.get(mid, 0) + job_material_amount(qty, me, runs) * jobs
++
++    te_bonus = config["te_bonus"]
++    job_counts = {}
++
++    def add_jobs(job_bp, job_aid, runs, job_me, job_te, count):
++        """Split a job of `runs` runs, queue its materials and record the job rows."""
++        seconds = sde.activity_time.get((job_bp, job_aid), 0) or 0
++        per_run = Fraction(seconds) * (100 - job_te) / 100 * (100 - te_bonus) / 100 / SECONDS_PER_DAY
++        for part_runs, part_count in split_runs(runs, per_run, config["split_days"]):
++            for mid, qty in sde.materials.get((job_bp, job_aid), {}).items():
++                if qty <= 0:
++                    continue
++                amount = job_material_amount(qty, job_me, part_runs) * part_count * count
++                mats[mid] = mats.get(mid, 0) + amount
++            days = per_run * part_runs
++            days = Decimal(days.numerator) / Decimal(days.denominator)
++            key = (type_name(sde, job_bp), part_runs, format_decimal(days))
++            job_counts[key] = job_counts.get(key, 0) + part_count * count
++
++    add_jobs(bp, aid, req["runs"], me, te, jobs)
++
++    surplus = {}
++    if build_all:
++        for mid in component_order(sde, list(mats), {product}):
++            need = mats.pop(mid, 0)
++            if need <= 0:
++                continue
++            cbp, caid = sde.recipe_for(mid)
++            out_qty = sde.output_quantity(cbp, caid, mid)
++            runs = -(-need // out_qty)
++            cme, cte = component_efficiency(sde, mid, caid, config)
++            add_jobs(cbp, caid, runs, cme, cte, 1)
++            surplus[mid] = surplus.get(mid, 0) + runs * out_qty - need
+ 
+     by_name = {}
+     for mid, qty in mats.items():
+         name = type_name(sde, mid)
+         vol = (sde.volume(mid) if mid in sde.types else Decimal(0)) * qty
+-        prev = by_name.get(name, (0, Decimal(0)))
+-        by_name[name] = (prev[0] + qty, prev[1] + vol)
+-    material_rows = [[name, qty, format_decimal(vol), 0, 0]
+-                     for name, (qty, vol) in sorted(by_name.items())]
+-
+-    seconds = sde.activity_time.get((bp, aid), 0) or 0
+-    days = (Fraction(seconds) * runs * (100 - te) / 100 * (100 - config["te_bonus"]) / 100
+-            / SECONDS_PER_DAY)
+-    days = Decimal(days.numerator) / Decimal(days.denominator)
+-    job_rows = [[type_name(sde, bp), runs, format_decimal(days), jobs]]
++        prev = by_name.get(name, (0, Decimal(0), 0))
++        by_name[name] = (prev[0] + qty, prev[1] + vol, prev[2])
++    for mid, extra in surplus.items():
++        if extra <= 0:
++            continue
++        name = type_name(sde, mid)
++        prev = by_name.get(name, (0, Decimal(0), 0))
++        by_name[name] = (prev[0], prev[1], prev[2] + extra)
++    material_rows = [[name, qty, format_decimal(vol), 0, end]
++                     for name, (qty, vol, end) in sorted(by_name.items())]
++
++    job_rows = [[name, runs, days, count] for (name, runs, days), count in job_counts.items()]
+     job_rows.sort(key=lambda r: (r[0], r[1], r[3], Decimal(r[2])))
+     return material_rows, job_rows
+ 
+@@ -864,6 +985,8 @@
+     pp.add_argument("--config", required=True, help="YAML build config file")
+     pp.add_argument("--sde", required=True, help="Path to SDE directory")
+     pp.add_argument("--output", required=True, help="Output directory")
++    pp.add_argument("--build-all", dest="build_all", action="store_true",
++                    help="Build every buildable component in the tree instead of buying it")
+     args = parser.parse_args(argv)
+ 
+     if args.command == "plan":
+@@ -874,7 +997,7 @@
+             config = load_plan_config(args.config)
+             sde = SDE(args.sde)
+             req = parse_build_string(sde, " ".join(args.build))
+-            material_rows, job_rows = build_plan(sde, req, config)
++            material_rows, job_rows = build_plan(sde, req, config, args.build_all)
+         except (PlanError, LookupError) as exc:
+             print(f"Error: {exc}", file=sys.stderr)
+             return 1
+

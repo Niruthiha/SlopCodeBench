@@ -1,0 +1,1509 @@
+### DESIGN.md (created)
+--- DESIGN.md
++++ DESIGN.md
+@@ -0,0 +1,49 @@
++# MTL — design plan
++
++`mtl.py` is a thin entry point. The logic lives in the `mtl_engine` package,
++where each module has one job.
++
++| Module | Responsibility |
++|---|---|
++| `errors.py` | Error hierarchy: `bad_dsl`=1, `type_error`=2, `bad_io`=3, `runtime_error`=4 |
++| `dtypes.py` | Value types (`int`, `float`, `string`, `bool`, `timestamp`) and helpers |
++| `timeutil.py` | Timezone resolution, timestamp parsing (ISO 8601 / strptime), UTC formatting, epoch math |
++| `csv_loader.py` | Reads the CSV, validates the header, types each column, converts the values |
++| `lexer.py` | Tokenises the DSL: comments, strings, numbers, durations, operators, and joining logical lines |
++| `ast_nodes.py` | AST node classes for expressions and statements |
++| `parser.py` | Recursive-descent parser that produces a `Program` and enforces statement cardinality |
++| `functions.py` | Scalar transforms (`len`, `day`, `month`, `year`, `round`): signatures and implementations |
++| `typecheck.py` | Static type checking of the whole pipeline against the CSV schema |
++| `evaluator.py` | Evaluates expressions for each row (SQL-like null propagation, runtime errors) |
++| `aggregates.py` | Aggregate functions (`sum`, `average`, `median`, `count`, `std`, `var`, `min`, `max`) |
++| `pipeline.py` | Runs the program: row ops, then bucketing by window and group, then aggregation |
++| `output.py` | Applies the normalization rules (row order, key order) and writes deterministic JSON |
++| `cli.py` | Parses arguments and runs the stages; maps errors to `ERROR:<TYPE>:<msg>` and exit codes |
++
++## Flow
++1. Parse the CLI arguments (an argument error is `bad_io`) and resolve `--tz`.
++2. Read the DSL from a file or STDIN (`bad_io`), then lex and parse it (`bad_dsl`).
++3. Load the CSV (`bad_io` for structure problems, `type_error` for values that don't match the column type).
++4. Type-check the program statically. This catches errors even when the CSV has no rows.
++5. Execute and serialize. Division by zero or NaN/Inf raises `runtime_error`.
++
++## Key decisions
++- **Column types.** `timestamp` is a timestamp. `price` and `quantity` are floats. `location`, `item`, `unit`
++  and `category` are strings. For an extra column, the type is inferred from its non-empty values, in this
++  order: int, then float, then bool (`true`/`false`), and string otherwise. An empty numeric cell becomes null.
++- **Expressions.** Literals, column refs, `!`, `&`, `|` (`!` > `&` > `|`), comparisons (not chainable),
++  `'lit' in col`, arithmetic `+ - * / %` (numeric only) and transform calls. Comparisons follow
++  the type rules: numeric with numeric, string with string, timestamp with timestamp, and bool with
++  bool for `==`/`!=` only.
++- **`apply`** accepts any scalar expression, so a transform call or arithmetic both work. It defines or
++  overrides a column for the statements after it.
++- **Statement order.** `filter` and `apply` run in file order. `group_by`, `window` and `aggregate`
++  are declarations that are resolved against the schema after all `apply` statements.
++- **Lines.** A statement continues onto the next line when brackets are open, the line ends with `,`,
++  the next line starts with `,`, or the line is just the word `aggregate`.
++- **Nulls.** Null values propagate through expressions. `filter` keeps a row only when the predicate is `true`.
++  Aggregates ignore nulls. `count(*)` counts rows.
++- **Windows.** Tumbling windows aligned to the epoch, computed in integer microseconds UTC. Only
++  non-empty windows are emitted. `day`, `month` and `year` use the UTC timestamp.
++- **`round`.** Rounds half away from zero, using `Decimal` on the shortest repr of the float.
++- **Output.** `json.dumps(indent=2)`. Key order and row order follow the spec. Only finite numbers are emitted.
+
+### mtl.py (created)
+--- mtl.py
++++ mtl.py
+@@ -0,0 +1,8 @@
++#!/usr/bin/env python3
++"""MTL command-line entry point."""
++import sys
++
++from mtl_engine.cli import main
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv[1:]))
+
+### mtl_engine/__init__.py (created)
+--- mtl_engine/__init__.py
++++ mtl_engine/__init__.py
+@@ -0,0 +1 @@
++"""MTL: a small DSL for rolling up sales events from CSV into deterministic JSON."""
+
+### mtl_engine/aggregates.py (created)
+--- mtl_engine/aggregates.py
++++ mtl_engine/aggregates.py
+@@ -0,0 +1,59 @@
++"""Aggregate functions over a bucket of rows (nulls are ignored, empty input -> null)."""
++import math
++
++from .errors import RuntimeFailure
++
++
++def _sum(values):
++    return sum(values)
++
++
++def _average(values):
++    return sum(values) / len(values)
++
++
++def _median(values):
++    ordered = sorted(values)
++    n = len(ordered)
++    mid = n // 2
++    if n % 2:
++        return ordered[mid]
++    return (ordered[mid - 1] + ordered[mid]) / 2
++
++
++def _var(values):
++    mean = sum(values) / len(values)
++    return sum((v - mean) * (v - mean) for v in values) / len(values)
++
++
++def _std(values):
++    return math.sqrt(_var(values))
++
++
++_FUNCTIONS = {
++    "sum": _sum,
++    "average": _average,
++    "median": _median,
++    "var": _var,
++    "std": _std,
++    "min": min,
++    "max": max,
++}
++
++
++def compute(item, rows):
++    """Compute one aggregate item over a list of row dicts."""
++    if item.func == "count":
++        if item.column is None:
++            return len(rows)
++        return sum(1 for r in rows if r[item.column] is not None)
++    values = [r[item.column] for r in rows if r[item.column] is not None]
++    if not values:
++        return None
++    try:
++        result = _FUNCTIONS[item.func](values)
++    except (OverflowError, ValueError) as exc:
++        raise RuntimeFailure(f"{item.func}({item.column}) failed: {exc}") from exc
++    if isinstance(result, float) and not math.isfinite(result):
++        raise RuntimeFailure(f"{item.func}({item.column}) produced a non-finite number")
++    return result
+
+### mtl_engine/ast_nodes.py (created)
+--- mtl_engine/ast_nodes.py
++++ mtl_engine/ast_nodes.py
+@@ -0,0 +1,106 @@
++"""AST node definitions for MTL expressions and statements.
++
++Expression nodes carry a `type` attribute that the type checker fills in.
++"""
++
++
++class Expr:
++    type = None
++
++
++class Literal(Expr):
++    def __init__(self, value, value_type):
++        self.value = value
++        self.type = value_type
++
++
++class ColumnRef(Expr):
++    def __init__(self, name, line):
++        self.name = name
++        self.line = line
++
++
++class Unary(Expr):
++    def __init__(self, op, operand, line):
++        self.op = op
++        self.operand = operand
++        self.line = line
++
++
++class Binary(Expr):
++    def __init__(self, op, left, right, line):
++        self.op = op
++        self.left = left
++        self.right = right
++        self.line = line
++
++
++class InExpr(Expr):
++    """`needle in haystack`: substring test."""
++
++    def __init__(self, needle, haystack, line):
++        self.needle = needle
++        self.haystack = haystack
++        self.line = line
++
++
++class Call(Expr):
++    def __init__(self, name, args, line):
++        self.name = name
++        self.args = args
++        self.line = line
++
++
++class Filter:
++    def __init__(self, predicate, line):
++        self.predicate = predicate
++        self.line = line
++
++
++class Apply:
++    def __init__(self, expr, column, line):
++        self.expr = expr
++        self.column = column
++        self.line = line
++
++
++class GroupBy:
++    def __init__(self, columns, line):
++        self.columns = columns
++        self.line = line
++
++
++class Window:
++    def __init__(self, amount, unit, seconds, line):
++        self.amount = amount
++        self.unit = unit
++        self.seconds = seconds
++        self.line = line
++
++
++class AggItem:
++    def __init__(self, func, column, alias, line):
++        self.func = func
++        self.column = column  # None means '*'
++        self.alias = alias
++        self.line = line
++
++
++class Aggregate:
++    def __init__(self, items, line):
++        self.items = items
++        self.line = line
++
++
++class Program:
++    """A parsed pipeline: ordered row operations plus the grouping/aggregation spec."""
++
++    def __init__(self, row_ops, group_by, window, aggregate):
++        self.row_ops = row_ops
++        self.group_by = group_by
++        self.window = window
++        self.aggregate = aggregate
++
++    @property
++    def group_columns(self):
++        return self.group_by.columns if self.group_by else []
+
+### mtl_engine/cli.py (created)
+--- mtl_engine/cli.py
++++ mtl_engine/cli.py
+@@ -0,0 +1,75 @@
++"""Command-line interface: argument parsing, stage orchestration and error reporting."""
++import argparse
++import sys
++
++from . import csv_loader, output, pipeline
++from .errors import IOFailure, MTLError, RuntimeFailure
++from .parser import parse_program
++from .timeutil import TimestampParser, resolve_timezone
++from .typecheck import check_program
++
++
++class _ArgumentParser(argparse.ArgumentParser):
++    def error(self, message):
++        raise IOFailure(f"invalid arguments: {message}")
++
++
++def build_arg_parser():
++    parser = _ArgumentParser(
++        prog="mtl.py",
++        description="Run an MTL pipeline over a CSV of sales events and emit JSON.",
++    )
++    parser.add_argument("--csv", required=True, help="path to the input CSV file")
++    parser.add_argument("--dsl", required=True, help="path to the DSL file, or '-' for STDIN")
++    parser.add_argument("--out", default=None, help="output file (default: STDOUT)")
++    parser.add_argument("--tz", default="UTC", help="IANA timezone for naive timestamps")
++    parser.add_argument("--timestamp-format", dest="timestamp_format", default=None,
++                        help="strptime format for timestamps (default: ISO 8601)")
++    return parser
++
++
++def run(argv):
++    """Execute the CLI stages and write the JSON result."""
++    args = build_arg_parser().parse_args(argv)
++    if args.csv == "-" and args.dsl == "-":
++        raise IOFailure("--csv and --dsl cannot both read from STDIN")
++    try:
++        tz = resolve_timezone(args.tz)
++    except ValueError as exc:
++        raise IOFailure(str(exc)) from exc
++
++    program = parse_program(csv_loader.read_text(args.dsl))
++    table = csv_loader.load_csv(args.csv, TimestampParser(tz, args.timestamp_format))
++    check_program(program, table.schema)
++    buckets = pipeline.run(program, table.rows)
++    text = output.serialize(output.build_document(program, buckets))
++    _write(text, args.out)
++
++
++def _write(text, destination):
++    if destination is None or destination == "-":
++        sys.stdout.write(text)
++        sys.stdout.flush()
++        return
++    try:
++        with open(destination, "w", encoding="utf-8", newline="\n") as fh:
++            fh.write(text)
++    except OSError as exc:
++        raise IOFailure(f"cannot write output '{destination}': {exc}") from exc
++
++
++def main(argv=None):
++    try:
++        run(sys.argv[1:] if argv is None else argv)
++    except MTLError as err:
++        return _report(err)
++    except RecursionError:
++        return _report(RuntimeFailure("expression nesting too deep"))
++    except (ArithmeticError, ValueError) as exc:
++        return _report(RuntimeFailure(str(exc) or type(exc).__name__))
++    return 0
++
++
++def _report(err):
++    sys.stderr.write(err.diagnostic() + "\n")
++    return err.exit_code
+
+### mtl_engine/csv_loader.py (created)
+--- mtl_engine/csv_loader.py
++++ mtl_engine/csv_loader.py
+@@ -0,0 +1,142 @@
++"""Loads the events CSV into typed rows plus a column-type schema."""
++import csv
++import io
++import re
++import sys
++
++from . import dtypes
++from .errors import IOFailure, TypeCheckError
++
++REQUIRED_COLUMNS = {
++    "timestamp": dtypes.TIMESTAMP,
++    "location": dtypes.STRING,
++    "item": dtypes.STRING,
++    "price": dtypes.FLOAT,
++    "quantity": dtypes.FLOAT,
++    "unit": dtypes.STRING,
++    "category": dtypes.STRING,
++}
++
++_INT_RE = re.compile(r"^[+-]?\d+$")
++_FLOAT_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
++_BOOLS = {"true": True, "false": False}
++
++
++class Table:
++    """Typed CSV contents: a schema (column -> type) and rows (list of dicts)."""
++
++    def __init__(self, schema, rows):
++        self.schema = schema
++        self.rows = rows
++
++
++def read_text(path):
++    """Read a whole text file ('-' means STDIN), mapping failures to bad_io."""
++    try:
++        if path == "-":
++            return sys.stdin.read()
++        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
++            return fh.read()
++    except (OSError, UnicodeDecodeError) as exc:
++        raise IOFailure(f"cannot read '{path}': {exc}") from exc
++
++
++def load_csv(path, ts_parser):
++    text = read_text(path)
++    if text.startswith("﻿"):
++        text = text[1:]
++    try:
++        records = [r for r in csv.reader(io.StringIO(text, newline=""), strict=True) if r]
++    except csv.Error as exc:
++        raise IOFailure(f"malformed CSV '{path}': {exc}") from exc
++    if not records:
++        raise IOFailure(f"CSV '{path}' has no header row")
++
++    header = [h.strip() for h in records[0]]
++    _validate_header(header, path)
++    body = records[1:]
++    for lineno, record in enumerate(body, start=2):
++        if len(record) != len(header):
++            raise IOFailure(
++                f"CSV '{path}' record {lineno} has {len(record)} fields, expected {len(header)}"
++            )
++
++    schema = {}
++    for idx, name in enumerate(header):
++        if name in REQUIRED_COLUMNS:
++            schema[name] = REQUIRED_COLUMNS[name]
++        else:
++            schema[name] = _infer_type(r[idx] for r in body)
++
++    converters = [_converter(name, schema[name], ts_parser) for name in header]
++    rows = []
++    for lineno, record in enumerate(body, start=2):
++        row = {}
++        for name, convert, raw in zip(header, converters, record):
++            try:
++                row[name] = convert(raw)
++            except ValueError as exc:
++                raise TypeCheckError(
++                    f"CSV record {lineno}: invalid {schema[name]} value {raw!r} "
++                    f"in column '{name}': {exc}"
++                ) from exc
++        rows.append(row)
++    return Table(schema, rows)
++
++
++def _validate_header(header, path):
++    seen = set()
++    for name in header:
++        if not name:
++            raise IOFailure(f"CSV '{path}' has an empty column name")
++        if name in seen:
++            raise IOFailure(f"CSV '{path}' has duplicate column '{name}'")
++        seen.add(name)
++    missing = [c for c in REQUIRED_COLUMNS if c not in seen]
++    if missing:
++        raise IOFailure(f"CSV '{path}' is missing required column(s): {', '.join(missing)}")
++
++
++def _infer_type(values):
++    present = [v.strip() for v in values if v.strip()]
++    if not present:
++        return dtypes.STRING
++    if all(_INT_RE.match(v) for v in present):
++        return dtypes.INT
++    if all(_FLOAT_RE.match(v) for v in present):
++        return dtypes.FLOAT
++    if all(v.lower() in _BOOLS for v in present):
++        return dtypes.BOOL
++    return dtypes.STRING
++
++
++def _converter(name, col_type, ts_parser):
++    if col_type == dtypes.TIMESTAMP:
++        return ts_parser.parse
++    if col_type == dtypes.STRING:
++        return lambda raw: raw
++    if col_type == dtypes.INT:
++        return _nullable(int)
++    if col_type == dtypes.FLOAT:
++        return _nullable(_parse_float)
++    if col_type == dtypes.BOOL:
++        return _nullable(lambda v: _BOOLS[v.lower()])
++    raise AssertionError(f"unhandled column type {col_type} for {name}")
++
++
++def _nullable(parse):
++    def convert(raw):
++        value = raw.strip()
++        if not value:
++            return None
++        return parse(value)
++    return convert
++
++
++def _parse_float(value):
++    if not _FLOAT_RE.match(value):
++        raise ValueError("not a number")
++    result = float(value)
++    if result != result or result in (float("inf"), float("-inf")):
++        raise ValueError("not a finite number")
++    return result
+
+### mtl_engine/dtypes.py (created)
+--- mtl_engine/dtypes.py
++++ mtl_engine/dtypes.py
+@@ -0,0 +1,31 @@
++"""Value types of the MTL type system."""
++
++INT = "int"
++FLOAT = "float"
++STRING = "string"
++BOOL = "bool"
++TIMESTAMP = "timestamp"
++
++NUMERIC = frozenset({INT, FLOAT})
++
++
++def is_numeric(t):
++    return t in NUMERIC
++
++
++def numeric_result(*types):
++    """Result type of an int/float operation (int only if all operands are int)."""
++    return INT if all(t == INT for t in types) else FLOAT
++
++
++def comparable(a, b, op):
++    """Whether values of types a and b may be compared with operator op."""
++    if is_numeric(a) and is_numeric(b):
++        return True
++    if a != b:
++        return False
++    if a in (STRING, TIMESTAMP):
++        return True
++    if a == BOOL:
++        return op in ("==", "!=")
++    return False
+
+### mtl_engine/errors.py (created)
+--- mtl_engine/errors.py
++++ mtl_engine/errors.py
+@@ -0,0 +1,34 @@
++"""Error hierarchy; each error kind maps to a diagnostic type and exit code."""
++
++
++class MTLError(Exception):
++    kind = "runtime_error"
++    exit_code = 4
++
++    def __init__(self, message):
++        super().__init__(message)
++        self.message = message
++
++    def diagnostic(self):
++        msg = " ".join(str(self.message).split())
++        return f"ERROR:{self.kind}:{msg}"
++
++
++class DSLSyntaxError(MTLError):
++    kind = "bad_dsl"
++    exit_code = 1
++
++
++class TypeCheckError(MTLError):
++    kind = "type_error"
++    exit_code = 2
++
++
++class IOFailure(MTLError):
++    kind = "bad_io"
++    exit_code = 3
++
++
++class RuntimeFailure(MTLError):
++    kind = "runtime_error"
++    exit_code = 4
+
+### mtl_engine/evaluator.py (created)
+--- mtl_engine/evaluator.py
++++ mtl_engine/evaluator.py
+@@ -0,0 +1,93 @@
++"""Row-level evaluation of type-checked expressions (nulls propagate SQL-style)."""
++import math
++import operator
++
++from . import dtypes, functions
++from .ast_nodes import Binary, Call, ColumnRef, InExpr, Literal, Unary
++from .errors import RuntimeFailure
++
++_COMPARE = {
++    "<": operator.lt, "<=": operator.le, ">": operator.gt,
++    ">=": operator.ge, "==": operator.eq, "!=": operator.ne,
++}
++
++
++def evaluate(expr, row):
++    if isinstance(expr, Literal):
++        return expr.value
++    if isinstance(expr, ColumnRef):
++        return row[expr.name]
++    if isinstance(expr, Binary):
++        return _eval_binary(expr, row)
++    if isinstance(expr, Unary):
++        value = evaluate(expr.operand, row)
++        if value is None:
++            return None
++        if expr.op == "!":
++            return not value
++        return -value if expr.op == "-" else value
++    if isinstance(expr, InExpr):
++        haystack = evaluate(expr.haystack, row)
++        if haystack is None:
++            return None
++        return evaluate(expr.needle, row) in haystack
++    if isinstance(expr, Call):
++        args = [evaluate(a, row) for a in expr.args]
++        return _check_finite(functions.call(expr.name, args), expr)
++    raise AssertionError(f"unknown expression node {expr!r}")
++
++
++def _eval_binary(expr, row):
++    op = expr.op
++    if op == "&":
++        left = evaluate(expr.left, row)
++        if left is False:
++            return False
++        right = evaluate(expr.right, row)
++        if right is False:
++            return False
++        return None if left is None or right is None else True
++    if op == "|":
++        left = evaluate(expr.left, row)
++        if left is True:
++            return True
++        right = evaluate(expr.right, row)
++        if right is True:
++            return True
++        return None if left is None or right is None else False
++
++    left = evaluate(expr.left, row)
++    right = evaluate(expr.right, row)
++    if left is None or right is None:
++        return None
++    if op in _COMPARE:
++        return _COMPARE[op](left, right)
++    return _check_finite(_arithmetic(op, left, right, expr), expr)
++
++
++def _arithmetic(op, left, right, expr):
++    try:
++        if op == "+":
++            return left + right
++        if op == "-":
++            return left - right
++        if op == "*":
++            return left * right
++        if right == 0:
++            raise RuntimeFailure(f"line {expr.line}: division by zero")
++        if op == "/":
++            return left / right
++        return left % right
++    except OverflowError as exc:
++        raise RuntimeFailure(f"line {expr.line}: numeric overflow") from exc
++
++
++def _check_finite(value, expr):
++    if isinstance(value, float) and not math.isfinite(value):
++        raise RuntimeFailure(f"line {expr.line}: expression produced a non-finite number")
++    if expr.type == dtypes.FLOAT and isinstance(value, int) and not isinstance(value, bool):
++        try:
++            return float(value)
++        except OverflowError as exc:
++            raise RuntimeFailure(f"line {expr.line}: numeric overflow") from exc
++    return value
+
+### mtl_engine/functions.py (created)
+--- mtl_engine/functions.py
++++ mtl_engine/functions.py
+@@ -0,0 +1,78 @@
++"""Scalar transform functions: arity, type signatures and implementations."""
++from decimal import ROUND_HALF_UP, Context, Decimal, InvalidOperation
++
++from . import dtypes
++from .errors import TypeCheckError
++
++# name -> (min_args, max_args)
++ARITY = {
++    "len": (1, 1),
++    "day": (1, 1),
++    "month": (1, 1),
++    "year": (1, 1),
++    "round": (1, 2),
++}
++
++
++def result_type(name, arg_types, line):
++    """Validate argument types for a call; return the result type."""
++    def fail(expected):
++        got = ", ".join(arg_types)
++        raise TypeCheckError(f"line {line}: {name}() expects {expected}, got ({got})")
++
++    if name == "len":
++        if arg_types[0] != dtypes.STRING:
++            fail("a string")
++        return dtypes.INT
++    if name in ("day", "month", "year"):
++        if arg_types[0] != dtypes.TIMESTAMP:
++            fail("a timestamp")
++        return dtypes.INT
++    if name == "round":
++        if not dtypes.is_numeric(arg_types[0]):
++            fail("a number")
++        if len(arg_types) == 2 and arg_types[1] != dtypes.INT:
++            fail("an integer number of digits")
++        return arg_types[0]
++    raise AssertionError(f"unknown function {name}")
++
++
++def call(name, args):
++    """Invoke a transform; null arguments yield null."""
++    if any(a is None for a in args):
++        return None
++    if name == "len":
++        return len(args[0])
++    if name == "day":
++        return args[0].day
++    if name == "month":
++        return args[0].month
++    if name == "year":
++        return args[0].year
++    if name == "round":
++        digits = args[1] if len(args) > 1 else 0
++        return round_half_away(args[0], digits)
++    raise AssertionError(f"unknown function {name}")
++
++
++_DECIMAL_CTX = Context(prec=1000)
++
++
++def round_half_away(value, digits):
++    """Round to `digits` decimal places, ties away from zero."""
++    if isinstance(value, int) and not isinstance(value, bool):
++        if digits >= 0:
++            return value
++        dec = Decimal(value)
++    else:
++        dec = Decimal(repr(value))
++    if digits > 400 or digits < -400:
++        return value if digits > 0 else type(value)(0)
++    quantum = Decimal(1).scaleb(-digits)
++    try:
++        rounded = dec.quantize(quantum, rounding=ROUND_HALF_UP, context=_DECIMAL_CTX)
++    except InvalidOperation:
++        return value
++    if isinstance(value, int):
++        return int(rounded)
++    return float(rounded)
+
+### mtl_engine/lexer.py (created)
+--- mtl_engine/lexer.py
++++ mtl_engine/lexer.py
+@@ -0,0 +1,168 @@
++"""Tokenizer for the MTL DSL, including logical-line joining."""
++import re
++
++from .errors import DSLSyntaxError
++
++# Token kinds
++IDENT = "IDENT"
++NUMBER = "NUMBER"
++STRING = "STRING"
++DURATION = "DURATION"
++OP = "OP"
++NEWLINE = "NEWLINE"
++EOF = "EOF"
++
++_NUMBER_RE = re.compile(r"(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?")
++_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
++_SUFFIX_RE = re.compile(r"[A-Za-z0-9_]+")
++_OPERATORS = ("<=", ">=", "==", "!=", "<", ">", "&", "|", "!",
++              "(", ")", "[", "]", ",", "*", "+", "-", "/", "%")
++DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400}
++
++
++class Token:
++    __slots__ = ("kind", "value", "line", "col")
++
++    def __init__(self, kind, value, line, col):
++        self.kind = kind
++        self.value = value
++        self.line = line
++        self.col = col
++
++    def is_op(self, *ops):
++        return self.kind == OP and self.value in ops
++
++    def is_ident(self, *names):
++        return self.kind == IDENT and self.value in names
++
++    def describe(self):
++        if self.kind == EOF:
++            return "end of input"
++        if self.kind == NEWLINE:
++            return "end of line"
++        if self.kind == STRING:
++            return f"string '{self.value}'"
++        if self.kind == DURATION:
++            return f"duration '{self.value[0]}{self.value[1]}'"
++        return f"'{self.value}'"
++
++    def __repr__(self):
++        return f"Token({self.kind}, {self.value!r}, {self.line}:{self.col})"
++
++
++def tokenize(source):
++    """Turn DSL source into a list of tokens (with NEWLINE separators, ending in EOF)."""
++    tokens = []
++    for lineno, line in enumerate(source.splitlines(), start=1):
++        _tokenize_line(line, lineno, tokens)
++        tokens.append(Token(NEWLINE, "\n", lineno, len(line) + 1))
++    last_line = tokens[-1].line if tokens else 1
++    tokens.append(Token(EOF, None, last_line, 0))
++    return tokens
++
++
++def _tokenize_line(line, lineno, out):
++    pos = 0
++    n = len(line)
++    while pos < n:
++        ch = line[pos]
++        col = pos + 1
++        if ch in " \t\r\f\v":
++            pos += 1
++        elif ch == "#":
++            return
++        elif ch == "'":
++            end = line.find("'", pos + 1)
++            if end < 0:
++                raise DSLSyntaxError(f"line {lineno}:{col}: unterminated string literal")
++            value = line[pos + 1:end]
++            if "\\" in value:
++                raise DSLSyntaxError(
++                    f"line {lineno}:{col}: escape sequences are not allowed in string literals"
++                )
++            out.append(Token(STRING, value, lineno, col))
++            pos = end + 1
++        elif ch.isdigit() or (ch == "." and pos + 1 < n and line[pos + 1].isdigit()):
++            pos = _lex_number(line, pos, lineno, out)
++        elif ch.isalpha() or ch == "_":
++            m = _IDENT_RE.match(line, pos)
++            out.append(Token(IDENT, m.group(0), lineno, col))
++            pos = m.end()
++        else:
++            for op in _OPERATORS:
++                if line.startswith(op, pos):
++                    out.append(Token(OP, op, lineno, col))
++                    pos += len(op)
++                    break
++            else:
++                raise DSLSyntaxError(f"line {lineno}:{col}: unexpected character {ch!r}")
++
++
++def _lex_number(line, pos, lineno, out):
++    col = pos + 1
++    m = _NUMBER_RE.match(line, pos)
++    text = m.group(0)
++    end = m.end()
++    suffix_m = _SUFFIX_RE.match(line, end)
++    if suffix_m:
++        suffix = suffix_m.group(0)
++        if text.isdigit() and suffix in DURATION_UNITS:
++            out.append(Token(DURATION, (int(text), suffix), lineno, col))
++            return suffix_m.end()
++        raise DSLSyntaxError(f"line {lineno}:{col}: invalid literal '{text}{suffix}'")
++    if "." in text or "e" in text or "E" in text:
++        out.append(Token(NUMBER, float(text), lineno, col))
++    else:
++        out.append(Token(NUMBER, int(text), lineno, col))
++    return end
++
++
++def split_statements(tokens):
++    """Group tokens into logical statements, joining continuation lines.
++
++    A NEWLINE does not end a statement when brackets are open, when the
++    previous token is ',' or a lone leading 'aggregate', or when the next
++    token is ','.
++    """
++    statements = []
++    current = []
++    depth = 0
++    for i, tok in enumerate(tokens):
++        if tok.kind == EOF:
++            break
++        if tok.kind == NEWLINE:
++            if not current:
++                continue
++            nxt = _next_significant(tokens, i + 1)
++            continues = (
++                depth > 0
++                or current[-1].is_op(",")
++                or (len(current) == 1 and current[0].is_ident("aggregate"))
++                or (nxt is not None and nxt.is_op(","))
++            )
++            if not continues:
++                statements.append(current)
++                current = []
++            continue
++        if tok.is_op("(", "["):
++            depth += 1
++        elif tok.is_op(")", "]"):
++            depth -= 1
++            if depth < 0:
++                raise DSLSyntaxError(f"line {tok.line}:{tok.col}: unbalanced '{tok.value}'")
++        current.append(tok)
++    if current:
++        if depth > 0:
++            raise DSLSyntaxError(f"line {current[0].line}: unclosed bracket in statement")
++        statements.append(current)
++    return statements
++
++
++def _next_significant(tokens, start):
++    for tok in tokens[start:]:
++        if tok.kind == NEWLINE:
++            continue
++        if tok.kind == EOF:
++            return None
++        return tok
++    return None
+
+### mtl_engine/output.py (created)
+--- mtl_engine/output.py
++++ mtl_engine/output.py
+@@ -0,0 +1,57 @@
++"""Normalization (row ordering, key ordering) and deterministic JSON serialization."""
++import json
++import math
++from datetime import datetime
++
++from .errors import RuntimeFailure
++from .timeutil import format_utc
++
++
++def build_document(program, buckets):
++    """Produce the JSON-ready value according to the normalization rules."""
++    aliases = sorted(item.alias for item in program.aggregate.items)
++    group_cols = program.group_columns
++    windowed = program.window is not None
++
++    if not group_cols and not windowed:
++        values = buckets[0].values
++        return {alias: _json_value(values[alias]) for alias in aliases}
++
++    ordered = sorted(buckets, key=_bucket_sort_key)
++    records = []
++    for bucket in ordered:
++        record = {}
++        if windowed:
++            record["window_start"] = format_utc(bucket.window_start)
++            record["window_end"] = format_utc(bucket.window_end)
++        for col, value in zip(group_cols, bucket.group_key):
++            record[col] = _json_value(value)
++        for alias in aliases:
++            record[alias] = _json_value(bucket.values[alias])
++        records.append(record)
++    return records
++
++
++def _bucket_sort_key(bucket):
++    start = bucket.window_start
++    window_part = (0,) if start is None else (1, start)
++    return (window_part, tuple(_value_sort_key(v) for v in bucket.group_key))
++
++
++def _value_sort_key(value):
++    # Nulls sort first; within a column all non-null values share one kind.
++    if value is None:
++        return (0, 0)
++    return (1, value)
++
++
++def _json_value(value):
++    if isinstance(value, datetime):
++        return format_utc(value)
++    if isinstance(value, float) and not math.isfinite(value):
++        raise RuntimeFailure("result contains a non-finite number")
++    return value
++
++
++def serialize(document):
++    return json.dumps(document, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+
+### mtl_engine/parser.py (created)
+--- mtl_engine/parser.py
++++ mtl_engine/parser.py
+@@ -0,0 +1,288 @@
++"""Recursive-descent parser turning DSL source into a Program."""
++from . import dtypes
++from .ast_nodes import (AggItem, Aggregate, Apply, Binary, Call, ColumnRef, Filter,
++                        GroupBy, InExpr, Literal, Program, Unary, Window)
++from .errors import DSLSyntaxError
++from .functions import ARITY
++from .lexer import DURATION, DURATION_UNITS, EOF, IDENT, NUMBER, STRING, Token
++from .lexer import split_statements, tokenize
++
++AGG_FUNCTIONS = ("average", "median", "sum", "count", "std", "var", "min", "max")
++COMPARISON_OPS = ("<", "<=", ">", ">=", "==", "!=")
++RESERVED = ("true", "false", "in")
++
++
++def parse_program(source):
++    statements = []
++    for stmt_tokens in split_statements(tokenize(source)):
++        statements.append(_StatementParser(stmt_tokens).parse_statement())
++
++    row_ops, group_by, window, aggregate = [], None, None, None
++    for stmt in statements:
++        if isinstance(stmt, (Filter, Apply)):
++            row_ops.append(stmt)
++        elif isinstance(stmt, GroupBy):
++            if group_by is not None:
++                raise DSLSyntaxError(f"line {stmt.line}: group_by may appear at most once")
++            group_by = stmt
++        elif isinstance(stmt, Window):
++            if window is not None:
++                raise DSLSyntaxError(f"line {stmt.line}: window may appear at most once")
++            window = stmt
++        elif isinstance(stmt, Aggregate):
++            if aggregate is not None:
++                raise DSLSyntaxError(f"line {stmt.line}: aggregate must appear exactly once")
++            aggregate = stmt
++    if aggregate is None:
++        raise DSLSyntaxError("missing required aggregate statement")
++
++    _check_output_names(group_by, aggregate, window)
++    return Program(row_ops, group_by, window, aggregate)
++
++
++def _check_output_names(group_by, aggregate, window):
++    reserved = {"window_start", "window_end"} if window else set()
++    taken = set()
++    if group_by:
++        for col in group_by.columns:
++            if col in reserved:
++                raise DSLSyntaxError(f"line {group_by.line}: group_by column '{col}' "
++                                     "clashes with a window output field")
++            taken.add(col)
++    for item in aggregate.items:
++        if item.alias in taken or item.alias in reserved:
++            raise DSLSyntaxError(f"line {item.line}: output name '{item.alias}' is not unique")
++        taken.add(item.alias)
++
++
++class _StatementParser:
++    """Parses the tokens of one logical statement."""
++
++    def __init__(self, tokens):
++        self.tokens = tokens + [Token(EOF, None, tokens[-1].line, 0)]
++        self.pos = 0
++
++    # -- token helpers -------------------------------------------------
++    @property
++    def tok(self):
++        return self.tokens[self.pos]
++
++    def advance(self):
++        tok = self.tokens[self.pos]
++        if tok.kind != EOF:
++            self.pos += 1
++        return tok
++
++    def error(self, message, tok=None):
++        tok = tok or self.tok
++        raise DSLSyntaxError(f"line {tok.line}:{tok.col}: {message}")
++
++    def expect_op(self, op):
++        if not self.tok.is_op(op):
++            self.error(f"expected '{op}' but found {self.tok.describe()}")
++        return self.advance()
++
++    def expect_ident(self, what):
++        tok = self.tok
++        if tok.kind != IDENT or tok.value in RESERVED:
++            self.error(f"expected {what} but found {tok.describe()}")
++        return self.advance().value
++
++    def expect_end(self):
++        if self.tok.kind != EOF:
++            self.error(f"unexpected {self.tok.describe()}")
++
++    # -- statements ----------------------------------------------------
++    def parse_statement(self):
++        head = self.tok
++        if head.kind != IDENT:
++            self.error(f"expected a statement but found {head.describe()}")
++        handler = {
++            "filter": self.parse_filter,
++            "apply": self.parse_apply,
++            "group_by": self.parse_group_by,
++            "window": self.parse_window,
++            "aggregate": self.parse_aggregate,
++        }.get(head.value)
++        if handler is None:
++            self.error(f"unknown statement '{head.value}'")
++        self.advance()
++        stmt = handler(head.line)
++        self.expect_end()
++        return stmt
++
++    def parse_filter(self, line):
++        self.expect_op("(")
++        expr = self.parse_expr()
++        self.expect_op(")")
++        return Filter(expr, line)
++
++    def parse_apply(self, line):
++        self.expect_op("(")
++        expr = self.parse_expr()
++        self.expect_op(",")
++        name = self.expect_ident("a new column name")
++        self.expect_op(")")
++        return Apply(expr, name, line)
++
++    def parse_group_by(self, line):
++        self.expect_op("(")
++        if self.tok.is_op("["):
++            self.advance()
++            columns = [self.expect_ident("a column name")]
++            while self.tok.is_op(","):
++                self.advance()
++                columns.append(self.expect_ident("a column name"))
++            self.expect_op("]")
++        else:
++            columns = [self.expect_ident("a column name")]
++        self.expect_op(")")
++        if len(set(columns)) != len(columns):
++            raise DSLSyntaxError(f"line {line}: duplicate column in group_by")
++        return GroupBy(columns, line)
++
++    def parse_window(self, line):
++        self.expect_op("(")
++        tok = self.tok
++        if tok.kind != DURATION:
++            self.error(f"expected a duration literal like 10m, 1h or 7d but found {tok.describe()}")
++        self.advance()
++        amount, unit = tok.value
++        if amount <= 0:
++            self.error("window duration must be positive", tok)
++        self.expect_op(")")
++        return Window(amount, unit, amount * DURATION_UNITS[unit], line)
++
++    def parse_aggregate(self, line):
++        items = [self.parse_agg_item()]
++        while self.tok.is_op(","):
++            self.advance()
++            items.append(self.parse_agg_item())
++        return Aggregate(items, line)
++
++    def parse_agg_item(self):
++        tok = self.tok
++        if tok.kind != IDENT:
++            self.error(f"expected an aggregate function but found {tok.describe()}")
++        if tok.value not in AGG_FUNCTIONS:
++            self.error(f"unknown aggregate function '{tok.value}'")
++        self.advance()
++        self.expect_op("(")
++        if self.tok.is_op("*"):
++            self.advance()
++            column = None
++        else:
++            column = self.expect_ident("a column name or '*'")
++        self.expect_op(")")
++        if not self.tok.is_ident("as"):
++            self.error(f"expected 'as <alias>' but found {self.tok.describe()}")
++        self.advance()
++        alias = self.expect_ident("an alias")
++        return AggItem(tok.value, column, alias, tok.line)
++
++    # -- expressions ---------------------------------------------------
++    def parse_expr(self):
++        return self.parse_or()
++
++    def parse_or(self):
++        left = self.parse_and()
++        while self.tok.is_op("|"):
++            op = self.advance()
++            left = Binary("|", left, self.parse_and(), op.line)
++        return left
++
++    def parse_and(self):
++        left = self.parse_not()
++        while self.tok.is_op("&"):
++            op = self.advance()
++            left = Binary("&", left, self.parse_not(), op.line)
++        return left
++
++    def parse_not(self):
++        if self.tok.is_op("!"):
++            op = self.advance()
++            return Unary("!", self.parse_not(), op.line)
++        return self.parse_comparison()
++
++    def parse_comparison(self):
++        left = self.parse_additive()
++        tok = self.tok
++        if tok.kind == "OP" and tok.value in COMPARISON_OPS:
++            self.advance()
++            node = Binary(tok.value, left, self.parse_additive(), tok.line)
++        elif tok.is_ident("in"):
++            self.advance()
++            node = InExpr(left, self.parse_additive(), tok.line)
++        else:
++            return left
++        nxt = self.tok
++        if (nxt.kind == "OP" and nxt.value in COMPARISON_OPS) or nxt.is_ident("in"):
++            self.error("comparisons cannot be chained; use parentheses and '&'")
++        return node
++
++    def parse_additive(self):
++        left = self.parse_multiplicative()
++        while self.tok.is_op("+", "-"):
++            op = self.advance()
++            left = Binary(op.value, left, self.parse_multiplicative(), op.line)
++        return left
++
++    def parse_multiplicative(self):
++        left = self.parse_unary()
++        while self.tok.is_op("*", "/", "%"):
++            op = self.advance()
++            left = Binary(op.value, left, self.parse_unary(), op.line)
++        return left
++
++    def parse_unary(self):
++        if self.tok.is_op("-", "+"):
++            op = self.advance()
++            operand = self.parse_unary()
++            if isinstance(operand, Literal) and dtypes.is_numeric(operand.type):
++                value = -operand.value if op.value == "-" else operand.value
++                return Literal(value, operand.type)
++            return Unary(op.value, operand, op.line)
++        return self.parse_primary()
++
++    def parse_primary(self):
++        tok = self.tok
++        if tok.kind == NUMBER:
++            self.advance()
++            return Literal(tok.value, dtypes.FLOAT if isinstance(tok.value, float) else dtypes.INT)
++        if tok.kind == STRING:
++            self.advance()
++            return Literal(tok.value, dtypes.STRING)
++        if tok.is_op("("):
++            self.advance()
++            expr = self.parse_expr()
++            self.expect_op(")")
++            return expr
++        if tok.kind == IDENT:
++            if tok.value in ("true", "false"):
++                self.advance()
++                return Literal(tok.value == "true", dtypes.BOOL)
++            if tok.value == "in":
++                self.error("unexpected 'in'")
++            self.advance()
++            if self.tok.is_op("("):
++                return self.parse_call(tok)
++            return ColumnRef(tok.value, tok.line)
++        self.error(f"expected an expression but found {tok.describe()}")
++
++    def parse_call(self, name_tok):
++        name = name_tok.value
++        if name not in ARITY:
++            self.error(f"unknown function '{name}'", name_tok)
++        self.expect_op("(")
++        args = []
++        if not self.tok.is_op(")"):
++            args.append(self.parse_expr())
++            while self.tok.is_op(","):
++                self.advance()
++                args.append(self.parse_expr())
++        self.expect_op(")")
++        lo, hi = ARITY[name]
++        if not lo <= len(args) <= hi:
++            expected = str(lo) if lo == hi else f"{lo} to {hi}"
++            self.error(f"{name}() takes {expected} argument(s), got {len(args)}", name_tok)
++        return Call(name, args, name_tok.line)
+
+### mtl_engine/pipeline.py (created)
+--- mtl_engine/pipeline.py
++++ mtl_engine/pipeline.py
+@@ -0,0 +1,61 @@
++"""Executes a type-checked Program over typed rows, producing aggregated buckets."""
++from .ast_nodes import Apply, Filter
++from .aggregates import compute
++from .evaluator import evaluate
++from .timeutil import epoch_micros, from_epoch_micros
++
++_MICROS_PER_SECOND = 1_000_000
++
++
++class Bucket:
++    """One output record before formatting: window bounds, group key and aggregate values."""
++
++    def __init__(self, window_start, window_end, group_key, values):
++        self.window_start = window_start
++        self.window_end = window_end
++        self.group_key = group_key
++        self.values = values
++
++
++def run(program, rows):
++    """Return a list of Buckets (unordered)."""
++    rows = apply_row_ops(program.row_ops, rows)
++    group_cols = program.group_columns
++    window = program.window
++
++    if not group_cols and window is None:
++        return [Bucket(None, None, (), _aggregate(program, rows))]
++
++    width = window.seconds * _MICROS_PER_SECOND if window else None
++    buckets = {}
++    for row in rows:
++        start = None
++        if width is not None:
++            start = epoch_micros(row["timestamp"]) // width * width
++        key = (start, tuple(row[c] for c in group_cols))
++        buckets.setdefault(key, []).append(row)
++
++    result = []
++    for (start, group_key), bucket_rows in buckets.items():
++        ws = we = None
++        if start is not None:
++            ws = from_epoch_micros(start)
++            we = from_epoch_micros(start + width)
++        result.append(Bucket(ws, we, group_key, _aggregate(program, bucket_rows)))
++    return result
++
++
++def apply_row_ops(row_ops, rows):
++    """Run filter/apply statements in order; returns new row dicts."""
++    current = [dict(r) for r in rows]
++    for op in row_ops:
++        if isinstance(op, Filter):
++            current = [r for r in current if evaluate(op.predicate, r) is True]
++        elif isinstance(op, Apply):
++            for r in current:
++                r[op.column] = evaluate(op.expr, r)
++    return current
++
++
++def _aggregate(program, rows):
++    return {item.alias: compute(item, rows) for item in program.aggregate.items}
+
+### mtl_engine/timeutil.py (created)
+--- mtl_engine/timeutil.py
++++ mtl_engine/timeutil.py
+@@ -0,0 +1,60 @@
++"""Timestamp parsing, timezone handling, epoch arithmetic and UTC formatting."""
++from datetime import datetime, timedelta, timezone
++from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
++
++EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
++ONE_MICROSECOND = timedelta(microseconds=1)
++
++
++def resolve_timezone(name):
++    """Return a tzinfo for an IANA name; raise ValueError when unknown."""
++    if name in ("UTC", "Z", "utc"):
++        return timezone.utc
++    try:
++        return ZoneInfo(name)
++    except (ZoneInfoNotFoundError, ValueError, OSError) as exc:
++        raise ValueError(f"unknown timezone '{name}'") from exc
++
++
++class TimestampParser:
++    """Parses raw timestamp strings into timezone-aware UTC datetimes."""
++
++    def __init__(self, default_tz, fmt=None):
++        self.default_tz = default_tz
++        self.fmt = fmt
++
++    def parse(self, text):
++        """Parse text; raise ValueError when it is not a valid timestamp."""
++        raw = text.strip()
++        if not raw:
++            raise ValueError("empty timestamp")
++        if self.fmt is not None:
++            dt = datetime.strptime(raw, self.fmt)
++        else:
++            dt = _parse_iso(raw)
++        if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
++            dt = dt.replace(tzinfo=self.default_tz)
++        return dt.astimezone(timezone.utc)
++
++
++def _parse_iso(raw):
++    candidate = raw
++    if candidate[-1] in "zZ":
++        candidate = candidate[:-1] + "+00:00"
++    return datetime.fromisoformat(candidate)
++
++
++def epoch_micros(dt):
++    return (dt - EPOCH) // ONE_MICROSECOND
++
++
++def from_epoch_micros(micros):
++    return EPOCH + timedelta(microseconds=micros)
++
++
++def format_utc(dt):
++    """ISO 8601 in UTC with a trailing Z."""
++    dt = dt.astimezone(timezone.utc)
++    if dt.microsecond:
++        return dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
++    return dt.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+
+### mtl_engine/typecheck.py (created)
+--- mtl_engine/typecheck.py
++++ mtl_engine/typecheck.py
+@@ -0,0 +1,108 @@
++"""Static type checking of a parsed Program against the CSV schema."""
++from . import dtypes, functions
++from .ast_nodes import Apply, Binary, Call, ColumnRef, Filter, InExpr, Literal, Unary
++from .errors import TypeCheckError
++
++ARITHMETIC_OPS = ("+", "-", "*", "/", "%")
++COMPARISON_OPS = ("<", "<=", ">", ">=", "==", "!=")
++LOGICAL_OPS = ("&", "|")
++
++
++def check_program(program, schema):
++    """Annotate expression types and validate the pipeline; return the final schema."""
++    schema = dict(schema)
++    for op in program.row_ops:
++        if isinstance(op, Filter):
++            t = infer(op.predicate, schema)
++            if t != dtypes.BOOL:
++                raise TypeCheckError(f"line {op.line}: filter predicate must be boolean, got {t}")
++        elif isinstance(op, Apply):
++            schema[op.column] = infer(op.expr, schema)
++
++    for col in program.group_columns:
++        if col not in schema:
++            raise TypeCheckError(f"line {program.group_by.line}: unknown group_by column '{col}'")
++
++    if program.window is not None:
++        ts_type = schema.get("timestamp")
++        if ts_type != dtypes.TIMESTAMP:
++            raise TypeCheckError(f"line {program.window.line}: window requires a 'timestamp' "
++                                 f"column of type timestamp, got {ts_type}")
++
++    for item in program.aggregate.items:
++        if item.column is None:
++            if item.func != "count":
++                raise TypeCheckError(f"line {item.line}: {item.func}(*) is not allowed; "
++                                     "only count(*) may use '*'")
++            continue
++        if item.column not in schema:
++            raise TypeCheckError(f"line {item.line}: unknown column '{item.column}' in {item.func}()")
++        col_type = schema[item.column]
++        if not dtypes.is_numeric(col_type):
++            raise TypeCheckError(f"line {item.line}: {item.func}({item.column}) requires a numeric "
++                                 f"column, got {col_type}")
++    return schema
++
++
++def infer(expr, schema):
++    expr.type = _infer(expr, schema)
++    return expr.type
++
++
++def _infer(expr, schema):
++    if isinstance(expr, Literal):
++        return expr.type
++    if isinstance(expr, ColumnRef):
++        if expr.name not in schema:
++            raise TypeCheckError(f"line {expr.line}: unknown column '{expr.name}'")
++        return schema[expr.name]
++    if isinstance(expr, Unary):
++        t = infer(expr.operand, schema)
++        if expr.op == "!":
++            if t != dtypes.BOOL:
++                raise TypeCheckError(f"line {expr.line}: '!' requires a boolean operand, got {t}")
++            return dtypes.BOOL
++        if not dtypes.is_numeric(t):
++            raise TypeCheckError(f"line {expr.line}: unary '{expr.op}' requires a number, got {t}")
++        return t
++    if isinstance(expr, Binary):
++        return _infer_binary(expr, schema)
++    if isinstance(expr, InExpr):
++        return _infer_in(expr, schema)
++    if isinstance(expr, Call):
++        arg_types = [infer(a, schema) for a in expr.args]
++        return functions.result_type(expr.name, arg_types, expr.line)
++    raise AssertionError(f"unknown expression node {expr!r}")
++
++
++def _infer_binary(expr, schema):
++    lt = infer(expr.left, schema)
++    rt = infer(expr.right, schema)
++    op = expr.op
++    if op in LOGICAL_OPS:
++        if lt != dtypes.BOOL or rt != dtypes.BOOL:
++            raise TypeCheckError(f"line {expr.line}: '{op}' requires boolean operands, "
++                                 f"got {lt} and {rt}")
++        return dtypes.BOOL
++    if op in COMPARISON_OPS:
++        if not dtypes.comparable(lt, rt, op):
++            raise TypeCheckError(f"line {expr.line}: cannot compare {lt} with {rt} using '{op}'")
++        return dtypes.BOOL
++    if op in ARITHMETIC_OPS:
++        if not (dtypes.is_numeric(lt) and dtypes.is_numeric(rt)):
++            raise TypeCheckError(f"line {expr.line}: '{op}' requires numeric operands, "
++                                 f"got {lt} and {rt}")
++        if op == "/":
++            return dtypes.FLOAT
++        return dtypes.numeric_result(lt, rt)
++    raise AssertionError(f"unknown operator {op}")
++
++
++def _infer_in(expr, schema):
++    nt = infer(expr.needle, schema)
++    ht = infer(expr.haystack, schema)
++    if not (isinstance(expr.needle, Literal) and nt == dtypes.STRING):
++        raise TypeCheckError(f"line {expr.line}: left side of 'in' must be a string literal")
++    if not (isinstance(expr.haystack, ColumnRef) and ht == dtypes.STRING):
++        raise TypeCheckError(f"line {expr.line}: right side of 'in' must be a string column")
++    return dtypes.BOOL
+
+### requirements.txt (created)
+--- requirements.txt
++++ requirements.txt
+@@ -0,0 +1 @@
++tzdata>=2024.1
+

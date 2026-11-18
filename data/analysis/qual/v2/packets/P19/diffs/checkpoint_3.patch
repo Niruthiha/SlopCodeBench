@@ -1,0 +1,1148 @@
+### mtl_engine/aggregates.py (modified)
+--- mtl_engine/aggregates.py
++++ mtl_engine/aggregates.py
+@@ -5,11 +5,14 @@
+ 
+ 
+ def _sum(values):
+-    return sum(values)
++    # fsum is exactly rounded, so float totals do not depend on row order.
++    if all(isinstance(v, int) for v in values):
++        return sum(values)
++    return math.fsum(values)
+ 
+ 
+ def _average(values):
+-    return sum(values) / len(values)
++    return _sum(values) / len(values)
+ 
+ 
+ def _median(values):
+@@ -22,8 +25,8 @@
+ 
+ 
+ def _var(values):
+-    mean = sum(values) / len(values)
+-    return sum((v - mean) * (v - mean) for v in values) / len(values)
++    mean = _average(values)
++    return math.fsum((v - mean) * (v - mean) for v in values) / len(values)
+ 
+ 
+ def _std(values):
+
+### mtl_engine/badrecords.py (created)
+--- mtl_engine/badrecords.py
++++ mtl_engine/badrecords.py
+@@ -0,0 +1,104 @@
++"""Rejected-row bookkeeping: classification, strict-mode termination and JSONL output."""
++import json
++
++from .errors import IOFailure, RuntimeFailure, TypeCheckError
++
++PARSE_TYPE_MISMATCH = "PARSE_TYPE_MISMATCH"
++TIMESTAMP_PARSE_ERROR = "TIMESTAMP_PARSE_ERROR"
++RUNTIME_ERROR = "RUNTIME_ERROR"
++TYPE_ERROR = "TYPE_ERROR"
++MISSING_REQUIRED_FIELD = "MISSING_REQUIRED_FIELD"
++PARQUET_TYPE_MISMATCH = "PARQUET_TYPE_MISMATCH"
++
++
++class Origin:
++    """Where a row came from: file path, 1-based line (text files) or row index (Parquet)."""
++
++    def __init__(self, path, line=None, row_index=None):
++        self.path = path
++        self.line = line
++        self.row_index = row_index
++
++    def describe(self):
++        if self.line is not None:
++            return f"{self.path}:{self.line}"
++        return f"{self.path} row {self.row_index}"
++
++    def sort_key(self):
++        return (self.path, self.line if self.line is not None else -1,
++                self.row_index if self.row_index is not None else -1)
++
++
++class BadRecord:
++    def __init__(self, origin, error_type, message, context=None, error_class=None):
++        self.origin = origin
++        self.error_type = error_type
++        self.message = message
++        self.context = context or {}
++        # The MTLError subclass raised for this record in strict mode.
++        self.error_class = error_class or _DEFAULT_ERRORS[error_type]
++
++    def to_json(self):
++        return {
++            "file": self.origin.path,
++            "line": self.origin.line,
++            "row_index": self.origin.row_index,
++            "error_type": self.error_type,
++            "error": self.error_type,
++            "message": self.message,
++            "context": self.context,
++        }
++
++
++_DEFAULT_ERRORS = {
++    PARSE_TYPE_MISMATCH: TypeCheckError,
++    TIMESTAMP_PARSE_ERROR: TypeCheckError,
++    TYPE_ERROR: TypeCheckError,
++    MISSING_REQUIRED_FIELD: TypeCheckError,
++    PARQUET_TYPE_MISMATCH: TypeCheckError,
++    RUNTIME_ERROR: RuntimeFailure,
++}
++
++
++class BadRecordSink:
++    """Collects rejected rows; in strict mode the first one aborts the run."""
++
++    def __init__(self, strict):
++        self.strict = strict
++        self.records = []
++
++    def reject(self, record):
++        self.records.append(record)
++        if self.strict:
++            raise record.error_class(f"{record.origin.describe()}: {record.error_type}: "
++                                     f"{record.message}")
++
++    def write(self, path):
++        """Write the rejected rows as JSON Lines, sorted by file then line; no rows, no file."""
++        if not path or not self.records:
++            return
++        ordered = sorted(self.records, key=lambda r: r.origin.sort_key())
++        lines = [json.dumps(_sanitize(r.to_json()), ensure_ascii=False, allow_nan=False)
++                 for r in ordered]
++        try:
++            with open(path, "w", encoding="utf-8", newline="\n") as fh:
++                fh.write("\n".join(lines) + "\n")
++        except OSError as exc:
++            raise IOFailure(f"cannot write bad records '{path}': {exc}") from exc
++
++
++def _sanitize(value):
++    """Make a value JSON-safe: undecodable bytes become U+FFFD, non-JSON types become text."""
++    if isinstance(value, dict):
++        return {str(k): _sanitize(v) for k, v in value.items()}
++    if isinstance(value, (list, tuple)):
++        return [_sanitize(v) for v in value]
++    if isinstance(value, str):
++        return value.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
++    if isinstance(value, float) and value != value:
++        return "NaN"
++    if isinstance(value, float) and value in (float("inf"), float("-inf")):
++        return "Infinity" if value > 0 else "-Infinity"
++    if value is None or isinstance(value, (bool, int, float)):
++        return value
++    return str(value)
+
+### mtl_engine/cli.py (modified)
+--- mtl_engine/cli.py
++++ mtl_engine/cli.py
+@@ -2,7 +2,8 @@
+ import argparse
+ import sys
+ 
+-from . import casts, csv_loader, output, params, pipeline
++from . import casts, inputs, loader, output, params, pipeline
++from .badrecords import BadRecordSink
+ from .errors import IOFailure, MTLError, RuntimeFailure
+ from .parser import parse_program
+ from .schema import resolve_all
+@@ -18,26 +19,40 @@
+ def build_arg_parser():
+     parser = _ArgumentParser(
+         prog="mtl.py",
+-        description="Run an MTL pipeline over a CSV of sales events and emit JSON.",
++        description="Run an MTL pipeline over sales event files and emit JSON.",
+     )
+-    parser.add_argument("--csv", required=True, help="path to the input CSV file")
++    parser.add_argument("--input", action="append", nargs="+", default=[], metavar="PATH",
++                        help="input file, directory or glob (repeatable)")
++    parser.add_argument("--csv", action="append", nargs="+", default=[], help=argparse.SUPPRESS)
+     parser.add_argument("--dsl", required=True, help="path to the DSL file, or '-' for STDIN")
+     parser.add_argument("--out", default=None, help="output file (default: STDOUT)")
+     parser.add_argument("--tz", default="UTC", help="IANA timezone for naive timestamps")
+     parser.add_argument("--timestamp-format", dest="timestamp_format", default=None,
+-                        help="strptime format for timestamps (default: ISO 8601)")
++                        help="strptime format for CSV/TSV timestamps (default: ISO 8601)")
+     parser.add_argument("--strict", action="store_true",
+-                        help="reject --param values the pipeline does not declare")
++                        help="abort on the first bad record and reject undeclared --param values")
+     parser.add_argument("--param", action="append", nargs="+", default=[], metavar="KEY=VALUE",
+                         help="pipeline parameter value (repeatable; last one wins)")
++    parser.add_argument("--recursive", action="store_true",
++                        help="traverse subdirectories of directory inputs")
++    parser.add_argument("--format", default=inputs.AUTO, type=str.lower,
++                        choices=inputs.FORMATS,
++                        help="format for files whose extension does not tell (default: auto)")
++    parser.add_argument("--nulls", default=None,
++                        help="comma-separated null markers (default: empty, null, NULL, NaN)")
++    parser.add_argument("--bad-records-out", dest="bad_records_out", default=None,
++                        help="write rejected rows as JSON Lines to this file")
+     return parser
+ 
+ 
+ def run(argv):
+     """Execute the CLI stages and write the JSON result."""
+     args = build_arg_parser().parse_args(argv)
+-    if args.csv == "-" and args.dsl == "-":
+-        raise IOFailure("--csv and --dsl cannot both read from STDIN")
++    patterns = [p for group in args.input + args.csv for p in group]
++    if not patterns:
++        raise IOFailure("invalid arguments: --input is required")
++    if args.dsl == "-" and inputs.STDIN in patterns:
++        raise IOFailure("--input and --dsl cannot both read from STDIN")
+     try:
+         tz = resolve_timezone(args.tz)
+     except ValueError as exc:
+@@ -46,24 +61,32 @@
+     ts_parser = TimestampParser(tz, args.timestamp_format)
+     casts.set_timestamp_parser(ts_parser)
+     cli_params = params.parse_cli_params(item for group in args.param for item in group)
++    ctx = loader.LoadContext(ts_parser, loader.parse_null_markers(args.nulls), args.strict)
++    sink = BadRecordSink(args.strict)
+ 
+-    program = parse_program(csv_loader.read_text(args.dsl))
+-    if program.schema_name is None:
+-        # Bare statements: the CSV header is the typing environment.
+-        table = csv_loader.load_csv(args.csv, ts_parser)
+-        row_schema = check_program(program, table.schema)
+-        buckets = pipeline.run(program, table.rows, row_schema=row_schema)
+-    else:
+-        params.check_provided(program.params, cli_params, args.strict)
+-        schemas = resolve_all(program.schemas)
+-        param_values = params.resolve(program.params, cli_params, ts_parser)
+-        for resolved in schemas.values():
+-            check_schema_calcs(resolved, param_values)
+-        used = schemas[program.schema_name]
+-        row_schema = check_program(program, used.types, param_values)
+-        table = csv_loader.load_csv(args.csv, ts_parser, used.physical)
+-        buckets = pipeline.run(program, table.rows, used.calc_order, row_schema)
+-    text = output.serialize(output.build_document(program, buckets))
++    program = parse_program(loader.read_text(args.dsl))
++    try:
++        if program.schema_name is None:
++            # Bare statements: the input columns are the typing environment.
++            sources = loader.open_sources(inputs.resolve(patterns, args.recursive, args.format))
++            fields, lenient = loader.infer_fields(sources, ctx)
++            row_schema = check_program(program, fields)
++            records = loader.iter_rows(sources, fields, ctx, sink, lenient)
++            buckets = pipeline.run(program, records, row_schema=row_schema, sink=sink)
++        else:
++            params.check_provided(program.params, cli_params, args.strict)
++            schemas = resolve_all(program.schemas)
++            param_values = params.resolve(program.params, cli_params, ts_parser)
++            for resolved in schemas.values():
++                check_schema_calcs(resolved, param_values)
++            used = schemas[program.schema_name]
++            row_schema = check_program(program, used.types, param_values)
++            sources = loader.open_sources(inputs.resolve(patterns, args.recursive, args.format))
++            records = loader.iter_rows(sources, used.physical, ctx, sink)
++            buckets = pipeline.run(program, records, used.calc_order, row_schema, sink)
++        text = output.serialize(output.build_document(program, buckets))
++    finally:
++        sink.write(args.bad_records_out)
+     _write(text, args.out)
+ 
+ 
+
+### mtl_engine/csv_loader.py (deleted)
+--- mtl_engine/csv_loader.py
++++ mtl_engine/csv_loader.py
+@@ -1,131 +0,0 @@
+-"""Loads the events CSV into typed rows plus a column-type schema."""
+-import csv
+-import io
+-import sys
+-
+-from . import dtypes
+-from .errors import IOFailure, TypeCheckError
+-
+-REQUIRED_COLUMNS = {
+-    "timestamp": dtypes.TIMESTAMP,
+-    "location": dtypes.STRING,
+-    "item": dtypes.STRING,
+-    "price": dtypes.FLOAT,
+-    "quantity": dtypes.FLOAT,
+-    "unit": dtypes.STRING,
+-    "category": dtypes.STRING,
+-}
+-
+-
+-class Table:
+-    """Typed CSV contents: a schema (column -> type) and rows (list of dicts)."""
+-
+-    def __init__(self, schema, rows):
+-        self.schema = schema
+-        self.rows = rows
+-
+-
+-def read_text(path):
+-    """Read a whole text file ('-' means STDIN), mapping failures to bad_io."""
+-    try:
+-        if path == "-":
+-            return sys.stdin.read()
+-        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
+-            return fh.read()
+-    except (OSError, UnicodeDecodeError) as exc:
+-        raise IOFailure(f"cannot read '{path}': {exc}") from exc
+-
+-
+-def load_csv(path, ts_parser, columns=None):
+-    """Load the CSV into typed rows.
+-
+-    Without `columns` the Part 1 columns are required and extra columns get
+-    inferred types. With `columns` (a schema's physical fields: name -> type)
+-    exactly those are required and loaded with their declared types.
+-    """
+-    required = REQUIRED_COLUMNS if columns is None else columns
+-    text = read_text(path)
+-    if text.startswith("﻿"):
+-        text = text[1:]
+-    try:
+-        records = [r for r in csv.reader(io.StringIO(text, newline=""), strict=True) if r]
+-    except csv.Error as exc:
+-        raise IOFailure(f"malformed CSV '{path}': {exc}") from exc
+-    if not records:
+-        raise IOFailure(f"CSV '{path}' has no header row")
+-
+-    header = [h.strip() for h in records[0]]
+-    _validate_header(header, path, required)
+-    body = records[1:]
+-    for lineno, record in enumerate(body, start=2):
+-        if len(record) != len(header):
+-            raise IOFailure(
+-                f"CSV '{path}' record {lineno} has {len(record)} fields, expected {len(header)}"
+-            )
+-
+-    schema = {}
+-    for idx, name in enumerate(header):
+-        if name in required:
+-            schema[name] = required[name]
+-        elif columns is None:
+-            schema[name] = _infer_type(r[idx] for r in body)
+-
+-    loaded = [(idx, name, _converter(name, schema[name], ts_parser))
+-              for idx, name in enumerate(header) if name in schema]
+-    rows = []
+-    for lineno, record in enumerate(body, start=2):
+-        row = {}
+-        for idx, name, convert in loaded:
+-            raw = record[idx]
+-            try:
+-                row[name] = convert(raw)
+-            except ValueError as exc:
+-                raise TypeCheckError(
+-                    f"CSV record {lineno}: invalid {schema[name]} value {raw!r} "
+-                    f"in column '{name}': {exc}"
+-                ) from exc
+-        rows.append(row)
+-    return Table(schema, rows)
+-
+-
+-def _validate_header(header, path, required):
+-    seen = set()
+-    for name in header:
+-        if not name:
+-            raise IOFailure(f"CSV '{path}' has an empty column name")
+-        if name in seen:
+-            raise IOFailure(f"CSV '{path}' has duplicate column '{name}'")
+-        seen.add(name)
+-    missing = [c for c in required if c not in seen]
+-    if missing:
+-        raise IOFailure(f"CSV '{path}' is missing required column(s): {', '.join(missing)}")
+-
+-
+-def _infer_type(values):
+-    present = [v.strip() for v in values if v.strip()]
+-    if not present:
+-        return dtypes.STRING
+-    for t in (dtypes.INT, dtypes.FLOAT, dtypes.BOOL):
+-        if all(dtypes.looks_like(v, t) for v in present):
+-            return t
+-    return dtypes.STRING
+-
+-
+-def _converter(name, col_type, ts_parser):
+-    if col_type == dtypes.TIMESTAMP:
+-        # The event time itself is mandatory; other timestamp columns may be empty.
+-        return ts_parser.parse if name == "timestamp" else _nullable(ts_parser.parse)
+-    if col_type == dtypes.STRING:
+-        return lambda raw: raw
+-    if col_type in (dtypes.INT, dtypes.FLOAT, dtypes.BOOL):
+-        return _nullable(lambda v: dtypes.parse_text(v, col_type))
+-    raise AssertionError(f"unhandled column type {col_type} for {name}")
+-
+-
+-def _nullable(parse):
+-    def convert(raw):
+-        value = raw.strip()
+-        if not value:
+-            return None
+-        return parse(value)
+-    return convert
+
+### mtl_engine/inputs.py (created)
+--- mtl_engine/inputs.py
++++ mtl_engine/inputs.py
+@@ -0,0 +1,108 @@
++"""Resolution of --input arguments (files, directories, globs) into an ordered file set."""
++import glob
++import os
++
++from .errors import IOFailure
++
++CSV = "csv"
++TSV = "tsv"
++PARQUET = "parquet"
++AUTO = "auto"
++FORMATS = (CSV, TSV, PARQUET, AUTO)
++
++STDIN = "-"
++
++_EXTENSIONS = (
++    (".csv.gz", CSV), (".tsv.gz", TSV),
++    (".csv", CSV), (".tsv", TSV), (".parquet", PARQUET),
++)
++
++
++class InputFile:
++    """One file of the input set; `format` is None when it must be sniffed from content."""
++
++    def __init__(self, path, file_format):
++        self.path = path
++        self.format = file_format
++
++
++def format_from_name(name):
++    """The format implied by a file name's extension (case-insensitive), or None."""
++    lower = name.lower()
++    for ext, fmt in _EXTENSIONS:
++        if lower.endswith(ext):
++            return fmt
++    return None
++
++
++def _has_extension(name):
++    stem = name[:-3] if name.lower().endswith(".gz") else name
++    return "." in stem.lstrip(".")
++
++
++def resolve(patterns, recursive=False, forced=AUTO):
++    """Return the union of files matched by all patterns, sorted by path.
++
++    Explicit file paths are always used. Directory entries and glob matches
++    are used when their extension is a supported one, or when they have no
++    extension (their format is then forced by --format or sniffed).
++    """
++    forced = None if forced == AUTO else forced
++    found = {}
++
++    def add(path):
++        display = os.path.normpath(path)
++        key = os.path.realpath(path)
++        if key not in found or display < found[key].path:
++            fmt = format_from_name(os.path.basename(path)) or forced
++            found[key] = InputFile(display, fmt)
++
++    def add_candidate(path):
++        name = os.path.basename(path)
++        if name.startswith("."):
++            return
++        if format_from_name(name) is not None or not _has_extension(name):
++            add(path)
++
++    def add_directory(path):
++        for entry in _scan(path, recursive):
++            add_candidate(entry)
++
++    stdin = None
++    for pattern in patterns:
++        if pattern == STDIN:
++            stdin = InputFile(STDIN, forced or CSV)
++        elif os.path.isdir(pattern):
++            add_directory(pattern)
++        elif os.path.exists(pattern):
++            add(pattern)
++        elif glob.has_magic(pattern):
++            for match in sorted(glob.glob(pattern, recursive=recursive)):
++                if os.path.isdir(match):
++                    add_directory(match)
++                elif os.path.isfile(match):
++                    add_candidate(match)
++        else:
++            raise IOFailure(f"input '{pattern}' does not exist")
++
++    files = sorted(found.values(), key=lambda f: f.path)
++    if stdin is not None:
++        files.insert(0, stdin)
++    if not files:
++        raise IOFailure("no input files matched: " + ", ".join(patterns))
++    return files
++
++
++def _scan(directory, recursive):
++    try:
++        if not recursive:
++            names = sorted(os.listdir(directory))
++            return [os.path.join(directory, n) for n in names
++                    if os.path.isfile(os.path.join(directory, n))]
++        result = []
++        for root, dirs, names in os.walk(directory):
++            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
++            result.extend(os.path.join(root, n) for n in sorted(names))
++        return [p for p in result if os.path.isfile(p)]
++    except OSError as exc:
++        raise IOFailure(f"cannot list directory '{directory}': {exc}") from exc
+
+### mtl_engine/loader.py (created)
+--- mtl_engine/loader.py
++++ mtl_engine/loader.py
+@@ -0,0 +1,512 @@
++"""Reads the input files (CSV/TSV, optionally gzipped, and Parquet) into typed rows.
++
++Every value is checked against its expected type; rows that cannot be loaded
++are handed to a BadRecordSink (which aborts the run in strict mode) instead
++of being yielded.
++"""
++import csv
++import gzip
++import io
++import sys
++import zlib
++from datetime import datetime, time, timedelta, timezone
++
++from . import badrecords as br
++from . import dtypes, inputs
++from .badrecords import BadRecord, Origin
++from .errors import IOFailure, TypeCheckError
++from .timeutil import EPOCH
++
++REQUIRED_COLUMNS = {
++    "timestamp": dtypes.TIMESTAMP,
++    "location": dtypes.STRING,
++    "item": dtypes.STRING,
++    "price": dtypes.FLOAT,
++    "quantity": dtypes.FLOAT,
++    "unit": dtypes.STRING,
++    "category": dtypes.STRING,
++}
++
++# The event-time column: a row without a value for it is rejected.
++EVENT_TIME = "timestamp"
++
++DEFAULT_NULLS = ("", "null", "NULL", "NaN")
++
++_GZIP_MAGIC = b"\x1f\x8b"
++_PARQUET_MAGIC = b"PAR1"
++_NAIVE_EPOCH = datetime(1970, 1, 1)
++
++
++def parse_null_markers(spec):
++    """--nulls value -> set of markers; the empty field is always null."""
++    if spec is None:
++        return frozenset(DEFAULT_NULLS)
++    return frozenset({m.strip() for m in spec.split(",")} | {""})
++
++
++def read_text(path):
++    """Read a whole text file ('-' means STDIN), mapping failures to bad_io."""
++    try:
++        if path == "-":
++            return sys.stdin.read()
++        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
++            return fh.read()
++    except (OSError, UnicodeDecodeError) as exc:
++        raise IOFailure(f"cannot read '{path}': {exc}") from exc
++
++
++class LoadContext:
++    """Settings shared by all sources: timestamp parsing, null markers, strictness."""
++
++    def __init__(self, ts_parser, null_markers, strict):
++        self.ts_parser = ts_parser
++        self.tz = ts_parser.default_tz
++        self.null_markers = null_markers
++        self.strict = strict
++
++    def is_null_text(self, raw):
++        return raw.strip() in self.null_markers
++
++
++# --------------------------------------------------------------------------- sources
++
++
++class TextSource:
++    """A delimited file: header plus (line, fields) records; fields is None for a record
++    the CSV reader could not parse (its error message is kept instead)."""
++
++    kind = "text"
++
++    def __init__(self, path, header, header_line, records):
++        self.path = path
++        self.header = header
++        self.header_line = header_line
++        self.records = records
++        self.index = {name: idx for idx, name in enumerate(header)}
++
++    @property
++    def columns(self):
++        return self.header
++
++
++class ParquetSource:
++    kind = "parquet"
++
++    def __init__(self, path, table):
++        self.path = path
++        self.table = table
++        self.columns = list(table.column_names)
++        _check_columns(path, self.columns)
++
++
++def open_sources(files):
++    return [open_source(f) for f in files]
++
++
++def open_source(input_file):
++    path = input_file.path
++    data = _read_bytes(path)
++    fmt = input_file.format
++    if fmt == inputs.PARQUET or (fmt is None and data.startswith(_PARQUET_MAGIC)):
++        return _open_parquet(path, data)
++    if data.startswith(_GZIP_MAGIC):
++        try:
++            data = gzip.decompress(data)
++        except (OSError, EOFError, zlib.error) as exc:
++            raise IOFailure(f"cannot decompress '{path}': {exc}") from exc
++    text = data.decode("utf-8", "surrogateescape")
++    if text.startswith("﻿"):
++        text = text[1:]
++    if fmt is None:
++        first = text.split("\n", 1)[0]
++        fmt = inputs.TSV if "\t" in first and "," not in first else inputs.CSV
++    return _parse_delimited(path, text, "\t" if fmt == inputs.TSV else ",")
++
++
++def _read_bytes(path):
++    try:
++        if path == inputs.STDIN:
++            return sys.stdin.buffer.read()
++        with open(path, "rb") as fh:
++            return fh.read()
++    except OSError as exc:
++        raise IOFailure(f"cannot read '{path}': {exc}") from exc
++
++
++def _open_parquet(path, data):
++    try:
++        import pyarrow as pa
++        import pyarrow.parquet as pq
++    except ImportError as exc:  # pragma: no cover - dependency is in requirements.txt
++        raise IOFailure(f"cannot read Parquet '{path}': pyarrow is not installed") from exc
++    try:
++        table = pq.read_table(pa.BufferReader(data))
++    except Exception as exc:  # pyarrow raises a variety of error types for corrupt files
++        raise IOFailure(f"cannot read Parquet '{path}': {exc}") from exc
++    return ParquetSource(path, table)
++
++
++def _parse_delimited(path, text, delimiter):
++    reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, quotechar='"',
++                        doublequote=True, strict=True)
++    header = None
++    header_line = None
++    records = []
++    prev = 0
++    while True:
++        try:
++            record = next(reader)
++            error = None
++        except StopIteration:
++            break
++        except csv.Error as exc:
++            record, error = None, str(exc)
++        start, prev = prev + 1, reader.line_num
++        if record is not None and _is_blank(record):
++            continue
++        if header is None:
++            if record is None:
++                raise IOFailure(f"malformed header in '{path}' line {start}: {error}")
++            header, header_line = [h.strip() for h in record], start
++            continue
++        records.append((start, record, error))
++    if header is None:
++        raise IOFailure(f"'{path}' has no header row")
++    _check_columns(path, header)
++    return TextSource(path, header, header_line, records)
++
++
++def _is_blank(record):
++    return not record or (len(record) == 1 and not record[0].strip())
++
++
++def _check_columns(path, names):
++    seen = set()
++    for name in names:
++        if not name:
++            raise IOFailure(f"'{path}' has an empty column name")
++        if name in seen:
++            raise IOFailure(f"'{path}' has duplicate column '{name}'")
++        seen.add(name)
++
++
++# --------------------------------------------------------------------------- schema
++
++
++def infer_fields(sources, ctx):
++    """Bare-statement typing: the Part 1 columns plus every other column found in any
++    source, typed from its values (int, float, bool, else string).
++
++    Returns (fields, lenient) where lenient names inferred string columns that
++    accept any Parquet type (values are rendered as text).
++    """
++    extras = {}
++    for source in sources:
++        for name in source.columns:
++            if name in REQUIRED_COLUMNS:
++                continue
++            if source.kind == "text":
++                idx = source.index[name]
++                found = _infer_text_type(
++                    fields[idx] for _, fields, _ in source.records
++                    if fields is not None and len(fields) == len(source.header)
++                    and not ctx.is_null_text(fields[idx]))
++            else:
++                found = _ARROW_TO_DSL.get(_arrow_kind(source.table.schema.field(name).type),
++                                          dtypes.STRING)
++            extras[name] = _unify(extras.get(name), found)
++    fields = dict(REQUIRED_COLUMNS)
++    lenient = set()
++    for name in sorted(extras):
++        fields[name] = extras[name] or dtypes.STRING
++        if fields[name] == dtypes.STRING:
++            lenient.add(name)
++    return fields, lenient
++
++
++def _infer_text_type(values):
++    present = [v.strip() for v in values]
++    if not present:
++        return None
++    for t in (dtypes.INT, dtypes.FLOAT, dtypes.BOOL):
++        if all(dtypes.looks_like(v, t) for v in present):
++            return t
++    return dtypes.STRING
++
++
++def _unify(a, b):
++    if a is None or a == b:
++        return b
++    if b is None:
++        return a
++    if dtypes.is_numeric(a) and dtypes.is_numeric(b):
++        return dtypes.FLOAT
++    return dtypes.STRING
++
++
++# --------------------------------------------------------------------------- rows
++
++
++class _Bad(Exception):
++    def __init__(self, error_type, message):
++        super().__init__(message)
++        self.error_type = error_type
++        self.message = message
++
++
++def iter_rows(sources, fields, ctx, sink, lenient=()):
++    """Yield (Origin, row) for every loadable row, in file then line order.
++
++    `fields` maps field name -> DSL type; every row has all of them (absent
++    columns are null). Rejected rows go to `sink`.
++    """
++    required = {EVENT_TIME} if fields.get(EVENT_TIME) == dtypes.TIMESTAMP else set()
++    for source in sources:
++        absent = [name for name in fields if name not in source.columns]
++        if absent and ctx.strict:
++            raise TypeCheckError(f"'{source.path}' is missing column(s): {', '.join(absent)}")
++        if source.kind == "text":
++            yield from _text_rows(source, fields, required, ctx, sink)
++        else:
++            yield from _parquet_rows(source, fields, required, ctx, sink, lenient)
++
++
++def _text_rows(source, fields, required, ctx, sink):
++    width = len(source.header)
++    loaded = [(name, ftype, source.index.get(name)) for name, ftype in fields.items()]
++    for line, record, error in source.records:
++        origin = Origin(source.path, line=line)
++        if record is None:
++            sink.reject(BadRecord(origin, br.PARSE_TYPE_MISMATCH, f"malformed record: {error}",
++                                  {"delimiter": _delimiter_name(source)}, IOFailure))
++            continue
++        if len(record) != width:
++            error_type = br.MISSING_REQUIRED_FIELD if len(record) < width \
++                else br.PARSE_TYPE_MISMATCH
++            sink.reject(BadRecord(origin, error_type,
++                                  f"record has {len(record)} fields, expected {width}",
++                                  {"fields": record, "header": source.header}, IOFailure))
++            continue
++        row = {}
++        for name, ftype, idx in loaded:
++            raw = None if idx is None else record[idx]
++            try:
++                value = None if raw is None else _convert_text(raw, ftype, ctx)
++                if value is None and name in required:
++                    raise _Bad(br.MISSING_REQUIRED_FIELD,
++                               f"required field '{name}' is "
++                               + ("absent" if raw is None else "null"))
++            except _Bad as bad:
++                sink.reject(BadRecord(origin, bad.error_type,
++                                      f"column '{name}': {bad.message}",
++                                      {"column": name, "value": raw, "expected_type": ftype,
++                                       "record": dict(zip(source.header, record))}))
++                break
++            row[name] = value
++        else:
++            yield origin, row
++
++
++def _delimiter_name(source):
++    return "tab" if source.path.lower().endswith((".tsv", ".tsv.gz")) else "comma"
++
++
++def _convert_text(raw, ftype, ctx):
++    text = raw.strip()
++    if text in ctx.null_markers:
++        return None
++    if not raw.isascii() and any("\udc80" <= ch <= "\udcff" for ch in raw):
++        raise _Bad(br.PARSE_TYPE_MISMATCH, "value is not valid UTF-8")
++    if ftype == dtypes.STRING:
++        return raw
++    if ftype == dtypes.TIMESTAMP:
++        try:
++            return ctx.ts_parser.parse(text)
++        except (ValueError, OverflowError) as exc:
++            raise _Bad(br.TIMESTAMP_PARSE_ERROR,
++                       f"invalid timestamp {raw!r}: {exc}") from exc
++    if dtypes.is_numeric(ftype) and text.lower() == "nan":
++        return None
++    try:
++        return dtypes.parse_text(text, ftype)
++    except ValueError as exc:
++        raise _Bad(br.PARSE_TYPE_MISMATCH, f"invalid {ftype} value {raw!r}: {exc}") from exc
++
++
++# Parquet ------------------------------------------------------------------
++
++
++_ARROW_TO_DSL = {
++    "int": dtypes.INT,
++    "float": dtypes.FLOAT,
++    "decimal": dtypes.FLOAT,
++    "bool": dtypes.BOOL,
++    "string": dtypes.STRING,
++    "binary": dtypes.STRING,
++    "timestamp": dtypes.TIMESTAMP,
++    "date": dtypes.TIMESTAMP,
++    "null": None,
++}
++
++# DSL type -> Arrow kinds it accepts.
++_ACCEPTS = {
++    dtypes.INT: ("int",),
++    dtypes.FLOAT: ("float", "int", "decimal"),
++    dtypes.BOOL: ("bool",),
++    dtypes.STRING: ("string", "binary"),
++    dtypes.TIMESTAMP: ("timestamp", "date"),
++}
++
++
++def _arrow_kind(arrow_type):
++    import pyarrow.types as pat
++
++    if pat.is_dictionary(arrow_type):
++        arrow_type = arrow_type.value_type
++    checks = (
++        ("bool", pat.is_boolean), ("int", pat.is_integer), ("float", pat.is_floating),
++        ("decimal", pat.is_decimal), ("timestamp", pat.is_timestamp), ("date", pat.is_date),
++        ("null", pat.is_null),
++        ("string", lambda t: pat.is_string(t) or pat.is_large_string(t)
++         or getattr(pat, "is_string_view", lambda _: False)(t)),
++        ("binary", lambda t: pat.is_binary(t) or pat.is_large_binary(t)
++         or pat.is_fixed_size_binary(t) or getattr(pat, "is_binary_view", lambda _: False)(t)),
++    )
++    for kind, check in checks:
++        if check(arrow_type):
++            return kind
++    return "other"
++
++
++def _parquet_rows(source, fields, required, ctx, sink, lenient):
++    table = source.table
++    columns = {}
++    for name, ftype in fields.items():
++        if name in source.columns:
++            columns[name] = _parquet_column(table.column(name), ftype, ctx, name in lenient)
++    for idx in range(table.num_rows):
++        origin = Origin(source.path, row_index=idx)
++        row = {}
++        for name, ftype in fields.items():
++            values = columns.get(name)
++            value = None if values is None else values[idx]
++            if value is None and name in required:
++                value = _Bad(br.MISSING_REQUIRED_FIELD, f"required field '{name}' is "
++                             + ("absent" if values is None else "null"))
++            if isinstance(value, _Bad):
++                sink.reject(BadRecord(origin, value.error_type,
++                                      f"column '{name}': {value.message}",
++                                      {"column": name, "value": getattr(value, "raw", None),
++                                       "expected_type": ftype,
++                                       "parquet_type": str(table.schema.field(name).type)
++                                       if name in source.columns else None}))
++                break
++            row[name] = value
++        else:
++            yield origin, row
++
++
++def _parquet_column(column, ftype, ctx, lenient):
++    """Convert an Arrow column to Python values of `ftype`; failures become _Bad entries."""
++    import pyarrow.types as pat
++
++    arrow_type = column.type
++    if pat.is_dictionary(arrow_type):
++        column = column.cast(arrow_type.value_type)
++        arrow_type = arrow_type.value_type
++    kind = _arrow_kind(arrow_type)
++    if kind == "null":
++        return [None] * len(column)
++    if kind not in _ACCEPTS[ftype]:
++        if lenient:
++            return [None if v is None else _as_text(v, ctx) for v in _pylist(column, kind, ctx)]
++        return [None if v is None else _mismatch(v, arrow_type, ftype) for v in column.to_pylist()]
++    values = _pylist(column, kind, ctx)
++    if ftype == dtypes.STRING:
++        return [None if isinstance(v, str) and ctx.is_null_text(v) else v for v in values]
++    if ftype == dtypes.TIMESTAMP:
++        return values
++    if ftype == dtypes.FLOAT:
++        return [_float_value(v) for v in values]
++    return values
++
++
++def _pylist(column, kind, ctx):
++    import pyarrow as pa
++
++    if kind == "timestamp":
++        micros = column.cast(pa.int64()).to_pylist()
++        return [None if v is None else _timestamp_value(v, column.type, ctx) for v in micros]
++    values = column.to_pylist()
++    if kind == "binary":
++        return [None if v is None else _decode(v) for v in values]
++    if kind == "date":
++        return [None if v is None else _date_value(v, ctx) for v in values]
++    return values
++
++
++def _mismatch(value, arrow_type, ftype):
++    bad = _Bad(br.PARQUET_TYPE_MISMATCH,
++               f"Parquet type {arrow_type} cannot be read as {ftype} (value {value!r})")
++    bad.raw = value
++    return bad
++
++
++def _as_text(value, ctx):
++    if isinstance(value, _Bad):
++        return value
++    if isinstance(value, bool):
++        return "true" if value else "false"
++    if isinstance(value, datetime):
++        from .timeutil import format_utc
++        return format_utc(value)
++    text = str(value)
++    return None if ctx.is_null_text(text) else text
++
++
++def _decode(raw):
++    try:
++        return bytes(raw).decode("utf-8")
++    except UnicodeDecodeError:
++        bad = _Bad(br.PARQUET_TYPE_MISMATCH, "binary value is not valid UTF-8 text")
++        bad.raw = repr(raw)
++        return bad
++
++
++def _float_value(value):
++    if value is None or isinstance(value, _Bad):
++        return value
++    result = float(value)
++    if result != result:
++        return None  # NaN is a missing value
++    if result in (float("inf"), float("-inf")):
++        bad = _Bad(br.PARSE_TYPE_MISMATCH, f"non-finite float value {result}")
++        bad.raw = repr(result)
++        return bad
++    return result
++
++
++_UNIT_MICROS = {"s": (1_000_000, 1), "ms": (1000, 1), "us": (1, 1), "ns": (1, 1000)}
++
++
++def _timestamp_value(raw, arrow_type, ctx):
++    mul, div = _UNIT_MICROS[arrow_type.unit]
++    micros = raw * mul // div
++    try:
++        if arrow_type.tz is not None:
++            return EPOCH + timedelta(microseconds=micros)
++        wall = _NAIVE_EPOCH + timedelta(microseconds=micros)
++        return wall.replace(tzinfo=ctx.tz).astimezone(timezone.utc)
++    except OverflowError:
++        bad = _Bad(br.TIMESTAMP_PARSE_ERROR, f"timestamp value {raw} is out of range")
++        bad.raw = raw
++        return bad
++
++
++def _date_value(value, ctx):
++    try:
++        return datetime.combine(value, time()).replace(tzinfo=ctx.tz).astimezone(timezone.utc)
++    except OverflowError:
++        bad = _Bad(br.TIMESTAMP_PARSE_ERROR, f"date value {value} is out of range")
++        bad.raw = str(value)
++        return bad
+
+### mtl_engine/pipeline.py (modified)
+--- mtl_engine/pipeline.py
++++ mtl_engine/pipeline.py
+@@ -1,9 +1,12 @@
+ """Executes a type-checked Program over typed rows, producing ordered aggregated buckets."""
+-from . import dtypes
++from datetime import datetime
++
++from . import badrecords, dtypes
+ from .ast_nodes import Apply, Filter
+ from .aggregates import compute
++from .errors import RuntimeFailure, TypeCheckError
+ from .evaluator import evaluate
+-from .timeutil import epoch_micros, from_epoch_micros
++from .timeutil import epoch_micros, format_utc, from_epoch_micros
+ from .typecheck import output_schema
+ 
+ _MICROS_PER_SECOND = 1_000_000
+@@ -21,43 +24,71 @@
+         self.calcs = {}
+ 
+ 
+-def run(program, rows, schema_calcs=(), row_schema=None):
++def run(program, records, schema_calcs=(), row_schema=None, sink=None):
+     """Return the Buckets in normalized order, with post-agg calcs evaluated.
+ 
+-    `schema_calcs` are the using-schema's calculated fields in evaluation
+-    order; `row_schema` is the checked row typing (needed for post-agg calcs).
++    `records` yields (Origin, row) pairs; `schema_calcs` are the using-schema's
++    calculated fields in evaluation order; `row_schema` is the checked row
++    typing (needed for post-agg calcs). Rows whose row-level evaluation fails
++    are handed to `sink` (when given) and skipped.
+     """
+-    rows = materialize_calcs(program, schema_calcs, rows)
+-    rows = apply_row_ops(program.row_ops, rows)
++    rows = prepare_rows(program, schema_calcs, records, sink)
+     buckets = sorted(_bucketize(program, rows), key=bucket_sort_key)
+     if program.post_calcs:
+         _post_aggregate(program, buckets, row_schema or {})
+     return buckets
+ 
+ 
+-def materialize_calcs(program, schema_calcs, rows):
+-    """Add schema-level then pipeline pre-stage calculated fields to copies of the rows."""
++def prepare_rows(program, schema_calcs, records, sink=None):
++    """Materialize calculated fields and run filter/apply statements row by row;
++    returns the rows that survive the filters."""
+     calcs = [(f.name, f.expr, f.type) for f in schema_calcs]
+     calcs += [(c.name, c.expr, c.declared_type) for c in program.pre_calcs]
+     result = []
+-    for row in rows:
+-        row = dict(row)
+-        for name, expr, declared in calcs:
+-            row[name] = coerce(evaluate(expr, row), declared)
+-        result.append(row)
++    for origin, row in records:
++        try:
++            row = _evaluate_row(dict(row), calcs, program.row_ops)
++        except (RuntimeFailure, ArithmeticError, ValueError, RecursionError) as exc:
++            if sink is None:
++                raise
++            _reject(sink, origin, badrecords.RUNTIME_ERROR, exc, RuntimeFailure, row)
++            continue
++        except TypeError as exc:
++            if sink is None:
++                raise
++            _reject(sink, origin, badrecords.TYPE_ERROR, exc, TypeCheckError, row)
++            continue
++        if row is not None:
++            result.append(row)
+     return result
+ 
+ 
+-def apply_row_ops(row_ops, rows):
+-    """Run filter/apply statements in order; returns new row dicts."""
+-    current = [dict(r) for r in rows]
++def _evaluate_row(row, calcs, row_ops):
++    """Return the transformed row, or None when a filter drops it (null counts as false)."""
++    for name, expr, declared in calcs:
++        row[name] = coerce(evaluate(expr, row), declared)
+     for op in row_ops:
+         if isinstance(op, Filter):
+-            current = [r for r in current if evaluate(op.predicate, r) is True]
++            if evaluate(op.predicate, row) is not True:
++                return None
+         elif isinstance(op, Apply):
+-            for r in current:
+-                r[op.column] = evaluate(op.expr, r)
+-    return current
++            row[op.column] = evaluate(op.expr, row)
++    return row
++
++
++def _reject(sink, origin, error_type, exc, error_class, row):
++    message = exc.message if isinstance(exc, RuntimeFailure) else (str(exc) or type(exc).__name__)
++    if isinstance(exc, RecursionError):
++        message = "expression nesting too deep"
++    sink.reject(badrecords.BadRecord(origin, error_type, message,
++                                     {"record": {k: _show(v) for k, v in row.items()}},
++                                     error_class))
++
++
++def _show(value):
++    if isinstance(value, datetime):
++        return format_utc(value)
++    return value
+ 
+ 
+ def coerce(value, declared):
+
+### mtl_engine/typecheck.py (modified)
+--- mtl_engine/typecheck.py
++++ mtl_engine/typecheck.py
+@@ -70,7 +70,7 @@
+         if item.column not in schema:
+             raise TypeCheckError(f"line {item.line}: unknown column '{item.column}' in {item.func}()")
+         col_type = schema[item.column]
+-        if not dtypes.is_numeric(col_type):
++        if item.func != "count" and not dtypes.is_numeric(col_type):
+             raise TypeCheckError(f"line {item.line}: {item.func}({item.column}) requires a numeric "
+                                  f"column, got {col_type}")
+ 
+
+### requirements.txt (modified)
+--- requirements.txt
++++ requirements.txt
+@@ -1 +1,2 @@
+ tzdata>=2024.1
++pyarrow>=14
+

@@ -1,0 +1,977 @@
+#!/usr/bin/env python3
+"""appctl - hierarchical command-line tool entry point."""
+
+import sys
+
+from appctl_cli.app import main
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
+PyYAML>=6.0
+     5 appctl_cli/__init__.py
+   206 appctl_cli/app.py
+    60 appctl_cli/arguments.py
+   104 appctl_cli/command.py
+   235 appctl_cli/config_loader.py
+   467 appctl_cli/container.py
+    15 appctl_cli/context.py
+   236 appctl_cli/database.py
+    39 appctl_cli/errors.py
+   138 appctl_cli/extract.py
+   317 appctl_cli/file_cache.py
+   129 appctl_cli/formatter.py
+   118 appctl_cli/help.py
+    72 appctl_cli/logger.py
+   199 appctl_cli/output.py
+   216 appctl_cli/process.py
+    34 appctl_cli/registry.py
+   134 appctl_cli/remote.py
+    55 appctl_cli/resolver.py
+    44 appctl_cli/rewrites.py
+   111 appctl_cli/runtime_config.py
+    76 appctl_cli/suggest.py
+   103 appctl_cli/synopsis.py
+   118 appctl_cli/validator.py
+    13 appctl_cli/commands/__init__.py
+    83 appctl_cli/commands/_extensions.py
+    62 appctl_cli/commands/_listing.py
+    54 appctl_cli/commands/cache.py
+   162 appctl_cli/commands/cli.py
+   125 appctl_cli/commands/config.py
+    99 appctl_cli/commands/db.py
+    21 appctl_cli/commands/help.py
+   115 appctl_cli/commands/option.py
+    81 appctl_cli/commands/plugin.py
+   102 appctl_cli/commands/post.py
+   165 appctl_cli/commands/site.py
+    65 appctl_cli/commands/theme.py
+   225 appctl_cli/commands/user.py
+     0 tests/__init__.py
+   115 tests/test_cli.py
+   221 tests/test_config.py
+   252 tests/test_container.py
+   111 tests/test_core.py
+   232 tests/test_output.py
+   175 tests/test_process_cache_extract.py
+    29 tests/test_suggest.py
+    46 tests/test_synopsis.py
+  5784 total
+"""Container runtime integration: compose files, containers, volumes and networks."""
+
+import os
+import platform
+import re
+import shlex
+import shutil
+import zlib
+
+import yaml
+
+from . import PROGRAM_NAME
+from .errors import AppctlError
+from .output import Output
+from .process import exec_command, run_command
+
+RUNTIME_BINARY = "docker"
+LEGACY_COMPOSE_BINARY = "docker-compose"
+RUNTIME_MISSING = ("Container runtime is not installed. "
+                   "Please install the container runtime to run AppCtl.")
+
+RUNNING = "running"
+EXITED = "exited"
+
+COMPOSE_EXTENSIONS = (".yml", ".yaml")
+BASE_COMPOSE_FILES = ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml")
+OVERRIDE_COMPOSE_FILES = ("docker-compose.override.yml", "docker-compose.override.yaml",
+                          "compose.override.yml", "compose.override.yaml")
+CUSTOM_COMPOSE_DIR = "user-docker-compose"
+
+VENDOR_LABEL = f"org.label-schema.vendor={PROGRAM_NAME}"
+PROJECT_LABEL_KEY = f"io.{PROGRAM_NAME}.project"
+DEFAULT_RUNTIME_ROOT = "/var/lib/docker"
+
+_FALSE_WORDS = ("", "0", "false", "no", "off", "never", "null", "none")
+
+
+def is_truthy(value):
+    """Config values may be booleans, numbers or strings such as ``"false"``."""
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSE_WORDS
+    return bool(value)
+
+
+def _output(output):
+    return output if output is not None else Output()
+
+
+def is_darwin(platform_name=None):
+    return (platform_name or platform.system()).lower() == "darwin"
+
+
+# -- naming --------------------------------------------------------------------
+
+
+def project_prefix(name):
+    """Deterministic, runtime-safe prefix for every resource of project ``name``.
+
+    Lowercase alphanumerics are kept, everything else is dropped. A name with
+    no usable character gets a stable checksum-based prefix instead.
+    """
+    text = str(name).strip().lower()
+    prefix = re.sub(r"[^a-z0-9]", "", text)
+    if not prefix:
+        prefix = f"{PROGRAM_NAME}{zlib.crc32(text.encode('utf-8')):08x}"
+    return prefix
+
+
+def volume_name(prefix, name):
+    return f"{prefix}_{name}"
+
+
+# -- compose files -------------------------------------------------------------
+
+
+def is_compose_file(path):
+    """A readable ``.yml``/``.yaml`` file whose content is a YAML mapping (or empty)."""
+    if not os.path.isfile(path) or not path.lower().endswith(COMPOSE_EXTENSIONS):
+        return False
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return False
+    return data is None or isinstance(data, dict)
+
+
+def find_base_compose_file(directory, search_parents=False):
+    """The project's base compose file in ``directory`` (optionally searching upward)."""
+    directory = os.path.abspath(directory)
+    while True:
+        for name in BASE_COMPOSE_FILES:
+            candidate = os.path.join(directory, name)
+            if os.path.isfile(candidate):
+                return candidate
+        parent = os.path.dirname(directory)
+        if not search_parents or parent == directory:
+            return None
+        directory = parent
+
+
+def _resolve_custom(path, base_dirs):
+    path = os.path.expanduser(str(path))
+    if os.path.isabs(path):
+        return path if os.path.exists(path) else None
+    for base in base_dirs:
+        if base:
+            candidate = os.path.join(base, path)
+            if os.path.exists(candidate):
+                return os.path.abspath(candidate)
+    return None
+
+
+def discovered_overrides(project_dir):
+    """Optional overrides from the project layout, in a deterministic order.
+
+    The standard override files come first, then the files of the
+    ``user-docker-compose`` directory sorted by name.
+    """
+    found = []
+    for name in OVERRIDE_COMPOSE_FILES:
+        candidate = os.path.join(project_dir, name)
+        if is_compose_file(candidate):
+            found.append(candidate)
+    custom_dir = os.path.join(project_dir, CUSTOM_COMPOSE_DIR)
+    if os.path.isdir(custom_dir):
+        for name in sorted(os.listdir(custom_dir)):
+            candidate = os.path.join(custom_dir, name)
+            if is_compose_file(candidate):
+                found.append(candidate)
+    return found
+
+
+def compose_files(project_dir, custom_compose=None, output=None, base_dirs=None,
+                  search_parents=False):
+    """Ordered compose files for ``project_dir``: the base file, then overrides.
+
+    A non-empty ``custom_compose`` replaces the discovered overrides; when it
+    does not exist a warning is shown and only the base file is used.
+    Relative custom paths are looked up in ``base_dirs`` (default: the
+    current directory, then the project directory).
+    """
+    project_dir = os.path.abspath(project_dir)
+    files = []
+    base = find_base_compose_file(project_dir, search_parents)
+    if base:
+        files.append(base)
+        project_dir = os.path.dirname(base)
+    if custom_compose not in (None, "", False) and str(custom_compose).strip():
+        if base_dirs is None:
+            base_dirs = [os.getcwd(), project_dir]
+        resolved = _resolve_custom(custom_compose, base_dirs)
+        if resolved is None:
+            _output(output).warning(
+                f"File: {custom_compose} does not exist. Falling back to default compose file."
+            )
+        elif is_compose_file(resolved) and resolved not in files:
+            files.append(resolved)
+    else:
+        files.extend(f for f in discovered_overrides(project_dir) if f not in files)
+    return files
+
+
+def _merge(base, override):
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+        for key, value in override.items():
+            merged[key] = _merge(base[key], value) if key in base else value
+        return merged
+    return override
+
+
+def load_compose_config(files):
+    """Merge the compose files in order; later files win."""
+    merged = {}
+    for path in files:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = yaml.safe_load(handle)
+        except OSError as exc:
+            raise AppctlError(f"Unable to read the compose file '{path}': "
+                              f"{exc.strerror or exc}.") from exc
+        except yaml.YAMLError as exc:
+            raise AppctlError(f"Unable to parse the compose file '{path}': {exc}") from exc
+        if data is None:
+            continue
+        if not isinstance(data, dict):
+            raise AppctlError(f"The compose file '{path}' must contain a YAML mapping.")
+        merged = _merge(merged, data)
+    return merged
+
+
+def compose_services(config):
+    services = (config or {}).get("services")
+    if not isinstance(services, dict):
+        return []
+    return [str(name) for name in services]
+
+
+def project_services(project_dir, custom_compose=None, output=None):
+    return compose_services(load_compose_config(
+        compose_files(project_dir, custom_compose, output)))
+
+
+def service_exists(service, project_dir, custom_compose=None, output=None):
+    """Whether ``service`` is defined in the project's compose configuration."""
+    if not project_dir or not os.path.isdir(project_dir):
+        return False
+    return str(service) in project_services(project_dir, custom_compose, output)
+
+
+# -- runtime binaries ------------------------------------------------------------
+
+
+def ensure_runtime_installed():
+    if shutil.which(RUNTIME_BINARY) is None:
+        raise AppctlError(RUNTIME_MISSING)
+
+
+_compose_binary = {}
+
+
+def compose_binary(output=None):
+    """argv prefix of the compose tool (``docker compose`` or ``docker-compose``)."""
+    key = os.environ.get("PATH", "")
+    if key not in _compose_binary:
+        if shutil.which(RUNTIME_BINARY) and exec_command(
+                [RUNTIME_BINARY, "compose", "version"], output):
+            _compose_binary[key] = [RUNTIME_BINARY, "compose"]
+        elif shutil.which(LEGACY_COMPOSE_BINARY):
+            _compose_binary[key] = [LEGACY_COMPOSE_BINARY]
+        else:
+            raise AppctlError(RUNTIME_MISSING)
+    return list(_compose_binary[key])
+
+
+def compose_command(project_dir, runtime=None, output=None, project=None):
+    """Compose argv prefix with every merged compose file and the project name."""
+    runtime = runtime or {}
+    files = compose_files(project_dir, runtime.get("custom-compose"), output)
+    argv = compose_binary(output)
+    for path in files:
+        argv += ["-f", path]
+    if project:
+        argv += ["-p", project_prefix(project)]
+    return argv
+
+
+# -- containers -------------------------------------------------------------------
+
+
+def container_status(container, output=None):
+    """``"running"``, ``"exited"`` or ``None`` when the container does not exist."""
+    ensure_runtime_installed()
+    result = run_command([RUNTIME_BINARY, "inspect", "--type", "container",
+                          "-f", "{{.State.Running}}", str(container)], output)
+    if not result.succeeded:
+        return None
+    return RUNNING if result.stdout.strip().lower() == "true" else EXITED
+
+
+def start_container(container, output=None):
+    return exec_command([RUNTIME_BINARY, "start", str(container)], output)
+
+
+def stop_container(container, output=None):
+    return exec_command([RUNTIME_BINARY, "stop", str(container)], output)
+
+
+def restart_container(container, output=None):
+    return exec_command([RUNTIME_BINARY, "restart", str(container)], output)
+
+
+def create_container(container, command=None, output=None):
+    """Create and start ``container``.
+
+    ``command`` holds the extra ``docker run`` arguments (a string or a list);
+    the container runs detached under the given name.
+    """
+    if isinstance(command, str):
+        command = shlex.split(command)
+    argv = [RUNTIME_BINARY, "run", "-d", "--name", str(container)] + list(command or [])
+    return exec_command(argv, output)
+
+
+def boot_container(container, command=None, output=None):
+    """Ensure ``container`` runs: start it if exited, create it if missing."""
+    status = container_status(container, output)
+    if status == EXITED:
+        return start_container(container, output)
+    if status == RUNNING:
+        return True
+    return create_container(container, command, output)
+
+
+# -- compose services ---------------------------------------------------------------
+
+
+def compose_up(project_dir, services=(), runtime=None, output=None, project=None):
+    """Start the project's services (all, or only ``services``) in detached mode."""
+    argv = compose_command(project_dir, runtime, output, project) + ["up", "-d"]
+    argv += [str(s) for s in services or ()]
+    return exec_command(argv, output, cwd=project_dir)
+
+
+def compose_down(project_dir, runtime=None, output=None, project=None):
+    """Remove every container, network and volume of the compose project."""
+    argv = compose_command(project_dir, runtime, output, project) + [
+        "down", "--volumes", "--remove-orphans"]
+    return exec_command(argv, output, cwd=project_dir)
+
+
+def compose_exec_command(project_dir, service, command, runtime=None, output=None,
+                         user=None, shell="sh", shell_wrapper=True, project=None):
+    """argv running ``command`` inside the running ``service`` container."""
+    runtime = runtime or {}
+    argv = compose_command(project_dir, runtime, output, project) + ["exec"]
+    if is_truthy(runtime.get("skip-tty")):
+        argv.append("-T")
+    if user:
+        argv += ["--user", str(user)]
+    argv.append(str(service))
+    if shell_wrapper:
+        if not isinstance(command, str):
+            command = shlex.join(str(part) for part in command)
+        argv += [shell or "sh", "-c", command]
+    else:
+        argv += shlex.split(command) if isinstance(command, str) else [str(p) for p in command]
+    return argv
+
+
+def compose_exec(project_dir, service, command, runtime=None, output=None, user=None,
+                 shell="sh", shell_wrapper=True, project=None):
+    argv = compose_exec_command(project_dir, service, command, runtime, output, user, shell,
+                                shell_wrapper, project)
+    return run_command(argv, output, cwd=project_dir)
+
+
+# -- volumes ---------------------------------------------------------------------------
+
+
+def volume_exists(name, output=None):
+    return exec_command([RUNTIME_BINARY, "volume", "inspect", str(name)], output)
+
+
+def runtime_root_dir(output=None):
+    result = run_command([RUNTIME_BINARY, "info", "-f", "{{.DockerRootDir}}"], output)
+    root = result.stdout.strip() if result.succeeded else ""
+    return root or DEFAULT_RUNTIME_ROOT
+
+
+def _symlink(target, link):
+    directory = os.path.dirname(link)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    if os.path.islink(link):
+        if os.readlink(link) == target:
+            return
+        os.unlink(link)
+    elif os.path.exists(link):
+        return
+    os.symlink(target, link)
+
+
+def create_volumes(prefix, volumes, output=None, platform_name=None, update_runtime=True):
+    """Create the project's persistent volumes; return the names created.
+
+    Each specification has ``name``, ``path_to_symlink`` and optionally
+    ``skip_volume``, ``skip_linux`` and ``skip_darwin``. Existing volumes are
+    skipped silently. On Linux the volume data is symlinked to
+    ``path_to_symlink``; elsewhere only its parent directory is created.
+    """
+    created = []
+    darwin = is_darwin(platform_name)
+    root = None
+    for volume in volumes or ():
+        if volume.get("skip_volume") is True:
+            continue
+        name = volume_name(prefix, volume["name"])
+        if volume_exists(name, output):
+            continue
+        link = volume.get("path_to_symlink")
+        if link:
+            os.makedirs(os.path.dirname(os.path.abspath(link)), exist_ok=True)
+        if update_runtime:
+            argv = [RUNTIME_BINARY, "volume", "create",
+                    "--label", VENDOR_LABEL,
+                    "--label", f"{PROJECT_LABEL_KEY}={prefix}",
+                    name]
+            if not exec_command(argv, output):
+                raise AppctlError(f"There was some error creating the volume '{name}'.")
+        created.append(name)
+        if link and not darwin and not volume.get("skip_linux"):
+            if root is None:
+                root = runtime_root_dir(output)
+            try:
+                _symlink(os.path.join(root, "volumes", name, "_data"), link)
+            except OSError as exc:
+                _output(output).warning(
+                    f"Unable to link the volume '{name}' to '{link}': {exc.strerror or exc}.")
+    return created
+
+
+def mounting_volume_array(volumes, platform_name=None):
+    """Compose ``volumes:`` entries for the current platform.
+
+    Darwin mounts the host path (``path_to_symlink``), Linux the named volume.
+    """
+    darwin = is_darwin(platform_name)
+    mounts = []
+    for volume in volumes or ():
+        if darwin:
+            if not volume.get("skip_darwin"):
+                mounts.append(f"{volume['path_to_symlink']}:{volume['container_path']}")
+        elif not volume.get("skip_linux"):
+            mounts.append(f"{volume['name']}:{volume['container_path']}")
+    return mounts
+
+
+# -- networks -----------------------------------------------------------------------------
+
+
+def create_network(name, output=None, project=None):
+    argv = [RUNTIME_BINARY, "network", "create", "--label", VENDOR_LABEL]
+    if project:
+        argv += ["--label", f"{PROJECT_LABEL_KEY}={project}"]
+    return exec_command(argv + [str(name)], output)
+
+
+def connect_network(network, container, output=None):
+    """Connect ``network`` to ``container``; raise on failure."""
+    if not exec_command([RUNTIME_BINARY, "network", "connect", str(network), str(container)],
+                        output):
+        raise AppctlError(f"There was some error connecting to {container}.")
+    _output(output).success(f"Project connected to {container}.")
+    return True
+
+
+def disconnect_network(network, container, output=None):
+    """Disconnect ``network`` from ``container``; failures only warn."""
+    output = _output(output)
+    if exec_command([RUNTIME_BINARY, "network", "disconnect", str(network), str(container)],
+                    output):
+        output.log(f"[{network}] Disconnected from Docker network of {container}")
+        return True
+    output.warning(f"Error in disconnecting from Docker network of {container}")
+    return False
+
+
+def remove_network(name, output=None):
+    return exec_command([RUNTIME_BINARY, "network", "rm", str(name)], output)
+
+
+def network_exists(name, output=None):
+    return exec_command([RUNTIME_BINARY, "network", "inspect", str(name)], output)
+
+
+# -- project creation ---------------------------------------------------------------------
+
+
+def create_project(name, volumes=(), output=None, platform_name=None):
+    """Create the network and persistent volumes of project ``name``."""
+    prefix = project_prefix(name)
+    if not network_exists(prefix, output) and not create_network(prefix, output, prefix):
+        raise AppctlError(f"There was some error creating the network '{prefix}'.")
+    create_volumes(prefix, volumes, output, platform_name)
+    return prefix
+"""Persistent state store: key-value options and applied-migration history.
+
+The store is a SQLite database under ``<APPCTL_ROOT_DIR>/db/``. All queries
+use bound parameters, so keys and values are never interpolated into SQL.
+"""
+
+import os
+import sqlite3
+import time
+
+from .config_loader import root_dir
+from .errors import AppctlError
+
+DB_DIR = "db"
+DB_FILE = "appctl.sqlite"
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"   # UTC, e.g. 2026-11-11T03:10:00Z
+
+SCHEMA = {
+    "options": (
+        'CREATE TABLE IF NOT EXISTS options ('
+        ' "key" TEXT NOT NULL PRIMARY KEY,'
+        ' value TEXT NOT NULL,'
+        ' modified_on TEXT NOT NULL'
+        ')',
+        ("key", "value", "modified_on"),
+    ),
+    "migrations": (
+        'CREATE TABLE IF NOT EXISTS migrations ('
+        ' migration TEXT NOT NULL,'
+        ' type TEXT NOT NULL,'
+        ' timestamp TEXT NOT NULL,'
+        ' PRIMARY KEY (migration, type)'
+        ')',
+        ("migration", "type", "timestamp"),
+    ),
+}
+
+
+def db_dir(environ=None):
+    environ = os.environ if environ is None else environ
+    return os.path.join(root_dir(environ), DB_DIR)
+
+
+def db_path(environ=None):
+    return os.path.join(db_dir(environ), DB_FILE)
+
+
+def utc_now():
+    """The current UTC time in the store's timestamp format."""
+    return time.strftime(TIMESTAMP_FORMAT, time.gmtime())
+
+
+def _details(exc):
+    if isinstance(exc, OSError) and exc.strerror:
+        return f"{exc.strerror}: {exc.filename}" if exc.filename else exc.strerror
+    return str(exc)
+
+
+class Database:
+    """A connection to the persistent store, created on first access."""
+
+    def __init__(self, path):
+        self.path = path
+        self.connection = self._connect()
+        self._create_tables()
+
+    def _connect(self):
+        try:
+            directory = os.path.dirname(self.path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            if os.path.isdir(self.path):
+                raise sqlite3.OperationalError(f"unable to open database file: {self.path}")
+            connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+        except (OSError, sqlite3.Error) as exc:
+            raise AppctlError(
+                f"Unable to initialize connection to appctl sqlite database: {_details(exc)}"
+            ) from exc
+        return connection
+
+    def _create_tables(self):
+        try:
+            for table, (statement, columns) in SCHEMA.items():
+                self.connection.execute(statement)
+                found = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
+                missing = [column for column in columns if column not in found]
+                if missing:
+                    raise sqlite3.OperationalError(
+                        f"table {table} is missing column(s): {', '.join(missing)}"
+                    )
+        except sqlite3.Error as exc:
+            self.close()
+            raise AppctlError(f"Encountered Error while creating table: {exc}") from exc
+
+    def close(self):
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+
+    def _execute(self, sql, params=()):
+        try:
+            return self.connection.execute(sql, params)
+        except sqlite3.Error as exc:
+            raise AppctlError(f"Unable to query appctl sqlite database: {exc}") from exc
+
+    # -- key-value options ----------------------------------------------------
+
+    def get_option(self, key):
+        """Return the stored string for ``key``, or ``False`` when it is missing."""
+        row = self._execute('SELECT value FROM options WHERE "key" = ?', (str(key),)).fetchone()
+        return False if row is None else str(row[0])
+
+    def set_option(self, key, value):
+        """Insert or update ``key``; the value is always stored as a string."""
+        self._execute(
+            'INSERT INTO options ("key", value, modified_on) VALUES (?, ?, ?) '
+            'ON CONFLICT("key") DO UPDATE SET value = excluded.value, '
+            'modified_on = excluded.modified_on',
+            (str(key), str(value), utc_now()),
+        )
+        return True
+
+    def delete_option(self, key):
+        """Remove ``key``; return whether it existed."""
+        return self._execute('DELETE FROM options WHERE "key" = ?', (str(key),)).rowcount > 0
+
+    def get_options(self):
+        """All options as ``{key: value}``, ordered by key."""
+        rows = self._execute('SELECT "key", value FROM options ORDER BY "key"')
+        return {str(key): str(value) for key, value in rows}
+
+    # -- migration history ----------------------------------------------------
+
+    def get_migrations(self, type=None):
+        """Applied migrations, ordered by name then type."""
+        sql = "SELECT migration, type, timestamp FROM migrations"
+        params = ()
+        if type is not None:
+            sql += " WHERE type = ?"
+            params = (str(type),)
+        rows = self._execute(sql + " ORDER BY migration, type", params)
+        return [{"migration": m, "type": t, "timestamp": ts} for m, t, ts in rows]
+
+    def get_migration_names(self, type=None):
+        return [record["migration"] for record in self.get_migrations(type)]
+
+    def is_migration_applied(self, migration, type=None):
+        sql = "SELECT 1 FROM migrations WHERE migration = ?"
+        params = [str(migration)]
+        if type is not None:
+            sql += " AND type = ?"
+            params.append(str(type))
+        return self._execute(sql, params).fetchone() is not None
+
+    def record_migration(self, migration, type):
+        """Mark ``migration`` of category ``type`` as applied now."""
+        self._execute(
+            "INSERT INTO migrations (migration, type, timestamp) VALUES (?, ?, ?) "
+            "ON CONFLICT(migration, type) DO UPDATE SET timestamp = excluded.timestamp",
+            (str(migration), str(type), utc_now()),
+        )
+        return True
+
+    def remove_migration(self, migration, type=None):
+        """Forget an applied migration; return whether a record was removed."""
+        sql = "DELETE FROM migrations WHERE migration = ?"
+        params = [str(migration)]
+        if type is not None:
+            sql += " AND type = ?"
+            params.append(str(type))
+        return self._execute(sql, params).rowcount > 0
+
+    def apply_migration(self, migration, type, up):
+        """Run ``up()`` unless already applied; record it only when it succeeds.
+
+        Returns ``True`` when the migration ran, ``False`` when it was skipped.
+        """
+        if self.is_migration_applied(migration, type):
+            return False
+        up()
+        self.record_migration(migration, type)
+        return True
+
+    def rollback_migration(self, migration, type, down=None):
+        """Run ``down()`` (if given) and remove the migration's record."""
+        if down is not None:
+            down()
+        return self.remove_migration(migration, type)
+
+    def run_migrations(self, migrations, type):
+        """Apply pending ``(name, up[, down])`` migrations in name order.
+
+        When one fails, its ``down`` is run (if given), nothing is recorded
+        for it, and the error is re-raised. Returns the names that ran.
+        """
+        applied = []
+        for entry in sorted(migrations, key=lambda m: str(m[0])):
+            name, up = entry[0], entry[1]
+            down = entry[2] if len(entry) > 2 else None
+            try:
+                if self.apply_migration(name, type, up):
+                    applied.append(name)
+            except Exception:
+                self.rollback_migration(name, type, down)
+                raise
+        return applied
+
+
+_instances = {}
+
+
+def get_db(environ=None):
+    """The store for the current root directory, initialized on first access."""
+    path = os.path.abspath(db_path(environ))
+    db = _instances.get(path)
+    if db is None or db.connection is None:
+        db = _instances[path] = Database(path)
+    return db
+
+
+def close_all():
+    for db in _instances.values():
+        db.close()
+    _instances.clear()
+
+
+def get_option(key, environ=None):
+    return get_db(environ).get_option(key)
+
+
+def set_option(key, value, environ=None):
+    return get_db(environ).set_option(key, value)
+
+
+__all__ = ["DB_FILE", "Database", "TIMESTAMP_FORMAT", "close_all", "db_dir", "db_path",
+           "get_db", "get_option", "set_option", "utc_now"]
+"""Execution of external commands, including appctl itself."""
+
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+
+from . import PROGRAM_NAME
+from .config_loader import CONFIG_PATH_ENV
+from .errors import AppctlError
+from .runtime_config import GLOBAL_PARAMETERS
+
+OBFUSCATED = "******"
+SIGNAL_EXIT_CODE = -1
+SIGNAL_WARNING = ("Spawned process returned exit code -1, which could be caused by the "
+                  "signal handling configuration of the runtime (e.g. a custom SIGCHLD or "
+                  "SIGHUP handler).")
+SCRIPT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           f"{PROGRAM_NAME}.py")
+
+
+@dataclass
+class ProcessRun:
+    """Outcome of one external command."""
+
+    stdout: str
+    stderr: str
+    return_code: int
+    command: object
+    cwd: str = None
+    env: dict = field(default=None, repr=False)
+    run_time: float = 0.0
+
+    @property
+    def succeeded(self):
+        return self.return_code == 0
+
+
+def command_to_string(command):
+    if isinstance(command, (list, tuple)):
+        return shlex.join(str(part) for part in command)
+    return str(command)
+
+
+def obfuscate(text, secrets=()):
+    """Replace every listed substring of ``text`` with ``******``."""
+    text = str(text)
+    for secret in sorted({str(s) for s in secrets or () if s not in (None, "")},
+                         key=len, reverse=True):
+        quoted = shlex.quote(secret)
+        if quoted != secret:
+            text = text.replace(quoted, OBFUSCATED)
+        text = text.replace(secret, OBFUSCATED)
+    return text
+
+
+def _debug(output, text, secrets):
+    if output is not None:
+        output.debug(obfuscate(text, secrets))
+
+
+def warn_signal_exit(return_code, output=None):
+    """Non-halting warning for processes exiting with code -1."""
+    if return_code != SIGNAL_EXIT_CODE:
+        return
+    if output is not None:
+        output.warning(SIGNAL_WARNING)
+    else:
+        print(f"Warning: {SIGNAL_WARNING}", file=sys.stderr)
+
+
+def run_command(command, output=None, obfuscate_list=(), cwd=None, env=None, stdin=None):
+    """Run ``command`` (a shell string or an argv list) and return a :class:`ProcessRun`.
+
+    The command is logged at debug level before it runs; non-empty STDOUT and
+    STDERR and then the return code are logged afterwards. Every substring in
+    ``obfuscate_list`` is masked in the log, never in the command itself.
+    """
+    shell = not isinstance(command, (list, tuple))
+    argv = command if shell else [str(part) for part in command]
+    _debug(output, f"COMMAND: {command_to_string(command)}", obfuscate_list)
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(argv, shell=shell, cwd=cwd, env=env, input=stdin,
+                                   capture_output=True, text=True, errors="replace")
+        stdout, stderr, return_code = completed.stdout, completed.stderr, completed.returncode
+    except OSError as exc:
+        stdout, stderr, return_code = "", f"{exc.strerror or exc}\n", 127
+    run_time = time.monotonic() - started
+    for label, text in (("STDOUT", stdout), ("STDERR", stderr)):
+        if text:
+            _debug(output, f"{label}: " + text.strip("\r\n"), obfuscate_list)
+    _debug(output, f"RETURN CODE: {return_code}", obfuscate_list)
+    warn_signal_exit(return_code, output)
+    return ProcessRun(stdout=stdout, stderr=stderr, return_code=return_code, command=command,
+                      cwd=cwd, env=env, run_time=run_time)
+
+
+def exec_command(command, output=None, obfuscate_list=(), cwd=None, env=None, stdin=None):
+    """Run ``command`` and return whether it succeeded."""
+    return run_command(command, output, obfuscate_list, cwd=cwd, env=env, stdin=stdin).succeeded
+
+
+def launch(command, output=None, exit_on_error=True, return_detailed=True, obfuscate_list=(),
+           cwd=None, env=None):
+    """Run ``command``; optionally fail on a non-zero exit.
+
+    Returns the :class:`ProcessRun` or, with ``return_detailed=False``, the
+    return code.
+    """
+    result = run_command(command, output, obfuscate_list, cwd=cwd, env=env)
+    if exit_on_error and result.return_code != 0:
+        raise AppctlError(_failure_message(result, obfuscate_list),
+                          exit_code=result.return_code if result.return_code > 0 else 1)
+    return result if return_detailed else result.return_code
+
+
+def _failure_message(result, secrets=()):
+    message = result.stderr.strip()
+    if message.startswith("Error: "):
+        message = message[len("Error: "):]
+    if not message:
+        message = (f"Command '{obfuscate(command_to_string(result.command), secrets)}' "
+                   f"failed with exit code {result.return_code}.")
+    return message
+
+
+# -- re-dispatching appctl itself ---------------------------------------------
+
+
+def _flag(name, value):
+    if value is True:
+        return f"--{name}"
+    if value is False:
+        return f"--no-{name}"
+    return f"--{name}={value}"
+
+
+def runtime_flags(runtime):
+    """Global flags reproducing the current runtime configuration."""
+    flags = []
+    for name, param in GLOBAL_PARAMETERS.items():
+        if not param.runtime or name not in (runtime or {}):
+            continue
+        value = runtime[name]
+        if value is None or value == param.default:
+            continue
+        if isinstance(value, (list, tuple)):
+            flags.extend(_flag(name, item) for item in value)
+        else:
+            flags.append(_flag(name, value))
+    return flags
+
+
+def self_command(command, args=(), assoc=None, runtime=None):
+    """argv that runs appctl ``command`` with the current runtime flags."""
+    words = shlex.split(command) if isinstance(command, str) else list(command)
+    words += [str(a) for a in args]
+    words += [_flag(k, v) for k, v in (assoc or {}).items()]
+    return [sys.executable, SCRIPT_PATH] + runtime_flags(runtime) + words
+
+
+def self_environment(config_path=None, environ=None):
+    env = dict(os.environ if environ is None else environ)
+    if config_path:
+        env[CONFIG_PATH_ENV] = str(config_path)
+    return env
+
+
+def launch_self(ctx, command, args=(), assoc=None, exit_on_error=True, return_detailed=False,
+                parse=None, obfuscate_list=(), cwd=None):
+    """Run an appctl command in a child process, preserving the runtime config.
+
+    Returns the :class:`ProcessRun` (``return_detailed``) or the return code.
+    With ``parse="json"`` the child's STDOUT is decoded as JSON first.
+    """
+    runtime = getattr(ctx, "runtime", None) or {}
+    config = getattr(ctx, "config", None)
+    argv = self_command(command, args, assoc, runtime)
+    env = self_environment(getattr(config, "global_path", None))
+    result = launch(argv, getattr(ctx, "output", None), exit_on_error=exit_on_error,
+                    obfuscate_list=obfuscate_list, cwd=cwd, env=env)
+    if parse == "json":
+        result.stdout = parse_json(result.stdout)
+    return result if return_detailed else result.return_code
+
+
+def runcommand(ctx, command, return_=True, parse=None, exit_error=True, obfuscate_list=()):
+    """Run an appctl command and return its result.
+
+    ``return_`` selects ``"all"`` (the :class:`ProcessRun`), ``"stdout"`` (or
+    ``True``), ``"stderr"`` or ``"return_code"``. ``parse="json"`` decodes
+    STDOUT as JSON before it is returned.
+    """
+    result = launch_self(ctx, command, exit_on_error=exit_error, return_detailed=True,
+                         parse=parse, obfuscate_list=obfuscate_list)
+    if return_ == "all":
+        return result
+    if return_ == "stderr":
+        return result.stderr.strip()
+    if return_ == "return_code":
+        return result.return_code
+    if parse == "json":
+        return result.stdout
+    return result.stdout.strip()
+
+
+def parse_json(text):
+    """Decode JSON output; ``None`` when it is not valid JSON."""
+    try:
+        return json.loads(text)
+    except (TypeError, ValueError):
+        return None

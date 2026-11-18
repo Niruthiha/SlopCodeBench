@@ -1,0 +1,545 @@
+### appctl.py (modified)
+--- appctl.py
++++ appctl.py
+@@ -5,6 +5,7 @@
+     python appctl.py [@<alias>] [<command>] [<subcommand>] [<args>] [--<flags>]
+ """
+ 
++import copy
+ import csv
+ import datetime
+ import io
+@@ -361,6 +362,8 @@
+                  "/": "/", "\\": "\\", "N": "\x85", "_": "\xa0"}
+ _YAML_INT = re.compile(r"[-+]?[0-9]+")
+ _YAML_FLOAT = re.compile(r"[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?")
++_YAML_ANCHOR = re.compile(r"&([^\s\[\]{},]+)(?:\s+(.*))?")
++_YAML_ALIAS = re.compile(r"\*([^\s\[\]{},]+)")
+ _YAML_BLOCK_SCALAR = re.compile(r"[|>](?:[+-]?[1-9]?|[1-9][+-])")
+ 
+ 
+@@ -598,6 +601,7 @@
+     def __init__(self, text):
+         self.lines = text.replace("\r\n", "\n").replace("\r", "\n").expandtabs(2).split("\n")
+         self.index = 0
++        self.anchors = {}
+ 
+     def peek(self):
+         """Return (indent, content) of the next meaningful line, or None."""
+@@ -646,7 +650,15 @@
+                 raise YamlError("Bad indentation on line %d" % (self.index + 1))
+             key, rest = split
+             self.index += 1
+-            result[key] = self.value(rest, indent, in_mapping=True)
++            value = self.value(rest, indent, in_mapping=True)
++            if key == "<<" and isinstance(value, (dict, list)):
++                # Merge keys: explicit keys of the mapping take precedence.
++                for source in (value if isinstance(value, list) else [value]):
++                    if isinstance(source, dict):
++                        for merged_key, merged_value in source.items():
++                            result.setdefault(merged_key, merged_value)
++                continue
++            result[key] = value
+ 
+     def sequence(self, indent):
+         result = []
+@@ -669,6 +681,16 @@
+                 result.append(self.value(rest, indent))
+ 
+     def value(self, rest, indent, in_mapping=False):
++        anchor = _YAML_ANCHOR.fullmatch(rest)
++        if anchor:
++            value = self.value(anchor.group(2) or "", indent, in_mapping)
++            self.anchors[anchor.group(1)] = value
++            return value
++        alias = _YAML_ALIAS.fullmatch(rest)
++        if alias:
++            if alias.group(1) not in self.anchors:
++                raise YamlError("Unknown alias '%s' on line %d" % (alias.group(1), self.index))
++            return copy.deepcopy(self.anchors[alias.group(1)])
+         if rest == "":
+             head = self.peek()
+             if head is None:
+@@ -1652,6 +1674,34 @@
+     success("The site at '%s' was emptied." % url)
+ 
+ 
++def site_project_dir(site_name=None):
++    """The compose project directory of ``site_name`` (or of the current location)."""
++    if site_name:
++        base = Runtime.config.get("projects_path") or os.path.join(root_dir(), "sites")
++        directory = absolutize(os.path.join(str(base), site_name), os.getcwd())
++        if not os.path.isdir(directory):
++            error("Site '%s' does not exist." % site_name)
++        return directory
++    path = Runtime.config.get("path")
++    if isinstance(path, str) and path:
++        return absolutize(path, os.getcwd())
++    return find_project_dir()
++
++
++def cmd_site_config(args, assoc):
++    project_dir = site_project_dir(args[0] if args else None)
++    custom = assoc.get("custom-compose", Runtime.config.get("custom-compose"))
++    files = get_compose_files(project_dir, custom)
++    if not files:
++        error("No compose file found in '%s'." % project_dir)
++    if assoc.get("services"):
++        for service in get_services(files=files):
++            out(service)
++        return
++    for line in yaml_dump_lines(load_compose_config(files=files)):
++        out(line)
++
++
+ def cmd_site_meta_get(args, assoc):
+     render_value("", assoc.get("format"))
+ 
+@@ -2198,6 +2248,437 @@
+     if result.stderr:
+         sys.stderr.write(result.stderr)
+     return result.return_code
++
++
++# ---------------------------------------------------------------------------
++# Containers, compose projects, volumes and networks
++# ---------------------------------------------------------------------------
++
++DOCKER_BIN = "docker"
++DOCKER_COMPOSE_BIN = "docker-compose"
++RUNTIME_MISSING_MESSAGE = ("Container runtime is not installed. Please install the container "
++                           "runtime to run AppCtl.")
++LABEL_VENDOR = "org.label-schema.vendor=%s" % PROG
++LABEL_PROJECT = "io.%s.project" % PROG
++COMPOSE_BASE_FILES = ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml")
++COMPOSE_OVERRIDE_FILES = ("docker-compose.override.yml", "docker-compose.override.yaml",
++                          "compose.override.yml", "compose.override.yaml")
++# Directory (inside a project) holding extra user-supplied compose overrides.
++COMPOSE_CUSTOM_DIR = "user-docker-compose"
++COMPOSE_EXTENSIONS = (".yml", ".yaml")
++COMPOSE_TOP_LEVEL_KEYS = ("services", "version", "networks", "volumes", "configs", "secrets",
++                          "name", "include")
++# Service keys whose sequences replace (rather than extend) the base value when merged.
++COMPOSE_REPLACE_KEYS = ("command", "entrypoint", "test")
++CONTAINER_RUNNING = "running"
++CONTAINER_EXITED = "exited"
++
++
++class DockerError(RuntimeError):
++    """Raised when a container runtime operation fails."""
++
++
++def is_truthy(value):
++    if isinstance(value, str):
++        return value.strip().lower() in ("1", "true", "yes", "on", "y")
++    return bool(value)
++
++
++def is_darwin(platform=None):
++    return (platform or sys.platform) == "darwin"
++
++
++def get_docker_style_prefix(name):
++    """Return the deterministic, compose-safe resource prefix for project ``name``."""
++    return re.sub(r"[^a-z0-9_]", "", str(name).lower())
++
++
++def runtime_installed():
++    import shutil
++
++    return shutil.which(DOCKER_BIN) is not None
++
++
++def ensure_runtime():
++    if not runtime_installed():
++        error(RUNTIME_MISSING_MESSAGE)
++
++
++def compose_binary():
++    """The compose CLI: the ``docker compose`` plugin, else standalone ``docker-compose``."""
++    import shutil
++
++    if shutil.which(DOCKER_BIN):
++        return [DOCKER_BIN, "compose"]
++    if shutil.which(DOCKER_COMPOSE_BIN):
++        return [DOCKER_COMPOSE_BIN]
++    return [DOCKER_BIN, "compose"]
++
++
++def docker_run(args, cwd=None, obfuscate=()):
++    """Run ``docker <args>`` and return the ``ProcessRun``."""
++    return run_detailed([DOCKER_BIN] + list(args), cwd=cwd, obfuscate=obfuscate)
++
++
++# -- compose files ------------------------------------------------------------
++
++def read_compose_file(path):
++    """Return the parsed compose mapping in ``path`` or None when it is not a compose file."""
++    if not os.path.isfile(path) or not path.lower().endswith(COMPOSE_EXTENSIONS):
++        return None
++    try:
++        with open(path, encoding="utf-8") as handle:
++            data = yaml_load(handle.read())
++    except (OSError, UnicodeDecodeError, YamlError):
++        return None
++    if not isinstance(data, dict):
++        return None
++    if not any(key in COMPOSE_TOP_LEVEL_KEYS or str(key).startswith("x-") for key in data):
++        return None
++    if "services" in data and not isinstance(data["services"], (dict, type(None))):
++        return None
++    return data
++
++
++def is_compose_file(path):
++    return read_compose_file(path) is not None
++
++
++def find_base_compose_file(directory):
++    for name in COMPOSE_BASE_FILES:
++        candidate = os.path.join(directory, name)
++        if os.path.isfile(candidate):
++            return candidate
++    return None
++
++
++def find_project_dir(start=None):
++    """The directory holding the base compose file, searching upward from ``start``."""
++    directory = os.path.abspath(start or os.getcwd())
++    current = directory
++    while True:
++        if find_base_compose_file(current):
++            return current
++        parent = os.path.dirname(current)
++        if parent == current:
++            return directory
++        current = parent
++
++
++def discover_compose_overrides(project_dir):
++    """Optional overrides found in the project layout, in a deterministic order."""
++    found = [os.path.join(project_dir, name) for name in COMPOSE_OVERRIDE_FILES]
++    custom_dir = os.path.join(project_dir, COMPOSE_CUSTOM_DIR)
++    if os.path.isdir(custom_dir):
++        found += [os.path.join(custom_dir, name) for name in sorted(os.listdir(custom_dir))]
++    return [path for path in found if is_compose_file(path)]
++
++
++def resolve_custom_compose(custom, project_dir):
++    path = os.path.expanduser(str(custom))
++    if os.path.isabs(path):
++        return path if os.path.exists(path) else None
++    for base in (os.getcwd(), project_dir):
++        candidate = os.path.normpath(os.path.join(base, path))
++        if os.path.exists(candidate):
++            return candidate
++    return None
++
++
++def get_compose_files(project_dir=None, custom_compose=None):
++    """Return the compose files of a project in merge order (base first).
++
++    A configured ``custom-compose`` override replaces discovered overrides; when it
++    does not exist a warning is shown and the available files are used instead.
++    """
++    project_dir = os.path.abspath(project_dir or os.getcwd())
++    if custom_compose is None:
++        custom_compose = Runtime.config.get("custom-compose")
++    files = []
++    base = find_base_compose_file(project_dir)
++    if base and is_compose_file(base):
++        files.append(base)
++    if custom_compose not in (None, "", True, False):
++        custom = resolve_custom_compose(custom_compose, project_dir)
++        if custom is None:
++            warning("File: %s does not exist. Falling back to default compose file."
++                    % custom_compose)
++        elif is_compose_file(custom):
++            if custom not in files:
++                files.append(custom)
++            return files
++        else:
++            debug("Ignoring '%s': not a compose file." % custom, "compose")
++    for path in discover_compose_overrides(project_dir):
++        if path not in files:
++            files.append(path)
++    return files
++
++
++def compose_file_args(files):
++    args = []
++    for path in files:
++        args += ["--file", path]
++    return args
++
++
++def merge_compose(base, override, key=None):
++    """Merge compose definitions: mappings recursively, sequences extended."""
++    if isinstance(base, dict) and isinstance(override, dict):
++        merged = dict(base)
++        for name, value in override.items():
++            merged[name] = merge_compose(base[name], value, name) if name in base else value
++        return merged
++    if (isinstance(base, list) and isinstance(override, list)
++            and key not in COMPOSE_REPLACE_KEYS):
++        merged = list(base)
++        merged += [item for item in override if item not in merged]
++        return merged
++    return override
++
++
++def load_compose_config(project_dir=None, custom_compose=None, files=None):
++    """Return the merged compose definition of a project."""
++    if files is None:
++        files = get_compose_files(project_dir, custom_compose)
++    config = {}
++    for path in files:
++        data = read_compose_file(path)
++        if data is not None:
++            config = merge_compose(config, data)
++    return config
++
++
++def get_services(project_dir=None, custom_compose=None, files=None):
++    """Service names in the order they appear in the merged compose configuration."""
++    services = load_compose_config(project_dir, custom_compose, files).get("services")
++    return [str(name) for name in services] if isinstance(services, dict) else []
++
++
++def service_exists(service, project_dir=None, custom_compose=None):
++    return str(service) in get_services(project_dir, custom_compose)
++
++
++def compose_command(project_dir=None, files=None, project_name=None):
++    project_dir = os.path.abspath(project_dir or os.getcwd())
++    if files is None:
++        files = get_compose_files(project_dir)
++    command = compose_binary() + compose_file_args(files)
++    if project_name:
++        command += ["--project-name", get_docker_style_prefix(project_name)]
++    return command
++
++
++# -- compose operations ---------------------------------------------------------
++
++def docker_compose_up(project_dir=None, services=(), project_name=None):
++    """Bring up the project (or only ``services``) in detached mode."""
++    project_dir = os.path.abspath(project_dir or os.getcwd())
++    command = compose_command(project_dir, project_name=project_name) + ["up", "-d"]
++    command += [str(service) for service in services or ()]
++    return run_detailed(command, cwd=project_dir).return_code == 0
++
++
++def docker_compose_down(project_dir=None, project_name=None):
++    """Remove the project's containers, networks and volumes."""
++    project_dir = os.path.abspath(project_dir or os.getcwd())
++    command = compose_command(project_dir, project_name=project_name)
++    command += ["down", "--volumes", "--remove-orphans"]
++    return run_detailed(command, cwd=project_dir).return_code == 0
++
++
++def docker_compose_exec(command, service, shell="sh", user="", project_dir=None,
++                        shell_wrapper=False, exit_on_error=False, obfuscate=(),
++                        echo_stdout=False, echo_stderr=False, project_name=None):
++    """Execute ``command`` inside the running container of ``service``.
++
++    TTY allocation is disabled when the ``skip-tty`` config value is truthy.
++    """
++    import shlex
++
++    project_dir = os.path.abspath(project_dir or os.getcwd())
++    args = compose_command(project_dir, project_name=project_name) + ["exec"]
++    if is_truthy(Runtime.config.get("skip-tty")):
++        args.append("-T")
++    if user:
++        args += ["--user", str(user)]
++    args.append(str(service))
++    if shell_wrapper:
++        text = command if isinstance(command, str) else command_string(command)
++        args += [shell or "sh", "-c", text]
++    elif isinstance(command, str):
++        args += shlex.split(command)
++    else:
++        args += [str(part) for part in command]
++    result = run_detailed(args, cwd=project_dir, obfuscate=obfuscate)
++    if echo_stdout and result.stdout:
++        sys.stdout.write(obfuscate_text(result.stdout, obfuscate))
++    if echo_stderr and result.stderr:
++        sys.stderr.write(obfuscate_text(result.stderr, obfuscate))
++    if exit_on_error and result.return_code != 0:
++        raise AppctlExit(result.return_code)
++    return result
++
++
++# -- containers -------------------------------------------------------------------
++
++def container_status(container):
++    """Return ``running``, ``exited`` or False when the container does not exist."""
++    ensure_runtime()
++    result = docker_run(["inspect", "--type", "container", "--format", "{{.State.Running}}",
++                         str(container)])
++    if result.return_code != 0:
++        return False
++    return CONTAINER_RUNNING if result.stdout.strip() == "true" else CONTAINER_EXITED
++
++
++def start_container(container):
++    return docker_run(["start", str(container)]).return_code == 0
++
++
++def stop_container(container):
++    return docker_run(["stop", str(container)]).return_code == 0
++
++
++def restart_container(container):
++    return docker_run(["restart", str(container)]).return_code == 0
++
++
++def boot_container(container, command=None, project_dir=None, services=()):
++    """Make sure ``container`` runs: start it when exited, create it when missing.
++
++    ``command`` (a shell string or argument list) creates the container; without it
++    the project's compose definition is brought up.
++    """
++    status = container_status(container)
++    if status == CONTAINER_EXITED:
++        return start_container(container)
++    if status == CONTAINER_RUNNING:
++        return True
++    if command:
++        return run_detailed(command, cwd=project_dir).return_code == 0
++    return docker_compose_up(project_dir, services)
++
++
++# -- volumes ------------------------------------------------------------------------
++
++def get_volume_name(prefix, name):
++    return "%s_%s" % (get_docker_style_prefix(prefix), name)
++
++
++def existing_volumes():
++    result = docker_run(["volume", "ls", "--format", "{{.Name}}"])
++    return set(result.stdout.split()) if result.return_code == 0 else set()
++
++
++def volume_mountpoint(volume):
++    result = docker_run(["volume", "inspect", "--format", "{{ .Mountpoint }}", volume])
++    return result.stdout.strip() if result.return_code == 0 else ""
++
++
++def _symlink_volume(target, link):
++    try:
++        if os.path.islink(link):
++            os.unlink(link)
++        elif os.path.exists(link):
++            return
++        parent = os.path.dirname(link)
++        if parent:
++            os.makedirs(parent, exist_ok=True)
++        os.symlink(target, link)
++    except OSError as exc:
++        warning("Unable to link volume '%s' to '%s': %s" % (target, link, exc.strerror or exc))
++
++
++def create_volumes(prefix, volumes, update_to_docker=True, platform=None):
++    """Create the project's persistent volumes, labelled as belonging to the tool.
++
++    Each spec is a dict with ``name``, ``path`` and ``container_path`` plus the optional
++    ``skip_volume``, ``skip_darwin`` and ``skip_linux`` flags. Returns the created names.
++    """
++    project = get_docker_style_prefix(prefix)
++    existing = existing_volumes() if update_to_docker else set()
++    created = []
++    for volume in volumes:
++        if volume.get("skip_volume") is True:
++            continue
++        name = get_volume_name(project, volume["name"])
++        path = volume.get("path")
++        if is_darwin(platform):
++            if path and not volume.get("skip_darwin"):
++                os.makedirs(path, exist_ok=True)
++        elif path:
++            parent = os.path.dirname(path)
++            if parent:
++                os.makedirs(parent, exist_ok=True)
++        if not update_to_docker or name in existing:
++            continue
++        result = docker_run(["volume", "create", "--label", LABEL_VENDOR,
++                             "--label", "%s=%s" % (LABEL_PROJECT, project), name])
++        if result.return_code != 0:
++            raise DockerError("Unable to create volume '%s'." % name)
++        existing.add(name)
++        created.append(name)
++        if path and not is_darwin(platform) and not volume.get("skip_linux"):
++            mountpoint = volume_mountpoint(name)
++            if mountpoint:
++                _symlink_volume(mountpoint, path)
++    return created
++
++
++def get_mounting_volume_array(volumes, platform=None):
++    """Compose ``volumes:`` entries for the current platform.
++
++    Bind mounts of the host path are used on macOS, named volumes elsewhere.
++    """
++    mounts = []
++    for volume in volumes:
++        if is_darwin(platform):
++            if volume.get("skip_darwin"):
++                continue
++            mounts.append("%s:%s" % (volume["path"], volume["container_path"]))
++        else:
++            if volume.get("skip_linux"):
++                continue
++            mounts.append("%s:%s" % (volume["name"], volume["container_path"]))
++    return mounts
++
++
++# -- networks -----------------------------------------------------------------------
++
++def create_network(name):
++    """Create the project network, labelled as belonging to the tool."""
++    result = docker_run(["network", "create", "--label", LABEL_VENDOR,
++                         "--label", "%s=%s" % (LABEL_PROJECT, get_docker_style_prefix(name)),
++                         str(name)])
++    return result.return_code == 0
++
++
++def connect_site_network_to(name, container):
++    """Connect the project network ``name`` to ``container``."""
++    result = docker_run(["network", "connect", str(name), str(container)])
++    if result.return_code != 0:
++        raise DockerError("There was some error connecting to %s." % container)
++    success("Project network '%s' connected to %s." % (name, container))
++    return True
++
++
++def disconnect_site_network_from(name, container):
++    """Disconnect the project network ``name`` from ``container`` (never fatal)."""
++    result = docker_run(["network", "disconnect", str(name), str(container)])
++    if result.return_code == 0:
++        log("[%s] Disconnected from Docker network of %s" % (name, container))
++        return True
++    warning("Error in disconnecting from Docker network of %s" % container)
++    return False
++
++
++def rm_network(name):
++    return docker_run(["network", "rm", str(name)]).return_code == 0
++
++
++def network_exists(name):
++    return docker_run(["network", "inspect", str(name)]).return_code == 0
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -2905,6 +3386,8 @@
+              handler=cmd_site_deactivate)
+     register("site empty", "Empty a site of its content.", "[--uploads] [--yes]",
+              handler=cmd_site_empty)
++    register("site config", "Display the merged compose configuration of a site.",
++             "[<site-name>] [--services] [--custom-compose=<path>]", handler=cmd_site_config)
+     register("site meta", "Add, update, get, and delete site metadata.")
+     register("site meta get", "Get a meta field.", "<site-name> <key> [--format=<format>]",
+              handler=cmd_site_meta_get, defaults={"format": "var_export"})
+

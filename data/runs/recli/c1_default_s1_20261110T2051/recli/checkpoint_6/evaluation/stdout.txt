@@ -1,0 +1,1903 @@
+
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.16, pytest-9.2.0, pluggy-1.7.0 -- /tmp/uv-cache/archive-v0/8hzgakZbmaXkLjYD/bin/python
+cachedir: .pytest_cache
+metadata: {'Python': '3.12.16', 'Platform': 'Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41', 'Packages': {'pytest': '9.2.0', 'pluggy': '1.7.0'}, 'Plugins': {'timeout': '2.4.0', 'json-report': '1.5.0', 'metadata': '3.1.1', 'json-ctrf': '0.6.5'}}
+rootdir: /workspace
+configfile: pytest.ini
+plugins: timeout-2.4.0, json-report-1.5.0, metadata-3.1.1, json-ctrf-0.6.5
+timeout: 25.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 184 items
+
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_no_args_shows_help_text PASSED [  0%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_command_dispatch_top_level PASSED [  1%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_subcommand_dispatch PASSED [  1%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite PASSED [  2%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite_for_multi_level_command PASSED [  2%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_version_rewrite PASSED [  3%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_positional_arg_parsing PASSED [  3%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_unrecognized_command_error PASSED [  4%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_missing_required_positional_shows_usage PASSED [  4%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_excess_positional_args_error PASSED [  5%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_with_suggestion PASSED [  5%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_no_suggestion PASSED [  6%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_multiple_parameter_errors_collected PASSED [  7%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unrecognized_subcommand_error PASSED [  7%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_alphabetical_ordering_case_insensitive PASSED [  8%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_column_alignment PASSED [  8%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_parent_command_no_handler_shows_subcommands PASSED [  9%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_suggestion_trash_to_delete PASSED [  9%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_subcommand_synonym_example_allows_optional_delete_suggestion PASSED [ 10%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_checked_before_levenshtein PASSED [ 10%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_only_when_target_registered PASSED [ 11%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_suggestion_within_distance_2 PASSED [ 11%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_no_suggestion_beyond_distance_2 PASSED [ 12%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_tiebreaker_sort_order PASSED [ 13%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_optional_modifier PASSED [ 13%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_repeating_modifier_accepts_multiple PASSED [ 14%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_no_flag_sets_false PASSED [ 14%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error FAILED [ 15%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected FAILED [ 15%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_error_messages_to_stderr PASSED [ 16%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_exit_code_1_on_error PASSED [ 16%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_for_specific_command PASSED [ 17%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_generic_token_classification PASSED [ 17%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_default_value_for_optional_arg PASSED [ 18%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_precedence_changes_observable_behavior PASSED [ 19%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_runtime_overrides_project PASSED [ 19%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_project_overrides_global PASSED [ 20%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_global_defaults_apply PASSED [ 20%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_alias_invocation_applies_connection_params PASSED [ 21%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_all_broadcast_alphabetical_order PASSED [ 21%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_all_broadcast_case_insensitive_alphabetical_order PASSED [ 22%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_disabled_command_error PASSED [ 22%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_unknown_alias_error PASSED [ 23%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_unknown_alias_with_suggestion PASSED [ 23%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_all_no_aliases_error PASSED [ 24%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_alias_group_invalid_member_error PASSED [ 25%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_unwritable_config_error PASSED [ 25%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority PASSED [ 26%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority_overrides_project_disabled_command PASSED [ 26%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_upward_search PASSED [ 27%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_search_stops_at_first_matching_directory PASSED [ 27%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_inherit_depth_first PASSED [ 28%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_appended PASSED [ 28%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_not_deduplicated PASSED [ 29%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_auto_creation_locale_and_installer_version PASSED [ 29%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_global_config_from_env_var PASSED [ 30%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_global_config_default_path PASSED [ 30%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_deprecated_param_emits_warning PASSED [ 31%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_strict_args_mode PASSED [ 32%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_hidden_param_excluded_from_help_but_functional PASSED [ 32%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_runtime_alias_overrides_file_alias PASSED [ 33%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_unknown_alias_does_not_suggest_far_match PASSED [ 33%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_alias_name_regex_validation PASSED [ 34%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_alias_group_deduplication_first_appearance PASSED [ 34%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_local_path_absolutization PASSED [ 35%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_uri_schemes_recognized PASSED [ 35%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command FAILED [ 36%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_exit_255_error PASSED [ 36%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_packages_dir_from_env PASSED [ 37%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_all_auto_registered_when_aliases_exist PASSED [ 38%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_explicit_all_alias_is_not_overridden_by_auto_registration PASSED [ 38%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_table_format_default PASSED [ 39%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_json_format_4_space_indent PASSED [ 39%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_field_single_value_raw_output PASSED [ 40%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_quiet_suppresses_info_and_success PASSED [ 40%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_error_to_stderr PASSED [ 41%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_debug_elapsed_time_format PASSED [ 41%]
+.evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_field_name_error PASSED [ 42%]
+.evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_json_stdin_error FAILED [ 42%]
+.evaluation_tests/test_checkpoint_3.py::TestErrors::test_confirmation_prompt_non_y_aborts PASSED [ 43%]
+.evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_fields_plural_error PASSED [ 44%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_formats_preserve_same_underlying_values PASSED [ 44%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_format_quoting PASSED [ 45%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_serializes_complex_values_as_json_strings FAILED [ 45%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_yaml_format_output PASSED [ 46%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_count_format_integer PASSED [ 46%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_ids_format_space_separated PASSED [ 47%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_restricts_and_orders_columns PASSED [ 47%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_case_insensitive PASSED [ 48%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_color_auto_mode PASSED [ 48%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_no_color_disables_formatting PASSED [ 49%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_warning_to_stderr PASSED [ 50%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_success_to_stdout_suppressed_by_quiet PASSED [ 50%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_debug_group_filtering PASSED [ 51%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_debug_group_prefix_format PASSED [ 51%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_file_logging_timestamp_format PASSED [ 52%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_file_logging_separator_per_invocation PASSED [ 52%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_sensitive_error_not_logged PASSED [ 53%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_json_stdin_supplies_missing_positional_argument FAILED [ 53%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_yes_bypasses_confirmation PASSED [ 54%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y PASSED [ 54%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_blank_response_cancels FAILED [ 55%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_suppresses_cancellation_warning FAILED [ 55%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_does_not_suppress_debug_output PASSED [ 56%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_complex_values_json_serialized_in_table PASSED [ 57%]
+.evaluation_tests/test_checkpoint_4.py::TestCore::test_detailed_execution_captures_all_fields FAILED [ 57%]
+.evaluation_tests/test_checkpoint_4.py::TestCore::test_success_only_execution_returns_boolean PASSED [ 58%]
+.evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_read_hit_returns_content PASSED [ 58%]
+.evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_read_expired_deletes_and_misses PASSED [ 59%]
+.evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_key_sanitization_non_url PASSED [ 59%]
+.evaluation_tests/test_checkpoint_4.py::TestErrors::test_unsupported_archive_format_error PASSED [ 60%]
+.evaluation_tests/test_checkpoint_4.py::TestErrors::test_non_writable_file_extraction_warning_then_error PASSED [ 60%]
+.evaluation_tests/test_checkpoint_4.py::TestErrors::test_exit_code_negative_1_warning FAILED [ 61%]
+.evaluation_tests/test_checkpoint_4.py::TestErrors::test_cache_dir_creation_failure_silent PASSED [ 61%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_sensitive_arg_obfuscation_in_debug PASSED [ 62%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_stdout_mode PASSED [ 63%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_stderr_mode PASSED [ 63%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_return_code_mode PASSED [ 64%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_all_mode PASSED [ 64%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_json_parse_mode PASSED [ 65%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_write_stores_content PASSED [ 65%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_miss_returns_false PASSED [ 66%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_fresh_entry_not_expired PASSED [ 66%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_cleanup_expire_pass PASSED [ 67%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_cleanup_size_enforcement PASSED [ 67%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_eviction_tiebreaker_alphabetical PASSED [ 68%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_key_sanitization_url PASSED [ 69%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_zip PASSED [ 69%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_overwrites_existing_writable_file PASSED [ 70%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_non_writable_nested_archive_entry_warns_with_relative_path FAILED [ 70%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_non_writable_archive_entry_does_not_stop_other_files PASSED [ 71%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_tar_gz PASSED [ 71%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tar_gz_fallback_to_external_command PASSED [ 72%]
+.evaluation_tests/test_checkpoint_5.py::TestCore::test_db_auto_create_with_tables PASSED [ 72%]
+.evaluation_tests/test_checkpoint_5.py::TestCore::test_option_read_missing_returns_false PASSED [ 73%]
+.evaluation_tests/test_checkpoint_5.py::TestCore::test_option_write_insert_then_read FAILED [ 73%]
+.evaluation_tests/test_checkpoint_5.py::TestCore::test_option_upsert_overwrites FAILED [ 74%]
+.evaluation_tests/test_checkpoint_5.py::TestErrors::test_db_connection_failure_error PASSED [ 75%]
+.evaluation_tests/test_checkpoint_5.py::TestErrors::test_table_creation_failure_error PASSED [ 75%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_history_records_store_required_metadata PASSED [ 76%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_history_table_starts_empty PASSED [ 76%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_skipped_if_already_recorded PASSED [ 77%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_all_values_stored_as_strings FAILED [ 77%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_empty_string_value_is_not_treated_as_missing FAILED [ 78%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_existing_empty_store_file_gets_required_tables PASSED [ 78%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_timestamps_are_machine_parseable PASSED [ 79%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migrations_table_schema PASSED [ 79%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_options_table_schema PASSED [ 80%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_parameterized_queries FAILED [ 80%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_migration_record_can_be_removed_after_rollback PASSED [ 81%]
+.evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_existing_db_opens_without_recreating FAILED [ 82%]
+.evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_running FAILED [ 82%]
+.evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_exited FAILED [ 83%]
+.evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_false_not_exists FAILED [ 83%]
+.evaluation_tests/test_checkpoint_6.py::TestCore::test_compose_merge_base_always_first FAILED [ 84%]
+.evaluation_tests/test_checkpoint_6.py::TestCore::test_project_naming_prefix FAILED [ 84%]
+.evaluation_tests/test_checkpoint_6.py::TestCore::test_volume_creation_with_labels FAILED [ 85%]
+.evaluation_tests/test_checkpoint_6.py::TestErrors::test_container_runtime_not_installed_error FAILED [ 85%]
+.evaluation_tests/test_checkpoint_6.py::TestErrors::test_network_connect_failure_raises FAILED [ 86%]
+.evaluation_tests/test_checkpoint_6.py::TestErrors::test_compose_custom_file_not_found_warning PASSED [ 86%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_exited_starts FAILED [ 87%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_running_noop FAILED [ 88%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_not_exists_creates FAILED [ 88%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_compose_custom_compose_single_file PASSED [ 89%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_configured_custom_compose_applies_after_base FAILED [ 89%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_compose_empty_custom_scans_directory PASSED [ 90%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_compose_directory_non_yml_ignored PASSED [ 90%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_compose_directory_ignores_non_compose_files_in_call_order FAILED [ 91%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_compose_legacy_custom_appended_last PASSED [ 91%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_missing_custom_compose_warns_and_falls_back_to_base FAILED [ 92%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_skip_tty_string_truthy_disables_tty FAILED [ 92%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_skip_tty_flag_passed FAILED [ 93%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_service_inspection_lists_names FAILED [ 94%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_volume_skip_volume_true_skipped PASSED [ 94%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_volume_existing_is_silently_skipped FAILED [ 95%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_volume_already_exists_silently_skipped PASSED [ 95%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_volume_mount_linux_uses_name PASSED [ 96%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_volume_mount_macos_uses_symlink PASSED [ 96%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_network_create_with_label FAILED [ 97%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_network_connect_success_message PASSED [ 97%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_network_disconnect_success_log PASSED [ 98%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_network_disconnect_failure_warning FAILED [ 98%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_site_delete_tears_down_containers_networks_and_volumes FAILED [ 99%]
+.evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_platform_specific_volume_skip PASSED [100%]
+
+=================================== FAILURES ===================================
+__________ TestFunctionality.test_required_associative_missing_error ___________
+
+self = <test_checkpoint_1.TestFunctionality object at 0x7c6b95d4c9b0>
+cli = <function cli.<locals>._run at 0x7c6b94f5fec0>
+
+    @pytest.mark.functionality
+    def test_required_associative_missing_error(self, cli):
+        """Missing required ``--type=<type>`` → error.
+    
+        Spec: Error Summary table.
+        """
+        result = cli(["site", "create", "example.test"])
+>       assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_1.py:406: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout="Success: Created site 'example.test' (type: standard, title: example.test).\n", stderr='')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: "Success: Created site 'example.test' (type: standard, title: example.test).\n"
+E         stderr: ''
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout="Success: Created site 'example.test' (type: standard, title: example.test).\n", stderr='').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+_____ TestFunctionality.test_required_associative_empty_value_is_rejected ______
+
+self = <test_checkpoint_1.TestFunctionality object at 0x7c6b95eb1880>
+cli = <function cli.<locals>._run at 0x7c6b94fe8a40>
+
+    @pytest.mark.functionality
+    def test_required_associative_empty_value_is_rejected(self, cli):
+        """Required associative args must have non-empty values.
+    
+        Spec: "All required associative arguments must be present with
+        non-empty values."
+        """
+        result = cli(["site", "create", "example.test", "--type="])
+>       assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_1.py:420: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=0, stdout="Success: Created site 'example.test' (type: , title: example.test).\n", stderr='')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: "Success: Created site 'example.test' (type: , title: example.test).\n"
+E         stderr: ''
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=0, stdout="Success: Created site 'example.test' (type: , title: example.test).\n", stderr='').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+______ TestFunctionality.test_ssh_pre_cmd_injected_before_remote_command _______
+
+self = <test_checkpoint_2.TestFunctionality object at 0x7c6b95d53050>
+cli = <function cli.<locals>._run at 0x7c6b94fea2a0>
+write_config = <function write_config.<locals>._write at 0x7c6b94fe9e40>
+fake_ssh_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_ssh_pre_cmd_injected_befo0/fake_ssh_bin:/tmp/uv-cache/archive-v0/8hzgakZ...usr/local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_ssh_pre_cmd_injected_befo0/ssh_calls.log'))
+
+    @pytest.mark.functionality
+    def test_ssh_pre_cmd_injected_before_remote_command(
+        self, cli, write_config, fake_ssh_env
+    ):
+        """``APPCTL_SSH_PRE_CMD`` prefixes the remote command payload.
+    
+        Spec: "``APPCTL_SSH_PRE_CMD`` injects a shell command that runs
+        before the main remote command."
+        """
+        ssh_env, log_file = fake_ssh_env
+        write_config(
+            {"@remote": {"ssh": "ssh://user@host"}},
+            kind="global",
+        )
+    
+        result = cli(
+            ["@remote", "site", "list"],
+            env={**ssh_env, "APPCTL_SSH_PRE_CMD": "echo prepare"},
+        )
+    
+        assert_success(result)
+        calls = log_file.read_text()
+>       assert "echo prepare && appctl site list" in calls
+E       assert 'echo prepare && appctl site list' in "-T -q user@host echo prepare; appctl 'site' 'list'\n"
+
+.evaluation_tests/test_checkpoint_2.py:600: AssertionError
+___________________ TestErrors.test_invalid_json_stdin_error ___________________
+
+self = <test_checkpoint_3.TestErrors object at 0x7c6b95fc35f0>
+cli = <function cli.<locals>._run at 0x7c6b94feb060>
+
+    @pytest.mark.error
+    def test_invalid_json_stdin_error(self, cli):
+        """Invalid JSON on STDIN with ``--format=json`` → error.
+    
+        Spec: "Error: Invalid JSON: <raw_input>."
+        """
+        result = cli(
+            ["site", "create", "--format=json"],
+            input_text="not valid json{{{",
+        )
+        assert_exit_code(result, 1)
+>       assert "Error: Invalid JSON:" in result.stderr
+E       AssertionError: assert 'Error: Invalid JSON:' in '+----------------------------+\n| Error: Parameter errors:   |\n| unknown --format parameter |\n+----------------------------+\n'
+E        +  where '+----------------------------+\n| Error: Parameter errors:   |\n| unknown --format parameter |\n+----------------------------+\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--format=json'], returncode=1, stdout='', stderr='+----------------------------+\n| Error: Parameter errors:   |\n| unknown --format parameter |\n+----------------------------+\n').stderr
+
+.evaluation_tests/test_checkpoint_3.py:135: AssertionError
+_____ TestFunctionality.test_csv_serializes_complex_values_as_json_strings _____
+
+self = <test_checkpoint_3.TestFunctionality object at 0x7c6b95c0b050>
+cli = <function cli.<locals>._run at 0x7c6b94feaca0>
+
+    @pytest.mark.functionality
+    def test_csv_serializes_complex_values_as_json_strings(self, cli):
+        """Complex values in CSV output are serialized as JSON strings.
+    
+        Spec: "Complex values such as arrays and objects must be serialized
+        as JSON strings when they appear in table or csv output."
+        """
+        result = cli(["site", "list", "--format=csv", "--fields=tags,meta"])
+>       assert_success(result)
+
+.evaluation_tests/test_checkpoint_3.py:204: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.evaluation_tests/conftest.py:322: in assert_success
+    assert_exit_code(result, 0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--format=csv', '--fields=tags,meta'], returncode=1, stdout='', stderr='Error: Invalid field: tags.\n')
+code = 0
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 0, got 1.
+E         stdout: ''
+E         stderr: 'Error: Invalid field: tags.\n'
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--format=csv', '--fields=tags,meta'], returncode=1, stdout='', stderr='Error: Invalid field: tags.\n').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+____ TestFunctionality.test_json_stdin_supplies_missing_positional_argument ____
+
+self = <test_checkpoint_3.TestFunctionality object at 0x7c6b95d52e40>
+cli = <function cli.<locals>._run at 0x7c6b94fe9e40>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_json_stdin_supplies_missi0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_json_stdin_supplies_missi0/docker_calls.log'))
+
+    @pytest.mark.functionality
+    def test_json_stdin_supplies_missing_positional_argument(
+        self, cli, fake_docker_env
+    ):
+        """Missing positional values are read from STDIN in JSON mode.
+    
+        Spec: "If a positional argument value is missing from the command
+        line, the implementation attempts to read that value from STDIN...
+        When --format=json is active, STDIN is parsed as JSON."
+        """
+        docker_env, _ = fake_docker_env
+        result = cli(
+            ["site", "create", "--type=html", "--format=json"],
+            input_text='{"site-name": "stdin.test"}\n',
+            env=docker_env,
+        )
+>       assert_success(result)
+
+.evaluation_tests/test_checkpoint_3.py:413: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.evaluation_tests/conftest.py:322: in assert_success
+    assert_exit_code(result, 0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--type=html', '--format=...------------------+\n| Error: Parameter errors:   |\n| unknown --format parameter |\n+----------------------------+\n')
+code = 0
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 0, got 1.
+E         stdout: ''
+E         stderr: '+----------------------------+\n| Error: Parameter errors:   |\n| unknown --format parameter |\n+----------------------------+\n'
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--type=html', '--format=json'], returncode=1, stdout='', stderr='+----------------------------+\n| Error: Parameter errors:   |\n| unknown --format parameter |\n+----------------------------+\n').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+__________ TestFunctionality.test_confirmation_blank_response_cancels __________
+
+self = <test_checkpoint_3.TestFunctionality object at 0x7c6b95c0b680>
+cli = <function cli.<locals>._run at 0x7c6b94fea3e0>
+
+    @pytest.mark.functionality
+    def test_confirmation_blank_response_cancels(self, cli):
+        """Blank confirmation input still cancels the operation.
+    
+        Spec: "Any response other than y, after trimming and case
+        normalization, must abort the operation."
+        """
+        result = cli(
+            ["site", "delete", "example.test"],
+            input_text="\n",
+        )
+>       assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_3.py:452: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'example.test'], returnco..., stdout="Are you sure you want to delete the 'example.test' site? [y/n] \n", stderr='Warning: Operation cancelled.\n')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: "Are you sure you want to delete the 'example.test' site? [y/n] \n"
+E         stderr: 'Warning: Operation cancelled.\n'
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'example.test'], returncode=0, stdout="Are you sure you want to delete the 'example.test' site? [y/n] \n", stderr='Warning: Operation cancelled.\n').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+_________ TestFunctionality.test_quiet_suppresses_cancellation_warning _________
+
+self = <test_checkpoint_3.TestFunctionality object at 0x7c6b953c2480>
+cli = <function cli.<locals>._run at 0x7c6b94febce0>
+
+    @pytest.mark.functionality
+    def test_quiet_suppresses_cancellation_warning(self, cli):
+        """Quiet mode still aborts cancellation paths with the same exit code.
+    
+        Spec: cancellation remains an error-path return while quiet mode
+        suppresses regular informational/success chatter.
+        """
+        result = cli(
+            ["--quiet", "site", "delete", "example.test"],
+            input_text="n\n",
+        )
+>       assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_3.py:466: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', 'site', 'delete', 'example.test'..., stdout="Are you sure you want to delete the 'example.test' site? [y/n] \n", stderr='Warning: Operation cancelled.\n')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: "Are you sure you want to delete the 'example.test' site? [y/n] \n"
+E         stderr: 'Warning: Operation cancelled.\n'
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', 'site', 'delete', 'example.test'], returncode=0, stdout="Are you sure you want to delete the 'example.test' site? [y/n] \n", stderr='Warning: Operation cancelled.\n').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+_____________ TestCore.test_detailed_execution_captures_all_fields _____________
+
+self = <test_checkpoint_4.TestCore object at 0x7c6b953c0110>
+cli = <function cli.<locals>._run at 0x7c6b94c04040>
+
+    def test_detailed_execution_captures_all_fields(self, cli):
+        """External command returns stdout, stderr, return_code, run_time.
+    
+        Spec: "captures a structured result containing: stdout, stderr,
+        return_code, run_time."
+        """
+        result = cli(["--debug", "help"])
+        assert_success(result)
+        debug = strip_ansi(result.stderr).lower()
+        assert "command" in debug
+>       assert "return" in debug
+E       assert 'return' in 'debug: runtime config: {"debug": true} (0.000s)\ndebug: using global config: /tmp/pytest-of-agent/pytest-0/test_detailed_execution_captur0/appctl_root/config/config.yml (0.001s)\ndebug: no project config found (0.001s)\ndebug: resolved config: {"admin-email": null, "blog": null, "cert-email": null, "color": "auto", "context": null, "custom-compose": null, "debug": true, "disabled_commands": [], "env": null, "exec": null, "installer_version": "stable", "locale": "en_us", "path": null, "projects_path": null, "prompt": null, "quiet": false, "require": null, "skip-packages": null, "skip-plugins": null, "skip-themes": null, "skip-tty": false, "ssh": null, "sysctl": null, "url": null, "user": null} (0.024s)\ndebug: running command: help (0.024s)\n'
+
+.evaluation_tests/test_checkpoint_4.py:44: AssertionError
+_________________ TestErrors.test_exit_code_negative_1_warning _________________
+
+self = <test_checkpoint_4.TestErrors object at 0x7c6b953c1a90>
+cli = <function cli.<locals>._run at 0x7c6b94c04720>
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_exit_code_negative_1_warn0')
+
+    @pytest.mark.error
+    def test_exit_code_negative_1_warning(self, cli, tmp_path):
+        """Process returning -1 emits warning to STDERR.
+    
+        Spec: "emits a warning to STDERR about signal handling configuration."
+        """
+        bin_dir = tmp_path / "signal_bin"
+        bin_dir.mkdir()
+        docker = bin_dir / "docker"
+        docker.write_text("#!/usr/bin/env sh\nkill -TERM $$\n")
+        docker.chmod(0o755)
+        compose = bin_dir / "docker-compose"
+        compose.write_text("#!/usr/bin/env sh\nexit 0\n")
+        compose.chmod(0o755)
+        env = {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+        result = cli(["site", "list"], env=env)
+>       assert "Warning" in result.stderr
+E       AssertionError: assert 'Warning' in ''
+E        +  where '' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='+------+--------------------------+----------+--------+\n| name | url                      | type     | status |\n+------+--------------------------+----------+--------+\n| main | https://example.com      | standard | active |\n| blog | https://blog.example.com | blog     | active |\n+------+--------------------------+----------+--------+\n', stderr='').stderr
+
+.evaluation_tests/test_checkpoint_4.py:172: AssertionError
+_ TestFunctionality.test_non_writable_nested_archive_entry_warns_with_relative_path _
+
+self = <test_checkpoint_4.TestFunctionality object at 0x7c6b953c1af0>
+cli = <function cli.<locals>._run at 0x7c6b94c049a0>
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0')
+
+    @pytest.mark.functionality
+    def test_non_writable_nested_archive_entry_warns_with_relative_path(
+        self, cli, tmp_path
+    ):
+        """Spec: "Warning: Unable to copy '<relative_path>' to current directory."."""
+        zip_path = tmp_path / "nested-warning.zip"
+        dest = tmp_path / "extracted"
+        blocked = dest / "nested" / "config.yml"
+        blocked.parent.mkdir(parents=True)
+        blocked.write_text("original\n", encoding="utf-8")
+        blocked.chmod(0o444)
+    
+        try:
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("nested/config.yml", "updated\n")
+    
+            result = cli(
+                [
+                    "cli",
+                    "update",
+                    f"--archive={zip_path}",
+                    f"--path={dest}",
+                ]
+            )
+    
+>           assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_4.py:424: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'cli', 'update', '--archive=/tmp/pytest-of-...archi0/nested-warning.zip' to '/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/extracted'.\n", stderr='')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: "Success: Extracted '/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/nested-warning.zip' to '/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/extracted'.\n"
+E         stderr: ''
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'cli', 'update', '--archive=/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/nested-warning.zip', '--path=/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/extracted'], returncode=0, stdout="Success: Extracted '/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/nested-warning.zip' to '/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/extracted'.\n", stderr='').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+_________________ TestCore.test_option_write_insert_then_read __________________
+
+self = <test_checkpoint_5.TestCore object at 0x7c6b9524d3a0>
+cli = <function cli.<locals>._run at 0x7c6b94c07060>
+db_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_option_write_insert_then_0/appctl_root/db/appctl.sqlite')
+
+    def test_option_write_insert_then_read(self, cli, db_path):
+        """Write new key, read returns value.
+    
+        Spec: Example 1.
+        """
+        db_dir = db_path.parent
+        cli(["help"])  # Ensure DB is initialized
+        conn = _open_store_connection(db_dir)
+>       conn.execute(
+            "INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)",
+            ("test_key", "test_value"),
+        )
+E       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+
+.evaluation_tests/test_checkpoint_5.py:116: IntegrityError
+____________________ TestCore.test_option_upsert_overwrites ____________________
+
+self = <test_checkpoint_5.TestCore object at 0x7c6b9524d0d0>
+cli = <function cli.<locals>._run at 0x7c6b94c07100>
+db_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_option_upsert_overwrites0/appctl_root/db/appctl.sqlite')
+
+    def test_option_upsert_overwrites(self, cli, db_path):
+        """Write existing key with new value, read returns new value.
+    
+        Spec: Example 2.
+        """
+        db_dir = db_path.parent
+        cli(["help"])  # Ensure DB is initialized
+        conn = _open_store_connection(db_dir)
+>       conn.execute(
+            "INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)",
+            ("upsert_key", "old_value"),
+        )
+E       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+
+.evaluation_tests/test_checkpoint_5.py:137: IntegrityError
+_____________ TestFunctionality.test_all_values_stored_as_strings ______________
+
+self = <test_checkpoint_5.TestFunctionality object at 0x7c6b9524c830>
+cli = <function cli.<locals>._run at 0x7c6b94c07e20>
+db_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_all_values_stored_as_stri0/appctl_root/db/appctl.sqlite')
+
+    def test_all_values_stored_as_strings(self, cli, db_path):
+        """Stored values round-trip without implicit coercion.
+    
+        Spec: option values are returned as stored string content.
+        """
+        db_dir = db_path.parent
+        cli(["help"])
+        if not any(candidate.is_file() for candidate in db_dir.rglob("*")):
+            return
+        conn = _open_store_connection(db_dir)
+>       conn.execute(
+            "INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)",
+            ("numeric_test", "42"),
+        )
+E       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+
+.evaluation_tests/test_checkpoint_5.py:290: IntegrityError
+_____ TestFunctionality.test_empty_string_value_is_not_treated_as_missing ______
+
+self = <test_checkpoint_5.TestFunctionality object at 0x7c6b9524cdd0>
+cli = <function cli.<locals>._run at 0x7c6b94c40400>
+db_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_empty_string_value_is_not0/appctl_root/db/appctl.sqlite')
+
+    @pytest.mark.functionality
+    def test_empty_string_value_is_not_treated_as_missing(self, cli, db_path):
+        """A stored empty string remains distinct from a missing key.
+    
+        Spec: missing reads return false, while existing keys return the
+        stored string value.
+        """
+        db_dir = db_path.parent
+        assert_success(cli(["help"]))
+        if not any(candidate.is_file() for candidate in db_dir.rglob("*")):
+            return
+    
+        conn = _open_store_connection(db_dir)
+>       conn.execute(
+            "INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)",
+            ("empty_value_key", ""),
+        )
+E       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+
+.evaluation_tests/test_checkpoint_5.py:315: IntegrityError
+_________________ TestFunctionality.test_parameterized_queries _________________
+
+self = <test_checkpoint_5.TestFunctionality object at 0x7c6b9524e390>
+cli = <function cli.<locals>._run at 0x7c6b94c40720>
+db_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_parameterized_queries0/appctl_root/db/appctl.sqlite')
+
+    @pytest.mark.functionality
+    def test_parameterized_queries(self, cli, db_path):
+        """Queries use parameter bindings, not string interpolation.
+    
+        Spec: "All database queries use parameterized value bindings."
+        """
+        # Verify by inserting a value with SQL injection attempt
+        db_dir = db_path.parent
+        cli(["help"])
+        if not any(candidate.is_file() for candidate in db_dir.rglob("*")):
+            return
+        conn = _open_store_connection(db_dir)
+        dangerous_key = "'; DROP TABLE options; --"
+>       conn.execute(
+            "INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)",
+            (dangerous_key, "safe"),
+        )
+E       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+
+.evaluation_tests/test_checkpoint_5.py:439: IntegrityError
+_________ TestFunctionality.test_existing_db_opens_without_recreating __________
+
+self = <test_checkpoint_5.TestFunctionality object at 0x7c6b9524fe30>
+cli = <function cli.<locals>._run at 0x7c6b94c40b80>
+db_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_existing_db_opens_without0/appctl_root/db/appctl.sqlite')
+
+    @pytest.mark.functionality
+    def test_existing_db_opens_without_recreating(self, cli, db_path):
+        """Existing DB opens connection without recreating tables.
+    
+        Spec: "If the database file already exists, a connection is opened."
+        """
+        db_dir = db_path.parent
+        # First run creates DB
+        cli(["help"])
+        if not any(candidate.is_file() for candidate in db_dir.rglob("*")):
+            return
+        # Insert a marker
+        conn = _open_store_connection(db_dir)
+>       conn.execute(
+            "INSERT OR REPLACE INTO options (key, value) VALUES (?, ?)",
+            ("marker", "preserved"),
+        )
+E       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+
+.evaluation_tests/test_checkpoint_5.py:510: IntegrityError
+____________________ TestCore.test_container_status_running ____________________
+
+self = <test_checkpoint_6.TestCore object at 0x7c6b9524f1d0>
+cli = <function cli.<locals>._run at 0x7c6b94c40ae0>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_container_status_running0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzga...r/local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_container_status_running0/docker_calls.log'))
+
+    def test_container_status_running(self, cli, fake_docker_env):
+        """Active container detected as "running".
+    
+        Spec: "running -- the container exists and is active."
+        """
+        docker_env, log_file = fake_docker_env
+        result = cli(["site", "list"], env=docker_env)
+        assert result.returncode in (0, 1)
+>       calls = log_file.read_text()
+                ^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:38: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_container_status_running0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_container_status_running0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+____________________ TestCore.test_container_status_exited _____________________
+
+self = <test_checkpoint_6.TestCore object at 0x7c6b9524f020>
+cli = <function cli.<locals>._run at 0x7c6b94c41120>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_container_status_exited0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzgak...sr/local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_container_status_exited0/docker_calls.log'))
+
+    def test_container_status_exited(self, cli, fake_docker_env):
+        """Stopped container detected as "exited".
+    
+        Spec: "exited -- the container exists but is stopped."
+        """
+        docker_env, log_file = fake_docker_env
+        result = cli(["site", "list"], env=docker_env)
+        assert result.returncode in (0, 1)
+>       calls = log_file.read_text()
+                ^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:49: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_container_status_exited0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_container_status_exited0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+_______________ TestCore.test_container_status_false_not_exists ________________
+
+self = <test_checkpoint_6.TestCore object at 0x7c6b9524e060>
+cli = <function cli.<locals>._run at 0x7c6b94c420c0>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_container_status_false_no0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_container_status_false_no0/docker_calls.log'))
+
+    def test_container_status_false_not_exists(self, cli, fake_docker_env):
+        """Non-existent container returns boolean false.
+    
+        Spec: "false (boolean) -- the container does not exist."
+        """
+        docker_env, log_file = fake_docker_env
+        result = cli(["site", "list"], env=docker_env)
+        assert result.returncode in (0, 1)
+>       calls = log_file.read_text()
+                ^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:60: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_container_status_false_no0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_container_status_false_no0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+________________ TestCore.test_compose_merge_base_always_first _________________
+
+self = <test_checkpoint_6.TestCore object at 0x7c6b9524e8d0>
+cli = <function cli.<locals>._run at 0x7c6b94c07e20>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_compose_merge_base_always0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_compose_merge_base_always0/docker_calls.log'))
+appctl_root = PosixPath('/tmp/pytest-of-agent/pytest-0/test_compose_merge_base_always0/appctl_root')
+write_config = <function write_config.<locals>._write at 0x7c6b94c07060>
+
+    def test_compose_merge_base_always_first(
+        self, cli, fake_docker_env, appctl_root, write_config
+    ):
+        """Compose execution includes base and configured overrides.
+    
+        Spec: merge behavior is deterministic.
+        """
+        docker_env, log_file = fake_docker_env
+        services_dir = appctl_root / "services"
+        services_dir.mkdir(exist_ok=True)
+        write_yaml(
+            services_dir / "docker-compose.yml",
+            {"version": "3", "services": {}},
+        )
+        custom = services_dir / "user-docker-compose" / "z-extra.yml"
+        custom.parent.mkdir(parents=True, exist_ok=True)
+        write_yaml(custom, {"version": "3", "services": {}})
+        write_config({"custom-compose": str(custom)}, kind="global")
+    
+        cli(["site", "list"], env=docker_env)
+>       calls = log_file.read_text()
+                ^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:83: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_compose_merge_base_always0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_compose_merge_base_always0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+_____________________ TestCore.test_project_naming_prefix ______________________
+
+self = <test_checkpoint_6.TestCore object at 0x7c6b9524db80>
+cli = <function cli.<locals>._run at 0x7c6b94c07100>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_project_naming_prefix0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzgakZb.../usr/local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_project_naming_prefix0/docker_calls.log'))
+
+    def test_project_naming_prefix(self, cli, fake_docker_env):
+        """Project naming normalization is deterministic.
+    
+        Spec: exact normalization strategy is implementation-defined.
+        """
+        docker_env, log_file = fake_docker_env
+        cli(
+            ["site", "create", "my-site.example.com", "--type=html"],
+            env=docker_env,
+        )
+>       first_calls = log_file.read_text(encoding="utf-8").lower().splitlines()
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:98: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_project_naming_prefix0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'utf-8', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_project_naming_prefix0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+__________________ TestCore.test_volume_creation_with_labels ___________________
+
+self = <test_checkpoint_6.TestCore object at 0x7c6b9524d790>
+cli = <function cli.<locals>._run at 0x7c6b94c42fc0>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_volume_creation_with_labe0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_volume_creation_with_labe0/docker_calls.log'))
+appctl_root = PosixPath('/tmp/pytest-of-agent/pytest-0/test_volume_creation_with_labe0/appctl_root')
+
+    def test_volume_creation_with_labels(
+        self, cli, fake_docker_env, appctl_root
+    ):
+        """Volume creation uses project-scoped metadata.
+    
+        Spec: exact metadata key names are implementation-defined.
+        """
+        docker_env, log_file = fake_docker_env
+        cli(
+            ["site", "create", "test.example.com", "--type=html"],
+            env=docker_env,
+        )
+>       calls = log_file.read_text()
+                ^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:122: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_volume_creation_with_labe0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_volume_creation_with_labe0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+____________ TestErrors.test_container_runtime_not_installed_error _____________
+
+self = <test_checkpoint_6.TestErrors object at 0x7c6b9524de50>
+cli = <function cli.<locals>._run at 0x7c6b94c42160>
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_container_runtime_not_ins0')
+
+    @pytest.mark.error
+    def test_container_runtime_not_installed_error(self, cli, tmp_path):
+        """Missing runtime → exact error, exit 1.
+    
+        Spec: "Error: Container runtime is not installed."
+        """
+        # Create empty PATH with no docker
+        empty_bin = tmp_path / "empty_bin"
+        empty_bin.mkdir()
+        result = cli(
+            ["site", "list"],
+            env={"PATH": str(empty_bin)},
+        )
+>       assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_6.py:147: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='+---... https://blog.example.com | blog     | active |\n+------+--------------------------+----------+--------+\n', stderr='')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: '+------+--------------------------+----------+--------+\n| name | url                      | type     | status |\n+------+--------------------------+----------+--------+\n| main | https://example.com      | standard | active |\n| blog | https://blog.example.com | blog     | active |\n+------+--------------------------+----------+--------+\n'
+E         stderr: ''
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='+------+--------------------------+----------+--------+\n| name | url                      | type     | status |\n+------+--------------------------+----------+--------+\n| main | https://example.com      | standard | active |\n| blog | https://blog.example.com | blog     | active |\n+------+--------------------------+----------+--------+\n', stderr='').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+________________ TestErrors.test_network_connect_failure_raises ________________
+
+self = <test_checkpoint_6.TestErrors object at 0x7c6b9524d220>
+cli = <function cli.<locals>._run at 0x7c6b94c42700>
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_network_connect_failure_r0')
+
+    @pytest.mark.error
+    def test_network_connect_failure_raises(self, cli, tmp_path):
+        """Network connect failure reports error.
+    
+        Spec: "There was some error connecting to <container>."
+        """
+        bin_dir = tmp_path / "docker_net_fail_bin"
+        bin_dir.mkdir()
+        log_file = tmp_path / "docker_calls.log"
+        docker = bin_dir / "docker"
+        docker.write_text(
+            "#!/usr/bin/env sh\n"
+            f'echo "docker $@" >> "{log_file}"\n'
+            'case "$*" in\n'
+            '  *"network connect"*) exit 1;;\n'
+            "esac\n"
+            "exit 0\n"
+        )
+        docker.chmod(0o755)
+        compose = bin_dir / "docker-compose"
+        compose.write_text(
+            "#!/usr/bin/env sh\n"
+            f'echo "docker-compose $@" >> "{log_file}"\n'
+            "exit 0\n"
+        )
+        compose.chmod(0o755)
+        env = {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+        result = cli(
+            ["site", "create", "test.example.com", "--type=html"],
+            env=env,
+        )
+        combined = result.stdout + result.stderr
+        # Network connect failure should produce an error or warning
+>       assert "error" in combined.lower() or "warning" in combined.lower(), (
+            "Network connect failure must produce an error or warning message"
+        )
+E       AssertionError: Network connect failure must produce an error or warning message
+E       assert ('error' in "success: created site 'test.example.com' (type: html, title: test.example.com).\n" or 'warning' in "success: created site 'test.example.com' (type: html, title: test.example.com).\n")
+E        +  where "success: created site 'test.example.com' (type: html, title: test.example.com).\n" = <built-in method lower of str object at 0x7c6b948b82b0>()
+E        +    where <built-in method lower of str object at 0x7c6b948b82b0> = "Success: Created site 'test.example.com' (type: html, title: test.example.com).\n".lower
+E        +  and   "success: created site 'test.example.com' (type: html, title: test.example.com).\n" = <built-in method lower of str object at 0x7c6b948b82b0>()
+E        +    where <built-in method lower of str object at 0x7c6b948b82b0> = "Success: Created site 'test.example.com' (type: html, title: test.example.com).\n".lower
+
+.evaluation_tests/test_checkpoint_6.py:186: AssertionError
+_____________ TestFunctionality.test_boot_container_exited_starts ______________
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b9524cd10>
+cli = <function cli.<locals>._run at 0x7c6b94c42a20>
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_boot_container_exited_sta0')
+
+    @pytest.mark.functionality
+    def test_boot_container_exited_starts(self, cli, tmp_path):
+        """Boot when exited starts existing container, does not recreate.
+    
+        Spec: "If the container exists but is stopped, the tool starts it."
+        """
+        bin_dir = tmp_path / "docker_exited_bin"
+        bin_dir.mkdir()
+        log_file = tmp_path / "docker_calls.log"
+        docker = bin_dir / "docker"
+        docker.write_text(
+            "#!/usr/bin/env sh\n"
+            f'echo "docker $@" >> "{log_file}"\n'
+            'case "$*" in\n'
+            '  *inspect*) echo "exited"; exit 0;;\n'
+            "esac\n"
+            "exit 0\n"
+        )
+        docker.chmod(0o755)
+        compose = bin_dir / "docker-compose"
+        compose.write_text(
+            "#!/usr/bin/env sh\n"
+            f'echo "docker-compose $@" >> "{log_file}"\n'
+            "exit 0\n"
+        )
+        compose.chmod(0o755)
+        docker_env = {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+        cli(["site", "list"], env=docker_env)
+>       calls = log_file.read_text()
+                ^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:243: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_boot_container_exited_sta0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_boot_container_exited_sta0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+______________ TestFunctionality.test_boot_container_running_noop ______________
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b9524f950>
+cli = <function cli.<locals>._run at 0x7c6b94c40fe0>
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_boot_container_running_no0')
+
+    @pytest.mark.functionality
+    def test_boot_container_running_noop(self, cli, tmp_path):
+        """Boot when running takes no action.
+    
+        Spec: "If the container is already running, no action is taken."
+        """
+        bin_dir = tmp_path / "docker_running_bin"
+        bin_dir.mkdir()
+        log_file = tmp_path / "docker_calls.log"
+        docker = bin_dir / "docker"
+        docker.write_text(
+            "#!/usr/bin/env sh\n"
+            f'echo "docker $@" >> "{log_file}"\n'
+            'case "$*" in\n'
+            '  *inspect*) echo "running"; exit 0;;\n'
+            "esac\n"
+            "exit 0\n"
+        )
+        docker.chmod(0o755)
+        compose = bin_dir / "docker-compose"
+        compose.write_text(
+            "#!/usr/bin/env sh\n"
+            f'echo "docker-compose $@" >> "{log_file}"\n'
+            "exit 0\n"
+        )
+        compose.chmod(0o755)
+        docker_env = {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+        cli(["site", "list"], env=docker_env)
+>       calls = log_file.read_text()
+                ^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:276: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_boot_container_running_no0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_boot_container_running_no0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+___________ TestFunctionality.test_boot_container_not_exists_creates ___________
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b9524e870>
+cli = <function cli.<locals>._run at 0x7c6b94c41d00>
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_boot_container_not_exists0')
+
+    @pytest.mark.functionality
+    def test_boot_container_not_exists_creates(self, cli, tmp_path):
+        """Boot when false executes creation command.
+    
+        Spec: "If the container does not exist, the creation command is executed."
+        """
+        bin_dir = tmp_path / "docker_missing_bin"
+        bin_dir.mkdir()
+        log_file = tmp_path / "docker_calls.log"
+        docker = bin_dir / "docker"
+        docker.write_text(
+            "#!/usr/bin/env sh\n"
+            f'echo "docker $@" >> "{log_file}"\n'
+            'case "$*" in\n'
+            "  *inspect*) exit 1;;\n"
+            "esac\n"
+            "exit 0\n"
+        )
+        docker.chmod(0o755)
+        compose = bin_dir / "docker-compose"
+        compose.write_text(
+            "#!/usr/bin/env sh\n"
+            f'echo "docker-compose $@" >> "{log_file}"\n'
+            "exit 0\n"
+        )
+        compose.chmod(0o755)
+        docker_env = {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+        cli(
+            ["site", "create", "test.example.com", "--type=html"],
+            env=docker_env,
+        )
+>       calls = log_file.read_text()
+                ^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:312: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_boot_container_not_exists0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_boot_container_not_exists0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+_____ TestFunctionality.test_configured_custom_compose_applies_after_base ______
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b9524e570>
+cli = <function cli.<locals>._run at 0x7c6b94c42160>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_configured_custom_compose0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_configured_custom_compose0/docker_calls.log'))
+appctl_root = PosixPath('/tmp/pytest-of-agent/pytest-0/test_configured_custom_compose0/appctl_root')
+write_config = <function write_config.<locals>._write at 0x7c6b94c428e0>
+
+    @pytest.mark.functionality
+    def test_configured_custom_compose_applies_after_base(
+        self, cli, fake_docker_env, appctl_root, write_config
+    ):
+        """Non-empty ``custom-compose`` is applied after the base file.
+    
+        Spec: "If `custom-compose` is set to a non-empty path, that override
+        must be applied after the base definition."
+        """
+        docker_env, log_file = fake_docker_env
+        services_dir = appctl_root / "services"
+        services_dir.mkdir(exist_ok=True)
+        base = services_dir / "docker-compose.yml"
+        write_yaml(base, {"version": "3"})
+        configured = services_dir / "configured.yml"
+        write_yaml(configured, {"version": "3"})
+        discovered_dir = services_dir / "user-docker-compose"
+        discovered_dir.mkdir(exist_ok=True)
+        auto_override = discovered_dir / "a.yml"
+        write_yaml(auto_override, {"version": "3"})
+        legacy = services_dir / "docker-compose-custom.yml"
+        write_yaml(legacy, {"version": "3"})
+        write_config(
+            {"custom-compose": str(configured.resolve())}, kind="global"
+        )
+    
+        result = cli(["site", "list"], env=docker_env)
+    
+        assert_success(result)
+        compose_calls = [
+            line
+>           for line in log_file.read_text().splitlines()
+                        ^^^^^^^^^^^^^^^^^^^^
+            if line.startswith("docker-compose ")
+        ]
+
+.evaluation_tests/test_checkpoint_6.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_configured_custom_compose0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_configured_custom_compose0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+_ TestFunctionality.test_compose_directory_ignores_non_compose_files_in_call_order _
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b9524e1b0>
+cli = <function cli.<locals>._run at 0x7c6b94c42020>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_compose_directory_ignores0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_compose_directory_ignores0/docker_calls.log'))
+appctl_root = PosixPath('/tmp/pytest-of-agent/pytest-0/test_compose_directory_ignores0/appctl_root')
+
+    @pytest.mark.functionality
+    def test_compose_directory_ignores_non_compose_files_in_call_order(
+        self, cli, fake_docker_env, appctl_root
+    ):
+        """Discovered overrides exclude non-compose files and stay ordered.
+    
+        Spec: discovered overrides use deterministic precedence and
+        "Files that are not compose files must be ignored."
+        """
+        docker_env, log_file = fake_docker_env
+        services_dir = appctl_root / "services"
+        services_dir.mkdir(exist_ok=True)
+        base = services_dir / "docker-compose.yml"
+        write_yaml(base, {"version": "3"})
+        udc = services_dir / "user-docker-compose"
+        udc.mkdir(exist_ok=True)
+        first = udc / "a.yml"
+        second = udc / "b.yaml"
+        ignored = udc / "notes.txt"
+        write_yaml(second, {"version": "3"})
+        write_yaml(first, {"version": "3"})
+        ignored.write_text("not a compose file", encoding="utf-8")
+    
+        result = cli(["site", "list"], env=docker_env)
+    
+        assert_success(result)
+        compose_calls = [
+            line
+>           for line in log_file.read_text().splitlines()
+                        ^^^^^^^^^^^^^^^^^^^^
+            if line.startswith("docker-compose ")
+        ]
+
+.evaluation_tests/test_checkpoint_6.py:445: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_compose_directory_ignores0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_compose_directory_ignores0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+__ TestFunctionality.test_missing_custom_compose_warns_and_falls_back_to_base __
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b9524ef00>
+cli = <function cli.<locals>._run at 0x7c6b94c423e0>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_missing_custom_compose_wa0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_missing_custom_compose_wa0/docker_calls.log'))
+appctl_root = PosixPath('/tmp/pytest-of-agent/pytest-0/test_missing_custom_compose_wa0/appctl_root')
+write_config = <function write_config.<locals>._write at 0x7c6b94c43420>
+
+    @pytest.mark.functionality
+    def test_missing_custom_compose_warns_and_falls_back_to_base(
+        self, cli, fake_docker_env, appctl_root, write_config
+    ):
+        """Missing configured override warns and still uses available compose.
+    
+        Spec: "Warning: File: <path> does not exist. Falling back to default
+        compose file."
+        """
+        docker_env, log_file = fake_docker_env
+        services_dir = appctl_root / "services"
+        services_dir.mkdir(exist_ok=True)
+        base = services_dir / "docker-compose.yml"
+        write_yaml(base, {"version": "3"})
+        missing = services_dir / "missing-compose.yml"
+        write_config({"custom-compose": str(missing)}, kind="global")
+    
+        result = cli(["site", "list"], env=docker_env)
+    
+        assert_success(result)
+>       assert_stderr_contains(
+            result,
+            (
+                f"Warning: File: {missing.resolve()} does not exist. "
+                "Falling back to default compose file."
+            ),
+        )
+
+.evaluation_tests/test_checkpoint_6.py:492: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='+---... https://blog.example.com | blog     | active |\n+------+--------------------------+----------+--------+\n', stderr='')
+fragments = ('Warning: File: /tmp/pytest-of-agent/pytest-0/test_missing_custom_compose_wa0/appctl_root/services/missing-compose.yml does not exist. Falling back to default compose file.',)
+
+    def assert_stderr_contains(
+        result: subprocess.CompletedProcess[str], *fragments: str
+    ) -> None:
+        """Assert all *fragments* appear in stderr."""
+        for frag in fragments:
+>           assert frag in result.stderr, (
+                f"Missing {frag!r} in stderr.\nstderr: {result.stderr!r}"
+            )
+E           AssertionError: Missing 'Warning: File: /tmp/pytest-of-agent/pytest-0/test_missing_custom_compose_wa0/appctl_root/services/missing-compose.yml does not exist. Falling back to default compose file.' in stderr.
+E             stderr: ''
+E           assert 'Warning: File: /tmp/pytest-of-agent/pytest-0/test_missing_custom_compose_wa0/appctl_root/services/missing-compose.yml does not exist. Falling back to default compose file.' in ''
+E            +  where '' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='+------+--------------------------+----------+--------+\n| name | url                      | type     | status |\n+------+--------------------------+----------+--------+\n| main | https://example.com      | standard | active |\n| blog | https://blog.example.com | blog     | active |\n+------+--------------------------+----------+--------+\n', stderr='').stderr
+
+.evaluation_tests/conftest.py:344: AssertionError
+__________ TestFunctionality.test_skip_tty_string_truthy_disables_tty __________
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b9524f080>
+cli = <function cli.<locals>._run at 0x7c6b94c436a0>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_skip_tty_string_truthy_di0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_skip_tty_string_truthy_di0/docker_calls.log'))
+write_config = <function write_config.<locals>._write at 0x7c6b94c43380>
+
+    @pytest.mark.functionality
+    def test_skip_tty_string_truthy_disables_tty(
+        self, cli, fake_docker_env, write_config
+    ):
+        """Truthy string ``skip-tty`` values disable TTY allocation.
+    
+        Spec: "When `skip-tty` is truthy, TTY allocation must be disabled."
+        """
+        docker_env, log_file = fake_docker_env
+        write_config({"skip-tty": "yes"}, kind="global")
+    
+        result = cli(["site", "list"], env=docker_env)
+    
+        assert_success(result)
+>       calls = log_file.read_text()
+                ^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:523: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_skip_tty_string_truthy_di0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_skip_tty_string_truthy_di0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+_________________ TestFunctionality.test_skip_tty_flag_passed __________________
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b9524ef90>
+cli = <function cli.<locals>._run at 0x7c6b94c41440>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_skip_tty_flag_passed0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzgakZbm...:/usr/local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_skip_tty_flag_passed0/docker_calls.log'))
+write_config = <function write_config.<locals>._write at 0x7c6b94c437e0>
+
+    @pytest.mark.functionality
+    def test_skip_tty_flag_passed(self, cli, fake_docker_env, write_config):
+        """``skip-tty: true`` disables TTY allocation for exec paths.
+    
+        Spec: exact runtime flag is implementation-defined.
+        """
+        docker_env, log_file = fake_docker_env
+        write_config({"skip-tty": True}, kind="global")
+        cli(["site", "list"], env=docker_env)
+>       calls = log_file.read_text()
+                ^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:536: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_skip_tty_flag_passed0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_skip_tty_flag_passed0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+____________ TestFunctionality.test_service_inspection_lists_names _____________
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b953c5610>
+cli = <function cli.<locals>._run at 0x7c6b94c41f80>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_service_inspection_lists_0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_service_inspection_lists_0/docker_calls.log'))
+appctl_root = PosixPath('/tmp/pytest-of-agent/pytest-0/test_service_inspection_lists_0/appctl_root')
+
+    @pytest.mark.functionality
+    def test_service_inspection_lists_names(
+        self, cli, fake_docker_env, appctl_root
+    ):
+        """``config --services`` returns service names.
+    
+        Spec: "returned one per line."
+        """
+        docker_env, _ = fake_docker_env
+        services_dir = appctl_root / "services"
+        services_dir.mkdir(exist_ok=True)
+        write_yaml(
+            services_dir / "docker-compose.yml",
+            {
+                "version": "3",
+                "services": {"web": {}, "db": {}},
+            },
+        )
+        result = cli(["site", "config", "--services"], env=docker_env)
+>       assert_success(result)
+
+.evaluation_tests/test_checkpoint_6.py:560: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.evaluation_tests/conftest.py:322: in assert_success
+    assert_exit_code(result, 0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'config', '--services'], returncode=1, stdout='', stderr="Error: No compose file found in '/workspace'.\n")
+code = 0
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 0, got 1.
+E         stdout: ''
+E         stderr: "Error: No compose file found in '/workspace'.\n"
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'config', '--services'], returncode=1, stdout='', stderr="Error: No compose file found in '/workspace'.\n").returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+__________ TestFunctionality.test_volume_existing_is_silently_skipped __________
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b952502c0>
+cli = <function cli.<locals>._run at 0x7c6b94c42160>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_volume_existing_is_silent0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_volume_existing_is_silent0/docker_calls.log'))
+write_config = <function write_config.<locals>._write at 0x7c6b94c434c0>
+
+    @pytest.mark.functionality
+    def test_volume_existing_is_silently_skipped(
+        self, cli, fake_docker_env, write_config
+    ):
+        """Existing computed volume names are skipped without warnings.
+    
+        Spec: "If the computed volume name already exists, the implementation
+        must skip it silently."
+        """
+        docker_env, log_file = fake_docker_env
+        write_config(
+            {
+                "volumes": [
+                    {
+                        "name": "htdocs",
+                        "path": "sites/test.example.com/htdocs",
+                        "container": "/var/www/htdocs",
+                    }
+                ]
+            },
+            kind="global",
+        )
+    
+        result = cli(
+            ["site", "create", "test.example.com", "--type=html"],
+            env=docker_env,
+        )
+    
+        assert_success(result)
+>       calls = log_file.read_text()
+                ^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:605: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_volume_existing_is_silent0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_volume_existing_is_silent0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+_______________ TestFunctionality.test_network_create_with_label _______________
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b9524f860>
+cli = <function cli.<locals>._run at 0x7c6b94c41120>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_network_create_with_label0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_network_create_with_label0/docker_calls.log'))
+
+    @pytest.mark.functionality
+    def test_network_create_with_label(self, cli, fake_docker_env):
+        """Network creation attaches tool-scoped metadata.
+    
+        Spec: a project network is created with tool-scoped metadata.
+        """
+        docker_env, log_file = fake_docker_env
+        result = cli(
+            ["site", "create", "test.example.com", "--type=html"],
+            env=docker_env,
+        )
+        assert_success(result)
+>       calls = log_file.read_text(encoding="utf-8")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:653: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_network_create_with_label0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'utf-8', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_network_create_with_label0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+__________ TestFunctionality.test_network_disconnect_failure_warning ___________
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b9524e150>
+cli = <function cli.<locals>._run at 0x7c6b94c43920>
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_network_disconnect_failur0')
+
+    @pytest.mark.functionality
+    def test_network_disconnect_failure_warning(self, cli, tmp_path):
+        """Failed disconnect warns to STDERR, non-halting.
+    
+        Spec: "Warning: Error in disconnecting from Docker network."
+        """
+        bin_dir = tmp_path / "docker_disconnect_fail_bin"
+        bin_dir.mkdir()
+        log_file = tmp_path / "docker_calls.log"
+        docker = bin_dir / "docker"
+        docker.write_text(
+            "#!/usr/bin/env sh\n"
+            f'echo "docker $@" >> "{log_file}"\n'
+            'case "$*" in\n'
+            '  *"network disconnect"*) exit 1;;\n'
+            "esac\n"
+            "exit 0\n"
+        )
+        docker.chmod(0o755)
+        compose = bin_dir / "docker-compose"
+        compose.write_text(
+            "#!/usr/bin/env sh\n"
+            f'echo "docker-compose $@" >> "{log_file}"\n'
+            "exit 0\n"
+        )
+        compose.chmod(0o755)
+        env = {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+        cli(["site", "create", "test.example.com", "--type=html"], env=env)
+        result = cli(
+            ["site", "delete", "test.example.com", "--yes"],
+            env=env,
+        )
+>       assert_stderr_contains(
+            result,
+            "Warning: Error in disconnecting from Docker network",
+        )
+
+.evaluation_tests/test_checkpoint_6.py:712: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'test.example.com', '--yes'], returncode=0, stdout="Success: Deleted site 'test.example.com'.\n", stderr='')
+fragments = ('Warning: Error in disconnecting from Docker network',)
+
+    def assert_stderr_contains(
+        result: subprocess.CompletedProcess[str], *fragments: str
+    ) -> None:
+        """Assert all *fragments* appear in stderr."""
+        for frag in fragments:
+>           assert frag in result.stderr, (
+                f"Missing {frag!r} in stderr.\nstderr: {result.stderr!r}"
+            )
+E           AssertionError: Missing 'Warning: Error in disconnecting from Docker network' in stderr.
+E             stderr: ''
+E           assert 'Warning: Error in disconnecting from Docker network' in ''
+E            +  where '' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'test.example.com', '--yes'], returncode=0, stdout="Success: Deleted site 'test.example.com'.\n", stderr='').stderr
+
+.evaluation_tests/conftest.py:344: AssertionError
+_ TestFunctionality.test_site_delete_tears_down_containers_networks_and_volumes _
+
+self = <test_checkpoint_6.TestFunctionality object at 0x7c6b9524ccb0>
+cli = <function cli.<locals>._run at 0x7c6b94c42b60>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_site_delete_tears_down_co0/fake_docker_bin:/tmp/uv-cache/archive-v0/8hzg.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_site_delete_tears_down_co0/docker_calls.log'))
+
+    @pytest.mark.functionality
+    def test_site_delete_tears_down_containers_networks_and_volumes(
+        self, cli, fake_docker_env
+    ):
+        """Site teardown removes compose resources and project network.
+    
+        Spec: tearing services down removes containers, networks, and volumes
+        defined by the compose project.
+        """
+        docker_env, log_file = fake_docker_env
+        result = cli(
+            ["site", "delete", "test.example.com", "--yes"],
+            env=docker_env,
+        )
+        assert_success(result)
+>       calls = log_file.read_text(encoding="utf-8")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_6.py:732: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/pathlib.py:1027: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-agent/pytest-0/test_site_delete_tears_down_co0/docker_calls.log')
+mode = 'r', buffering = -1, encoding = 'utf-8', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed to by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_site_delete_tears_down_co0/docker_calls.log'
+
+/usr/local/lib/python3.12/pathlib.py:1013: FileNotFoundError
+--------------------------------- JSON report ----------------------------------
+report saved to: .scbench/pytest-report.json
+=========================== short test summary info ============================
+FAILED .evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error - AssertionError: Expected exit code 1, got 0.
+  stdout: "Success: Created site 'example.test' (type: standard, title: example.test).\n"
+  stderr: ''
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout="Success: Created site 'example.test' (type: standard, title: example.test).\n", stderr='').returncode
+FAILED .evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected - AssertionError: Expected exit code 1, got 0.
+  stdout: "Success: Created site 'example.test' (type: , title: example.test).\n"
+  stderr: ''
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=0, stdout="Success: Created site 'example.test' (type: , title: example.test).\n", stderr='').returncode
+FAILED .evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command - assert 'echo prepare && appctl site list' in "-T -q user@host echo prepare; appctl 'site' 'list'\n"
+FAILED .evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_json_stdin_error - AssertionError: assert 'Error: Invalid JSON:' in '+----------------------------+\n| Error: Parameter errors:   |\n| unknown --format parameter |\n+----------------------------+\n'
+ +  where '+----------------------------+\n| Error: Parameter errors:   |\n| unknown --format parameter |\n+----------------------------+\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--format=json'], returncode=1, stdout='', stderr='+----------------------------+\n| Error: Parameter errors:   |\n| unknown --format parameter |\n+----------------------------+\n').stderr
+FAILED .evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_serializes_complex_values_as_json_strings - AssertionError: Expected exit code 0, got 1.
+  stdout: ''
+  stderr: 'Error: Invalid field: tags.\n'
+assert 1 == 0
+ +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--format=csv', '--fields=tags,meta'], returncode=1, stdout='', stderr='Error: Invalid field: tags.\n').returncode
+FAILED .evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_json_stdin_supplies_missing_positional_argument - AssertionError: Expected exit code 0, got 1.
+  stdout: ''
+  stderr: '+----------------------------+\n| Error: Parameter errors:   |\n| unknown --format parameter |\n+----------------------------+\n'
+assert 1 == 0
+ +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--type=html', '--format=json'], returncode=1, stdout='', stderr='+----------------------------+\n| Error: Parameter errors:   |\n| unknown --format parameter |\n+----------------------------+\n').returncode
+FAILED .evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_blank_response_cancels - AssertionError: Expected exit code 1, got 0.
+  stdout: "Are you sure you want to delete the 'example.test' site? [y/n] \n"
+  stderr: 'Warning: Operation cancelled.\n'
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'example.test'], returncode=0, stdout="Are you sure you want to delete the 'example.test' site? [y/n] \n", stderr='Warning: Operation cancelled.\n').returncode
+FAILED .evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_suppresses_cancellation_warning - AssertionError: Expected exit code 1, got 0.
+  stdout: "Are you sure you want to delete the 'example.test' site? [y/n] \n"
+  stderr: 'Warning: Operation cancelled.\n'
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', 'site', 'delete', 'example.test'], returncode=0, stdout="Are you sure you want to delete the 'example.test' site? [y/n] \n", stderr='Warning: Operation cancelled.\n').returncode
+FAILED .evaluation_tests/test_checkpoint_4.py::TestCore::test_detailed_execution_captures_all_fields - assert 'return' in 'debug: runtime config: {"debug": true} (0.000s)\ndebug: using global config: /tmp/pytest-of-agent/pytest-0/test_detailed_execution_captur0/appctl_root/config/config.yml (0.001s)\ndebug: no project config found (0.001s)\ndebug: resolved config: {"admin-email": null, "blog": null, "cert-email": null, "color": "auto", "context": null, "custom-compose": null, "debug": true, "disabled_commands": [], "env": null, "exec": null, "installer_version": "stable", "locale": "en_us", "path": null, "projects_path": null, "prompt": null, "quiet": false, "require": null, "skip-packages": null, "skip-plugins": null, "skip-themes": null, "skip-tty": false, "ssh": null, "sysctl": null, "url": null, "user": null} (0.024s)\ndebug: running command: help (0.024s)\n'
+FAILED .evaluation_tests/test_checkpoint_4.py::TestErrors::test_exit_code_negative_1_warning - AssertionError: assert 'Warning' in ''
+ +  where '' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='+------+--------------------------+----------+--------+\n| name | url                      | type     | status |\n+------+--------------------------+----------+--------+\n| main | https://example.com      | standard | active |\n| blog | https://blog.example.com | blog     | active |\n+------+--------------------------+----------+--------+\n', stderr='').stderr
+FAILED .evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_non_writable_nested_archive_entry_warns_with_relative_path - AssertionError: Expected exit code 1, got 0.
+  stdout: "Success: Extracted '/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/nested-warning.zip' to '/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/extracted'.\n"
+  stderr: ''
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'cli', 'update', '--archive=/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/nested-warning.zip', '--path=/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/extracted'], returncode=0, stdout="Success: Extracted '/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/nested-warning.zip' to '/tmp/pytest-of-agent/pytest-0/test_non_writable_nested_archi0/extracted'.\n", stderr='').returncode
+FAILED .evaluation_tests/test_checkpoint_5.py::TestCore::test_option_write_insert_then_read - sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+FAILED .evaluation_tests/test_checkpoint_5.py::TestCore::test_option_upsert_overwrites - sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+FAILED .evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_all_values_stored_as_strings - sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+FAILED .evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_empty_string_value_is_not_treated_as_missing - sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+FAILED .evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_parameterized_queries - sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+FAILED .evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_existing_db_opens_without_recreating - sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on
+FAILED .evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_running - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_container_status_running0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_exited - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_container_status_exited0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_false_not_exists - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_container_status_false_no0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestCore::test_compose_merge_base_always_first - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_compose_merge_base_always0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestCore::test_project_naming_prefix - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_project_naming_prefix0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestCore::test_volume_creation_with_labels - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_volume_creation_with_labe0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestErrors::test_container_runtime_not_installed_error - AssertionError: Expected exit code 1, got 0.
+  stdout: '+------+--------------------------+----------+--------+\n| name | url                      | type     | status |\n+------+--------------------------+----------+--------+\n| main | https://example.com      | standard | active |\n| blog | https://blog.example.com | blog     | active |\n+------+--------------------------+----------+--------+\n'
+  stderr: ''
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='+------+--------------------------+----------+--------+\n| name | url                      | type     | status |\n+------+--------------------------+----------+--------+\n| main | https://example.com      | standard | active |\n| blog | https://blog.example.com | blog     | active |\n+------+--------------------------+----------+--------+\n', stderr='').returncode
+FAILED .evaluation_tests/test_checkpoint_6.py::TestErrors::test_network_connect_failure_raises - AssertionError: Network connect failure must produce an error or warning message
+assert ('error' in "success: created site 'test.example.com' (type: html, title: test.example.com).\n" or 'warning' in "success: created site 'test.example.com' (type: html, title: test.example.com).\n")
+ +  where "success: created site 'test.example.com' (type: html, title: test.example.com).\n" = <built-in method lower of str object at 0x7c6b948b82b0>()
+ +    where <built-in method lower of str object at 0x7c6b948b82b0> = "Success: Created site 'test.example.com' (type: html, title: test.example.com).\n".lower
+ +  and   "success: created site 'test.example.com' (type: html, title: test.example.com).\n" = <built-in method lower of str object at 0x7c6b948b82b0>()
+ +    where <built-in method lower of str object at 0x7c6b948b82b0> = "Success: Created site 'test.example.com' (type: html, title: test.example.com).\n".lower
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_exited_starts - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_boot_container_exited_sta0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_running_noop - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_boot_container_running_no0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_not_exists_creates - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_boot_container_not_exists0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_configured_custom_compose_applies_after_base - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_configured_custom_compose0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_compose_directory_ignores_non_compose_files_in_call_order - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_compose_directory_ignores0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_missing_custom_compose_warns_and_falls_back_to_base - AssertionError: Missing 'Warning: File: /tmp/pytest-of-agent/pytest-0/test_missing_custom_compose_wa0/appctl_root/services/missing-compose.yml does not exist. Falling back to default compose file.' in stderr.
+  stderr: ''
+assert 'Warning: File: /tmp/pytest-of-agent/pytest-0/test_missing_custom_compose_wa0/appctl_root/services/missing-compose.yml does not exist. Falling back to default compose file.' in ''
+ +  where '' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='+------+--------------------------+----------+--------+\n| name | url                      | type     | status |\n+------+--------------------------+----------+--------+\n| main | https://example.com      | standard | active |\n| blog | https://blog.example.com | blog     | active |\n+------+--------------------------+----------+--------+\n', stderr='').stderr
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_skip_tty_string_truthy_disables_tty - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_skip_tty_string_truthy_di0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_skip_tty_flag_passed - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_skip_tty_flag_passed0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_service_inspection_lists_names - AssertionError: Expected exit code 0, got 1.
+  stdout: ''
+  stderr: "Error: No compose file found in '/workspace'.\n"
+assert 1 == 0
+ +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'config', '--services'], returncode=1, stdout='', stderr="Error: No compose file found in '/workspace'.\n").returncode
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_volume_existing_is_silently_skipped - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_volume_existing_is_silent0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_network_create_with_label - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_network_create_with_label0/docker_calls.log'
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_network_disconnect_failure_warning - AssertionError: Missing 'Warning: Error in disconnecting from Docker network' in stderr.
+  stderr: ''
+assert 'Warning: Error in disconnecting from Docker network' in ''
+ +  where '' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'test.example.com', '--yes'], returncode=0, stdout="Success: Deleted site 'test.example.com'.\n", stderr='').stderr
+FAILED .evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_site_delete_tears_down_containers_networks_and_volumes - FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-agent/pytest-0/test_site_delete_tears_down_co0/docker_calls.log'
+======================= 38 failed, 146 passed in 37.26s ========================

@@ -1,0 +1,629 @@
+{
+ "sith|c1|read": [
+  "cd /workspace; ls -la; cat requirements.txt; wc -l *.py; ls tests 2>/dev/null | head; cat /tmp/agent_home/.claude/projects/-workspace/memory",
+  "cd /workspace; sed -n 1,400p sith.py"
+ ],
+ "sith|c1|install_or_ref_lib": [
+  "cd /workspace; ls venv/lib/*/site-packages; venv/bin/python --version; ls / /tmp /tmp/agent_home 2>/dev/null; find / -name \"*.py\" -newer req"
+ ],
+ "sith|c1|install_or_ref_lib+probe_tmp": [
+  "mkdir -p /tmp/ref && cd /tmp/ref && python3 -m venv jv >/dev/null 2>&1; /tmp/ref/jv/bin/pip install jedi 2>&1 | tail -2",
+  "mkdir -p /tmp/ref/p && cd /tmp/ref/p && cat > example.py <<'EOF' \u23ce import os \u23ce from dataclasses import dataclass \u23ce  \u23ce  \u23ce class Calculator: \u23ce     \"\"\"A ca"
+ ],
+ "sith|c1|probe_tmp": [
+  "cd /tmp/ref/p && cat > t2.py <<'EOF' \u23ce a = None \u23ce a \u23ce def g(k, m: int = 3, *args, **kw): \u23ce     return k \u23ce import os.path as osp \u23ce from example import Ca",
+  "cd /tmp/ref/p && cat > t3.py <<'EOF' \u23ce def main(): \u23ce     c = Later() \u23ce     c \u23ce     v \u23ce class Later: \u23ce     pass \u23ce v = 1 \u23ce v = \"s\" \u23ce def g(): \u23ce     return v \u23ce r = g"
+ ],
+ "sith|c1|edit_tool": [
+  "/tmp/ref/partB.py",
+  "/tmp/ref/partD.py"
+ ],
+ "sith|c1|probe_tmp+static_check": [
+  "cd /tmp/ref && python3 - <<'EOF' \u23ce import re \u23ce orig = open('sith_orig.py').read().split('\\n') \u23ce A = '\\n'.join(orig[:217])  # lines 1..217 \u23ce C = '\\n'",
+  "cd /tmp && python3 -c \" \u23ce import builtins,keyword \u23ce d=dir(builtins); print([x for x in d if x in keyword.kwlist]); print([x for x in d if x.star"
+ ],
+ "sith|c1|edit_script": [
+  "python3 - <<'EOF' \u23ce p='sith.py'; s=open(p).read() \u23ce def rep(a,b,cnt=1): \u23ce     global s \u23ce     n=s.count(a) \u23ce     assert n==cnt, (a,n) \u23ce     s=s.replace(a",
+  "cp sith.py /tmp/sith_orig.py && python3 - <<'EOF' \u23ce import re \u23ce p='sith.py' \u23ce s=open(p).read() \u23ce  \u23ce old_init='''class Engine: \u23ce     def __init__(self, r"
+ ],
+ "sith|c1|edit_script+probe_tmp": [
+  "python3 - <<'EOF' \u23ce p='/workspace/sith.py'; s=open(p).read() \u23ce def rep(a,b,cnt=1): \u23ce     global s \u23ce     n=s.count(a) \u23ce     assert n==cnt, (a,n) \u23ce     s=",
+  "python3 - <<'EOF' \u23ce p='/workspace/sith.py'; s=open(p).read() \u23ce def rep(a,b,cnt=1): \u23ce     global s \u23ce     n=s.count(a) \u23ce     assert n==cnt, (a,n) \u23ce     s="
+ ],
+ "sith|c1|probe_run": [
+  "venv/bin/python -c \" \u23ce import sys, sysconfig; print(sys.version); print(len(sys.stdlib_module_names)); print(sysconfig.get_paths()['stdlib'], ",
+  "ls -la && cat requirements.txt && printf '' > /tmp/s/empty.py && venv/bin/python sith.py complete /tmp/s/empty.py 1 0 | head -c 120; echo; v"
+ ],
+ "sith|c1|edit_script+probe_tmp+static_check": [
+  "cd /workspace; python - <<'EOF' \u23ce s = open('sith.py').read() \u23ce old = '''    existing = read_project_config(d) \u23ce     if existing:''' \u23ce assert s.count"
+ ],
+ "sith|c1|edit_script+probe_run+static_check": [
+  "cd /workspace; python - <<'EOF' \u23ce s = open('sith.py').read() \u23ce old = '''    python sith.py errors <file> \u23ce \"\"\"''' \u23ce assert s.count(old) == 1 \u23ce s = s.r"
+ ],
+ "sith|c1|locate": [
+  "ls -la && python3 --version && ls /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null",
+  "grep -n \"is_package\" sith.py"
+ ],
+ "sith|c1|probe_run+static_check": [
+  "venv/bin/python -m py_compile sith.py && echo ok; venv/bin/python sith.py bogus; echo $?; venv/bin/python sith.py rename x.py 1 1; echo $?; "
+ ],
+ "sith|c1|other:Monitor": [
+  "until grep -q \"^total\" /tmp/reg/big.log || ! pgrep -f \"cmp.py 250\" >/dev/null; do sleep 5; done; tail -5 /tmp/reg/big.log",
+  "until grep -q \"^total\" /tmp/reg/big.log || ! pgrep -f \"cmp.py 250\" >/dev/null; do sleep 5; done; tail -5 /tmp/reg/big.log"
+ ],
+ "sith|c1|other:TaskStop": [
+  "",
+  ""
+ ],
+ "sith|c2|read": [
+  "ls -la && cat requirements.txt 2>/dev/null; find . -path ./.venv -prune -o -type f -print | grep -v __pycache__ | head -100; ls /tmp/agent_h",
+  "cd /workspace; wc -l sith.py sithlib/*.py tests/*.py; cat sith.py sithlib/cli.py sithlib/__init__.py"
+ ],
+ "sith|c2|locate": [
+  "cd /workspace; ls .venv/bin; .venv/bin/python --version; .venv/bin/python -m pip list 2>/dev/null; which python; python --version",
+  "cd /workspace; wc -l sithlib/*.py; grep -n \"^    def \\|^def \\|^class \" sithlib/inference.py"
+ ],
+ "sith|c2|own_test_run": [
+  "cd /workspace; .venv/bin/python -m pytest --version 2>&1 | head -1; .venv/bin/python -m unittest tests.test_sith 2>&1 | tail -3",
+  ".venv/bin/python -m unittest -v tests.test_sith 2>&1 | head -0; for t in AttributeCompletionTests NameCompletionTests ToleranceAndErrorTests"
+ ],
+ "sith|c2|edit_script": [
+  "cd /workspace; python - <<'EOF' \u23ce import re \u23ce p='sithlib/scopes.py' \u23ce s=open(p).read() \u23ce rep = [ \u23ce (\"\"\"    value: ast.AST = None \u23ce     extra: dict = fie",
+  "cd /workspace; python - <<'EOF' \u23ce p='sithlib/modules.py' \u23ce s=open(p).read() \u23ce rep=[ \u23ce ('''    def __init__(self, path, name, tree): \u23ce         self.pat"
+ ],
+ "sith|c2|edit_tool": [
+  "/workspace/sithlib/flow.py",
+  "/workspace/sithlib/inference.py"
+ ],
+ "sith|c2|edit_script+own_test_run": [
+  "cd /workspace; python - <<'EOF' \u23ce p='sithlib/members.py' \u23ce s=open(p).read() \u23ce start=s.index('class MemberResolver:') \u23ce end=s.index('def _self_attrib",
+  "cd /workspace; python - <<'EOF' \u23ce p='sithlib/completion.py' \u23ce s=open(p).read() \u23ce rep=[('''        module = ModuleContext(self.document.path, \"__ma"
+ ],
+ "sith|c2|probe_tmp": [
+  "mkdir -p /tmp/scratch && cd /tmp/scratch && cat > example.py <<'EOF' \u23ce import os \u23ce from dataclasses import dataclass \u23ce  \u23ce  \u23ce class Calculator: \u23ce     \"\"\"",
+  "cd /tmp/scratch && grep -n \"\" example.py | sed -n '34,48p'; for args in \"infer example.py 36 0\" \"goto example.py 36 0\" \"infer example.py 37 "
+ ],
+ "sith|c2|edit_script+probe_tmp": [
+  "cd /workspace; python - <<'EOF' \u23ce p='sithlib/inference.py' \u23ce s=open(p).read() \u23ce a='''        elif binding.kind == \"augassign\": \u23ce             if fact",
+  "cd /workspace; python - <<'EOF' \u23ce p='sithlib/flow.py' \u23ce s=open(p).read() \u23ce a='''    def run(self, initial): \u23ce         if self.scope.kind in (LAMBDA,"
+ ],
+ "sith|c2|own_test_run+probe_tmp": [
+  "cd /tmp/scratch && time ./q.sh infer example.py 38 0 >/dev/null && time ./q.sh complete narrow.py 44 8 > /dev/null; cd /workspace && .venv/b",
+  "cd /workspace; for t in AttributeCompletionTests NameCompletionTests ToleranceAndErrorTests; do s=$(date +%s.%N); .venv/bin/python -m unitte"
+ ],
+ "sith|c2|own_test_run+probe_run": [
+  "cd /workspace; .venv/bin/python - <<'EOF' \u23ce import time, unittest, sys \u23ce sys.path.insert(0, '.') \u23ce from tests import test_sith \u23ce loader = unittest.T",
+  "cd /workspace; .venv/bin/python -m pytest -q tests 2>&1 | tail -5 || .venv/bin/python -m unittest discover -s tests 2>&1 | tail -5; .venv/bi"
+ ],
+ "sith|c2|probe_run+static_check": [
+  "cd /workspace; .venv/bin/python -m pyflakes --version 2>/dev/null || python3 -m pyflakes --version 2>/dev/null || echo \"no pyflakes\"; grep -"
+ ],
+ "sith|c2|probe_run": [
+  "cd /workspace; python3 - <<'EOF' \u23ce import ast, glob \u23ce for path in sorted(glob.glob('sithlib/*.py')): \u23ce     src = open(path).read(); tree = ast.par",
+  "cd /workspace; sed -n 225,280p sithlib/signatures.py; sed -n 1,60p sithlib/listing.py; sed -n 70,100p sithlib/references.py; ls -la .venv/bi"
+ ],
+ "sith|c2|edit_script+own_test_run+probe_tmp": [
+  "cd /workspace; python3 - <<'EOF' \u23ce p='sithlib/members.py' \u23ce s=open(p).read() \u23ce a='''                if name in cls.scope.bindings: \u23ce                "
+ ],
+ "sith|c2|edit_script+probe_run": [
+  "cd /workspace; sed -i 's|    python sith.py goto <file> <line> <col> \\[--project DIR\\]|    python sith.py goto <file> <line> <col> [--follow",
+  "cd /workspace; python - <<'EOF' \u23ce def edit(p, pairs): \u23ce     s=open(p).read() \u23ce     for a,b in pairs: \u23ce         assert s.count(a)==1,(p,a) \u23ce         s="
+ ],
+ "sith|c2|bash_other": [
+  "rm -rf /tmp/t1 /tmp/t2 /tmp/t3 /tmp/t4"
+ ],
+ "sith|c2|edit_script+install_or_ref_lib": [
+  "cat > sithlib/completion.py <<'EOF' \u23ce \"\"\"The completion engine: ties context, parsing, scopes and inference together.\"\"\" \u23ce import ast \u23ce from datac"
+ ],
+ "sith|c3|read": [
+  "cd /workspace; ls -la; cat requirements.txt; ls -a tests* 2>/dev/null | head; wc -l *.py; cat /tmp/agent_home/.claude/projects/-workspace/me",
+  "cd /workspace; which python; python --version; ls -d .venv venv 2>/dev/null; echo $VIRTUAL_ENV; find . -name \"*.py\" -not -path \"./.venv/*\" -"
+ ],
+ "sith|c3|install_or_ref_lib+probe_run": [
+  "cd /workspace; ls -la sithlib; python -c \"import jedi\" 2>&1; timeout 15 .venv/bin/pip download jedi --no-deps -d /tmp/jd 2>&1 | tail -2; ls ",
+  "cd /workspace && .venv/bin/python -c \" \u23ce import sys, sysconfig, os \u23ce print(sysconfig.get_paths()) \u23ce print('__future__' in sys.stdlib_module_names,"
+ ],
+ "sith|c3|locate": [
+  "ls /tmp/jd",
+  "grep -n \"^class \\|^def \\|^    def \\|^[A-Z_]* = \" sithlib/inference.py"
+ ],
+ "sith|c3|install_or_ref_lib+probe_tmp": [
+  "cd /tmp && .venv_dummy=1; /workspace/.venv/bin/pip install --target /tmp/jediref jedi -q 2>&1 | tail -1; ls /tmp/jediref",
+  "mkdir -p /tmp/t && cd /tmp/t && cat > example.py <<'EOF' \u23ce import os \u23ce from dataclasses import dataclass \u23ce import dataclasses as dc \u23ce from typing im"
+ ],
+ "sith|c3|edit_script": [
+  "python - <<'EOF' \u23ce import re \u23ce p='sithlib/scopes.py' \u23ce s=open(p).read() \u23ce  \u23ce s=s.replace('''class Binding: \u23ce     \"\"\"One event that binds a name (or, for",
+  "python - <<'EOF' \u23ce p='sithlib/scopes.py' \u23ce s=open(p).read() \u23ce s=s.replace(\"self.instance_events = []  # self.<attr> assignments in __init__ (class"
+ ],
+ "sith|c3|edit_tool": [
+  "/workspace/sithlib/flow.py",
+  "/workspace/sithlib/inference.py"
+ ],
+ "sith|c3|probe_tmp": [
+  "cd /tmp/t; grep -n \"\" example.py | sed -n '40,85p'",
+  "cd /tmp/t; for pos in \"49 7\" \"50 0\" \"54 10\" \"66 11\" \"71 8\" \"73 8\" \"75 8\" \"81 4\" \"44 12\"; do echo \"== infer $pos: $(sed -n \"${pos% *}p\" examp"
+ ],
+ "sith|c3|edit_script+probe_tmp": [
+  "python - <<'EOF' \u23ce p='sithlib/inference.py' \u23ce s=open(p).read() \u23ce a='''        cls = StaticClass(owner.tree.analysis, owner) \u23ce         return [i for ",
+  "python - <<'EOF' \u23ce p='sithlib/inference.py' \u23ce s=open(p).read() \u23ce rep=[ \u23ce ('''class DictInstance(RuntimeInstance):''','''class ValueSequence(RuntimeI"
+ ],
+ "sith|c3|other:Monitor": [
+  "until grep -q \"^runs\" /tmp/claude-1000/-workspace/aeb7e65a-6adb-4fd6-a183-a2f68fc78299/tasks/bk2k2gghv.output; do sleep 5; done; tail -30 /t"
+ ],
+ "sith|c3|other:TaskStop": [
+  "",
+  ""
+ ],
+ "sith|c3|edit_script+own_test_run": [
+  "mkdir -p /workspace/tests && cat > /workspace/tests/test_navigation.py <<'EOF' \u23ce \"\"\"End-to-end tests for ``sith.py infer`` / ``goto`` / ``comp",
+  "sed -i 's/        line = len(self.lines) + 1/        line = len(self.lines)/' tests/test_navigation.py && python -m unittest tests.test_navi"
+ ],
+ "sith|c3|own_test_run": [
+  "python -m unittest tests.test_navigation 2>&1 | grep -B3 -A12 \"^ERROR\\|^FAIL\" | head -40",
+  "cd /workspace && .venv/bin/python -m unittest discover -s tests 2>&1 | tail -30"
+ ],
+ "sith|c3|edit_script+install_or_ref_lib+probe_run+static_check": [
+  "python - <<'EOF' \u23ce p='sithlib/flow.py' \u23ce s=open(p).read() \u23ce a='''        node = scope.node \u23ce         if isinstance(node, ast.Lambda) or node is None"
+ ],
+ "sith|c3|probe_run+static_check": [
+  "ls /tmp/pf | head -3; PYTHONPATH=/tmp/pf python -m pyflakes sith.py sithlib/ tests/; echo \"rc=$?\""
+ ],
+ "sith|c3|own_test_run+probe_tmp": [
+  "python -m unittest tests.test_navigation 2>&1 | tail -2; cd /tmp/sw && STEP=40 timeout 500 python -u /tmp/sweep.py *.py 2>&1 | grep -v NOTNA",
+  "cd /tmp/p2 && S=\"/workspace/.venv/bin/python /workspace/sith.py\"; $S infer app/pkg/mod.py 1 16 --project .; $S infer app/pkg/mod.py 3 19 --p"
+ ],
+ "sith|c3|edit_script+own_test_run+probe_tmp": [
+  "cd /workspace/sithlib && python3 - <<'EOF' \u23ce p='navigation.py' \u23ce s=open(p).read() \u23ce old='''            prefix = None \u23ce             if isinstance(mod"
+ ],
+ "sith|c3|probe_run": [
+  "sed -n 1280,1350p sithlib/inference.py; sed -n 1,80p sithlib/signatures.py; grep -n \"Project(\" sithlib/*.py; grep -n \"def definition_positio",
+  ".venv/bin/python -c \" \u23ce import pstats; pstats.Stats('/tmp/prof').sort_stats('cumtime').print_stats(40)\" | head -60; "
+ ],
+ "sith|c3|edit_script+install_or_ref_lib": [
+  "python - <<'EOF' \u23ce p='sithlib/modules.py' \u23ce s=open(p).read() \u23ce old='''    def search_roots(self, importer_path=None): \u23ce         roots = [self._proje",
+  "cd /workspace/sithlib && python3 - <<'EOF' \u23ce import re \u23ce p='modules.py' \u23ce s=open(p).read() \u23ce s=s.replace('''Secret: how an imported module name is f"
+ ],
+ "sith|c3|edit_script+probe_run": [
+  "python - <<'EOF' \u23ce p='sithlib/environments.py' \u23ce s=open(p).read() \u23ce old='''    candidates = [sys.executable] if sys.executable else [] \u23ce     directo",
+  "python3 - <<'EOF' \u23ce p='cursor.py' \u23ce s=open(p).read() \u23ce def rep(old, new, count=1): \u23ce     global s \u23ce     assert s.count(old) == count, (old, s.count(ol"
+ ],
+ "sith|c3|own_test_run+probe_run": [
+  "time .venv/bin/python -m unittest discover -s tests 2>&1 | tail -1; .venv/bin/python -c \" \u23ce import cProfile,pstats,sys,io \u23ce sys.argv=['sith.py']",
+  "cd /workspace; P=.venv/bin/python \u23ce $P sith.py signatures /tmp/sp/main.py 5 6 --project /tmp/sp; $P sith.py signatures /tmp/sp/main.py 4 0 --p"
+ ],
+ "sith|c3|install_or_ref_lib": [
+  "cd /workspace; cat sith.py; wc -l sithlib/*.py tests/*.py; .venv/bin/python --version; ls .venv/lib/*/site-packages",
+  "cd /workspace; ls -la .venv .venv/lib/*/site-packages | head -30; ls -la tests/__pycache__; ls / /tmp; find / -name \"*.md\" -newer /etc/hostn"
+ ],
+ "sith|c3|edit_script+own_test_run+probe_run": [
+  "cd /workspace/sithlib && python3 - <<'EOF' \u23ce p='inference.py' \u23ce s=open(p).read() \u23ce old='''        if declarations == [(self, function.scope)]: \u23ce    "
+ ],
+ "eve_industry|c1|read": [
+  "cd /workspace; ls -la; cat requirements.txt; ls -la */ 2>/dev/null | head -50; wc -l industry.py",
+  "cd /workspace; cat industry.py"
+ ],
+ "eve_industry|c1|locate": [
+  "cd /workspace/sde; for f in industryActivity industryActivityMaterials industryActivityProbabilities industryActivityProducts industryActivi",
+  "cd /workspace/sde; bzcat invMetaGroups.csv.bz2; bzcat ramActivities.csv.bz2; bzcat invTypes.csv.bz2 | grep -E ',(Naga|Barrage L|Barrage L Bl"
+ ],
+ "eve_industry|c1|probe_run": [
+  "cd /workspace; .venv/bin/python -c \" \u23ce for b in (0.26,0.21,0.14): \u23ce   for m in (0,20,80,-40,90,-10,50,10): \u23ce     p=b*(1+10/30+5/40)*(1+m/100) \u23ce     ",
+  ".venv/bin/python industry.py recipe Naga --sde sde; .venv/bin/python industry.py recipe Naga Blueprint --sde sde | tail -3"
+ ],
+ "eve_industry|c1|probe_tmp": [
+  "mkdir -p /tmp/work && cd /tmp/work && cat > search.py <<'EOF' \u23ce from decimal import Decimal, ROUND_HALF_UP, ROUND_HALF_EVEN \u23ce import itertools, ",
+  "cd /tmp/work && cat > e1.txt <<'EOF' \u23ce ITEM: Barrage L (12775) \u23ce Group: Charge > Advanced Autocannon Ammo \u23ce Market Group: Ammunition & Charges > P"
+ ],
+ "eve_industry|c1|edit_script": [
+  ".venv/bin/python - <<'EOF' \u23ce src=open('industry.py').read() \u23ce  \u23ce src=src.replace('''MANUFACTURING = 1 \u23ce REACTIONS = 11''','''MANUFACTURING = 1 \u23ce REVER",
+  ".venv/bin/python - <<'EOF' \u23ce import re \u23ce src = open('industry.py').read() \u23ce  \u23ce # 1. refactor invention_plan into setup + plan \u23ce old_start = src.index("
+ ],
+ "eve_industry|c1|edit_script+probe_tmp": [
+  ".venv/bin/python - <<'EOF' \u23ce src=open('industry.py').read() \u23ce old='''    t3 = tech == \"Tech III\" \u23ce  \u23ce     if t3: \u23ce         relics.sort(key=lambda r: (",
+  ".venv/bin/python - <<'EOF' \u23ce src = open('industry.py').read() \u23ce start = src.index(\"def component_order(\") \u23ce end = src.index(\"def write_plan(\") \u23ce new"
+ ],
+ "eve_industry|c1|edit_script+probe_run": [
+  ".venv/bin/python - <<'EOF' \u23ce import re \u23ce p='industry.py' \u23ce s=open(p).read() \u23ce s=s.replace(\"from decimal import Decimal, InvalidOperation\\n\",\"from de",
+  ".venv/bin/python - <<'EOF' \u23ce src = open('industry.py').read() \u23ce plan_code = r''' \u23ce SECONDS_PER_DAY = 86400 \u23ce MAX_TE = 20 \u23ce  \u23ce  \u23ce class PlanError(Exception"
+ ],
+ "eve_industry|c1|edit_tool": [
+  "/workspace/industry.py",
+  "/workspace/industry.py"
+ ],
+ "eve_industry|c1|edit_script+install_or_ref_lib+probe_run": [
+  "cd /workspace && python3 -m venv .venv && .venv/bin/pip install -q pyyaml && echo \"PyYAML>=6.0\" > requirements.txt && for n in Naga \"Barrage"
+ ],
+ "eve_industry|c2|read": [
+  "cd /workspace; ls -la; cat requirements.txt; ls -la */ | head -50; wc -l industry.py",
+  "cd /workspace; cat industry.py"
+ ],
+ "eve_industry|c2|probe_run": [
+  "cd /workspace/sde; bzcat invTypes.csv.bz2 | python3 -c \" \u23ce import csv,sys \u23ce for r in csv.DictReader(sys.stdin): \u23ce     if 'Proteus' in r['typeName'",
+  "cd /workspace; bzcat sde/industryActivityProbabilities.csv.bz2 | awk -F, 'NR>1 && $4>0.4' | head -2; id=$(bzcat sde/industryActivityProbabil"
+ ],
+ "eve_industry|c2|probe_tmp": [
+  "cd /tmp; cat > /tmp/t.py <<'EOF' \u23ce dec=[0,20,80,-40,90,-10,50,10,0] \u23ce exp={0.26:\"37.92 45.50 68.25 22.75 72.04 34.13 56.88 41.71 37.92\",0.21:\"30",
+  "cat > /tmp/t2.py <<'EOF' \u23ce import math \u23ce from decimal import Decimal, ROUND_HALF_UP, ROUND_HALF_EVEN \u23ce dec=[0,20,80,-40,90,-10,50,10,0] \u23ce cases=[] \u23ce e"
+ ],
+ "eve_industry|c2|locate": [
+  "cd /workspace; for id in 30187 30558; do bzcat sde/invTypes.csv.bz2 | grep \"^$id,\" | cut -d, -f1-3,11; grep \"^$id,\" /tmp/s8; bzcat sde/indus"
+ ],
+ "eve_industry|c2|edit_script": [
+  "cd /workspace/eve_industry; python3 - <<'EOF' \u23ce p='constants.py' \u23ce s=open(p).read() \u23ce s=s.replace(\"\"\"REACTIONS = 11 \u23ce \"\"\",\"\"\"REACTIONS = 11 \u23ce REVERSE_",
+  "cd eve_industry && python - <<'EOF' \u23ce import re \u23ce p='models.py'; s=open(p).read() \u23ce s=s.replace(\"\"\"    quantity: int \u23ce     buildable: bool \u23ce \"\"\",\"\"\"  "
+ ],
+ "eve_industry|c2|edit_tool": [
+  "/workspace/eve_industry/invention.py",
+  "/workspace/eve_industry/plan.py"
+ ],
+ "eve_industry|c2|edit_script+probe_run": [
+  "cd /workspace/eve_industry; python3 - <<'EOF' \u23ce p='cli.py' \u23ce s=open(p).read() \u23ce s=s.replace(\"\"\"from .industry_data import IndustryData \u23ce \"\"\",\"\"\"from",
+  "python - <<'EOF' \u23ce p='cli.py'; s=open(p).read() \u23ce s=s.replace('''from .recipe import RecipeError, RecipeResolver''','''from .recipe import MAX_M"
+ ],
+ "eve_industry|c2|edit_script+probe_tmp": [
+  "mkdir -p /tmp/exp; cd /tmp/exp \u23ce cat > b5 <<'EOF' \u23ce ITEM: Barrage L (12775) \u23ce Group: Charge > Advanced Autocannon Ammo \u23ce Market Group: Ammunition & ",
+  "cd /workspace; mkdir -p /tmp/ex && cd /tmp/ex && cat > config.yaml <<'EOF' \u23ce split_days: 30 \u23ce  \u23ce component_bpo_defaults:  \u23ce   me: 10 \u23ce   te: 20 \u23ce  \u23ce te_bo"
+ ],
+ "eve_industry|c2|probe_run+static_check": [
+  "cd /workspace; .venv/bin/python -m pyflakes eve_industry 2>/dev/null || .venv/bin/python -W error -c \"import eve_industry.cli, eve_industry.",
+  "cd /workspace; sed -n 200,260p eve_industry/plan.py; python -m pyflakes eve_industry 2>/dev/null || .venv/bin/python -m py_compile eve_indus"
+ ],
+ "eve_industry|c2|edit_script+install_or_ref_lib+probe_run": [
+  "cat > eve_industry/recipe.py <<'EOF' \u23ce \"\"\"Resolves a product or blueprint name into a concrete recipe.\"\"\" \u23ce  \u23ce import math \u23ce from typing import Opti"
+ ],
+ "eve_industry|c3|read": [
+  "cd /workspace; ls -la; cat requirements.txt; ls -la */ | head -50; wc -l industry.py",
+  "cd /workspace; cat industry.py sde_source.py catalog.py blueprints.py report.py volumes.py"
+ ],
+ "eve_industry|c3|probe_tmp": [
+  "cd /workspace; cat > /tmp/explore.py <<'EOF' \u23ce import sys; sys.path.insert(0,'/workspace') \u23ce import sde_source as s, catalog \u23ce from collections im",
+  "cd /workspace; cat >> /tmp/explore.py <<'EOF' \u23ce print('----') \u23ce for p,v in multi: \u23ce     item=mf.get(p) \u23ce     print(c.name(item) if item in c._types "
+ ],
+ "eve_industry|c3|edit_script+probe_run": [
+  "cd /workspace; sed -i 's/s=int(row\\[.skillID.\\]); /s=int(row[\"skillID\"])\\n        if not c.is_valid(s): cnt[(\"INVALID\",s)]+=1; continue\\n   ",
+  "cd /workspace; python3 - <<'EOF' \u23ce p='industry.py' \u23ce s=open(p).read() \u23ce s=s.replace('''Usage: python industry.py recipe <Product or Blueprint name"
+ ],
+ "eve_industry|c3|probe_run": [
+  "cd /workspace; python3 -c \" \u23ce for s in ['| Invented From                | Decryptor                       | Probability | Runs | ME | TE |','|",
+  "cd /workspace; .venv/bin/python - <<'EOF' \u23ce import catalog, invention, invention_report, industry \u23ce from collections import Counter \u23ce c=catalog.Ca"
+ ],
+ "eve_industry|c3|edit_script": [
+  "cd /workspace; cat >> sde_source.py <<'EOF' \u23ce  \u23ce  \u23ce def activity_skills(sde_dir): \u23ce     \"\"\"Yield (blueprint_type_id, activity_id, skill_type_id, lev",
+  "cd /workspace; sed -i 's/                quality, base, base_runs = _RELICS/                _, base, base_runs = _RELICS/' invention.py; cat"
+ ],
+ "eve_industry|c3|edit_tool": [
+  "/workspace/invention.py",
+  "/workspace/sde_source.py"
+ ],
+ "eve_industry|c3|edit_script+probe_tmp": [
+  "cat > stock_list.py <<'EOF' \u23ce \"\"\"Parsing of stockpile and stock target lists. \u23ce  \u23ce Secret: the textual format of a list -- one \"{Item Name} {Quant",
+  ".venv/bin/python - <<'EOF' \u23ce src = open('plan_report.py').read() \u23ce src = src.replace(\"[(p.name, p.quantity, repr(float(p.volume)), 0, 0) for p i"
+ ],
+ "eve_industry|c3|edit_script+install_or_ref_lib": [
+  "cd /workspace && python3 -m venv .venv && echo \"PyYAML>=6.0\" > requirements.txt && .venv/bin/pip install -q -r requirements.txt && echo ok"
+ ],
+ "eve_industry|c3|edit_script+git+probe_run": [
+  "cd /workspace; python - <<'EOF' \u23ce s=open('blueprints.py').read() \u23ce s=s.replace('''    \"\"\"Units needed: ceil(max(1, quantity * (1 - ME/100) * run"
+ ],
+ "recli|c1|read": [
+  "ls -la && find . -path ./node_modules -prune -o -path './.git' -prune -o -type f -print | grep -v -E '/(venv|\\.venv|__pycache__)/' | head -1",
+  "cd /workspace; sed -n 1,60p appctl.py; sed -n 2040,2330p appctl.py"
+ ],
+ "recli|c1|install_or_ref_lib": [
+  "cd /workspace; wc -l appctl.py; grep -n -E '^(class |def |    def |[A-Z_]+ = )' appctl.py | head -400; ls .venv/lib/*/site-packages | head -",
+  "cd /workspace; cat appctl.py; ls .venv/lib/*/site-packages; ls __pycache__"
+ ],
+ "recli|c1|locate": [
+  "cd /workspace; ls -la __pycache__ .venv/bin; ls -la /workspace/..; ls /tmp /tmp/agent_home 2>/dev/null",
+  "cd /workspace; grep -n -E 'packages_dir|MIGRATIONS|run_migrations|Option\\.|Migration\\.|DockerError|docker_run|delem|5GB|disk' appctl.py | gr"
+ ],
+ "recli|c1|edit_tool": [
+  "/tmp/migrations_block.py",
+  "/tmp/upgrade_block.py"
+ ],
+ "recli|c1|probe_tmp+static_check": [
+  "cd /workspace; python3 - <<'EOF' \u23ce src = open('appctl.py').read() \u23ce start = src.index('class MigrationError(Exception):') \u23ce end = src.index('# ---"
+ ],
+ "recli|c1|probe_tmp": [
+  "mkdir -p /tmp/t && cd /tmp/t && cat > fakedocker.sh <<'EOF' \u23ce #!/bin/bash \u23ce echo \"$*\" >> \"$FAKE_LOG\" \u23ce case \"$*\" in \u23ce   \"info --format {{.DockerRoot",
+  "cd /tmp/t && rm -rf r1 && export FAKE_LOG=/tmp/t/log1 && rm -f $FAKE_LOG && PATH=/tmp/t/bin:$PATH APPCTL_ROOT_DIR=/tmp/t/r1 python3 /workspa"
+ ],
+ "recli|c1|edit_script+probe_tmp": [
+  "python3 - <<'EOF' \u23ce src=open('appctl.py').read() \u23ce old='''        raise UpgradeError(\"Failed to execute `%s`: %s\" \u23ce                            % (",
+  "rm -rf /tmp/t1; mkdir -p /tmp/t1 && cd /tmp/t1; export APPCTL_ROOT_DIR=/tmp/t1/root; A=\"python3 /workspace/appctl.py\" \u23ce $A cli version; echo \""
+ ],
+ "recli|c1|edit_script+probe_run": [
+  "python3 - <<'EOF' \u23ce src=open('appctl.py').read() \u23ce old='''            actions += [self.prune_images, self.prune_networks] \u23ce ''' \u23ce new='''           ",
+  "cd /workspace; python3 - <<'EOF' \u23ce p='appctl.py'; s=open(p).read() \u23ce s=s.replace('\"[--ssh=<[scheme:][user@]host|container[:port][path]>]\"','\"[--"
+ ],
+ "recli|c1|static_check": [
+  "rm -rf /tmp/t /tmp/appctl.orig.py /tmp/migrations_block.py /tmp/upgrade_block.py /dev/shm/r2; cd /workspace && python3 -c \"import ast;ast.pa"
+ ],
+ "recli|c1|install_or_ref_lib+probe_run": [
+  "cd /workspace; .venv/bin/pip install pyyaml 2>&1 | tail -2; which python python3; python3 -c \"import yaml\" 2>&1"
+ ],
+ "recli|c1|probe_run": [
+  "cd /workspace; ls -la __pycache__; .venv/bin/pip uninstall -y pyyaml >/dev/null 2>&1; python3 - <<'EOF' \u23ce import marshal,sys \u23ce f=open('__pycache",
+  ".venv/bin/python -c \" \u23ce import appctl \u23ce for t in ['<site-name>','--type=<type>','--force','--[no-]color','[--<field>=<value>]','<id>...','[--deb"
+ ],
+ "recli|c1|edit_script": [
+  "cd /workspace; python3 - <<'EOF' \u23ce p='appctl.py'; s=open(p).read() \u23ce s=s.replace('VISIBLE_GLOBAL_PARAMS = [p for p in GLOBAL_PARAMS if not GLOBA",
+  "cd /workspace; python3 - <<'EOF' \u23ce p='appctl.py'; s=open(p).read() \u23ce old_start=s.index('        if rest[0] in \"[{\" or rest[0] in \"\\\\\"\\'\":\\n     "
+ ],
+ "recli|c1|edit_script+static_check": [
+  "cd /workspace; cat > /tmp/patch3.py <<'EOF' \u23ce src = open('appctl.py').read() \u23ce def rep(old, new, count=1): \u23ce     global src \u23ce     assert src.count(o"
+ ],
+ "recli|c1|probe_run+static_check": [
+  "cd /workspace; python -c \" \u23ce import appctl \u23ce items=[{'ID':1,'tags':['a','b'],'meta':{'k':'v, x'}},{'ID':2,'tags':[],'meta':None}] \u23ce appctl.render_",
+  "cd /workspace; python appctl.py help site config; python appctl.py site 2>&1 | head -4; python -m py_compile appctl.py && echo ok; rm -rf /t"
+ ],
+ "recli|c1|edit_script+install_or_ref_lib": [
+  "python3 -m venv .venv && echo \"# No third-party dependencies; appctl uses only the Python standard library.\" > requirements.txt && .venv/bin"
+ ],
+ "recli|c1|bash_other": [
+  "timeout 20 docker ps; echo rc=$?; timeout 20 docker-compose version --short; echo rc=$?; timeout 20 docker compose version --short; echo rc="
+ ],
+ "recli|c2|read": [
+  "ls -la && find . -path ./node_modules -prune -o -path ./.venv -prune -o -path ./venv -prune -o -type f -print | grep -v '/\\.' | head -200",
+  "cat appctl.py requirements.txt && wc -l appctl_cli/*.py appctl_cli/commands/*.py tests/*.py && cat appctl_cli/container.py appctl_cli/databa"
+ ],
+ "recli|c2|edit_tool": [
+  "/workspace/appctl_cli/revertable.py",
+  "/workspace/appctl_cli/img_versions.json"
+ ],
+ "recli|c2|edit_script": [
+  "python - <<'EOF' \u23ce p='appctl_cli/database.py' \u23ce s=open(p).read() \u23ce s=s.replace('''        (\"migration\", \"type\", \"timestamp\"), \u23ce     ), \u23ce }''','''     ",
+  "python - <<'EOF' \u23ce import re \u23ce p='appctl_cli/upgrade.py' \u23ce s=open(p).read() \u23ce s=s.replace('''        self.processor.add_step(f\"{self.label}: replace"
+ ],
+ "recli|c2|own_test_run": [
+  ".venv/bin/python -m pytest -q 2>&1 | tail -5 || .venv/bin/python -m unittest 2>&1 | tail -5",
+  ".venv/bin/python -m unittest 2>&1 | tail -5"
+ ],
+ "recli|c2|edit_script+own_test_run": [
+  "python - <<'EOF' \u23ce p='tests/test_upgrade.py' \u23ce s=open(p).read() \u23ce s=s.replace('''        database.close_all() \u23ce         return subprocess.run([sys.e",
+  "python - <<'EOF' \u23ce p='appctl_cli/upgrade.py' \u23ce s=open(p).read() \u23ce s=s.replace('''        self.targets = dict(sorted((self.targets or target_image_"
+ ],
+ "recli|c2|probe_run": [
+  "T=$(mktemp -d); mkdir -p $T/bin; printf '#!/bin/sh\\necho \"$*\" >> %s/log\\ncase \"$*\" in \"compose version\"*) echo 2.29.7;; \"info\"*) echo %s/dr;",
+  "cd /workspace; export T=$(mktemp -d); export APPCTL_ROOT_DIR=$T/root; P=/workspace/.venv/bin/python; A=/workspace/appctl.py \u23ce mkdir -p $T/proj"
+ ],
+ "recli|c2|locate": [
+  "ls -la ~/.docker/cli-plugins/ /usr/libexec/docker/cli-plugins/ /usr/local/lib/docker/cli-plugins/ 2>&1 | grep -i \"compose\\|cannot\"",
+  "find . -path ./.venv -prune -o -name __pycache__ -prune -o -type f -print | sort"
+ ],
+ "recli|c2|install_or_ref_lib": [
+  "cd /workspace; cat tests/test_cli.py tests/test_core.py; ls -la tests/*; ls .venv/lib/*/site-packages | head -30",
+  "cd /workspace; .venv/bin/python --version; .venv/bin/pip install pyyaml 2>&1 | tail -2; cat appctl_cli/commands/help.py appctl_cli/formatter"
+ ],
+ "recli|c2|edit_script+own_test_run+probe_run": [
+  "cd /workspace; sed -i 's/^from ..runtime_config import GLOBAL_PARAMETERS$/from ..runtime_config import GLOBAL_PARAMETERS, visible_parameters"
+ ],
+ "recli|c2|probe_tmp": [
+  "mkdir -p /tmp/ct && cd /tmp/ct && cat > docker-compose.yml <<'EOF' \u23ce services: \u23ce   zeta: \u23ce     image: nginx \u23ce     depends_on: [alpha] \u23ce   alpha: \u23ce     i",
+  "P=/workspace/.venv/bin/python; cd /tmp/ct; $P /workspace/appctl.py site config --services; echo \"rc=$?\"; cd sub; $P /workspace/appctl.py sit"
+ ],
+ "recli|c2|edit_script+probe_tmp": [
+  "cd /workspace; python - <<'EOF' \u23ce p='appctl_cli/commands/site.py'; s=open(p).read() \u23ce s=s.replace('''import re \u23ce  \u23ce from ..errors import AppctlError"
+ ],
+ "recli|c2|bash_other": [
+  "python3 -m venv .venv && mkdir -p appctl_cli/commands tests && .venv/bin/python --version",
+  "echo \"- [Docker test environment](test-env-docker.md) \u2014 real docker daemon down + compose 2.26.1; use fake docker from tests/helpers.py\" >> "
+ ],
+ "recli|c2|edit_script+probe_run": [
+  "cat > appctl_cli/commands/user.py <<'EOF' \u23ce \"\"\"``appctl user``: user and user-meta management (simulated).\"\"\" \u23ce  \u23ce from ..errors import AppctlErro",
+  "python3 - <<'EOF' \u23ce p='appctl_cli/suggest.py' \u23ce s=open(p).read() \u23ce s=s.replace('''    Synonyms win over edit distance. Ties are broken alphabetica"
+ ],
+ "recli|c2|own_test_run+probe_run": [
+  "cd /workspace; source .venv/bin/activate 2>/dev/null; python -m pytest -q tests 2>&1 | tail -3 \u23ce T=$(mktemp -d); export APPCTL_ROOT_DIR=$T/r \u23ce p"
+ ],
+ "recli|c2|edit_script+own_test_run+probe_tmp": [
+  "cd /workspace; python - <<'EOF' \u23ce p='appctl_cli/file_cache.py' \u23ce s=open(p).read() \u23ce s=s.replace('''        except OSError: \u23ce             return Fals"
+ ],
+ "recli|c3|read": [
+  "ls -la && find . -path ./.venv -prune -o -type f -print | grep -v -E '/(\\.git|node_modules|venv|\\.venv)/' | head -100",
+  "cat appctl_core/app.py appctl_core/dispatch.py appctl_core/errors.py appctl_core/db.py"
+ ],
+ "recli|c3|install_or_ref_lib": [
+  "cat appctl.py pytest.ini requirements.txt; wc -l appctl_core/*.py tests/*.py; cat .pytest_cache/v/cache/lastfailed; ls .venv/lib/*/site-pack",
+  ".venv/bin/pip install pyyaml 2>&1 | tail -2; .venv/bin/python --version; which ssh; echo $HOME"
+ ],
+ "recli|c3|own_test_run": [
+  "sed -n 1,80p tests/test_services.py; .venv/bin/python -m pytest -q 2>&1 | tail -3; cat appctl_core/extractor.py | head -40",
+  ".venv/bin/python -m pytest -q tests/test_upgrade.py 2>&1 | tail -60"
+ ],
+ "recli|c3|locate": [
+  "grep -rn \"packages_dir\\|PACKAGES\" appctl_core tests | grep -v pyc; grep -n \"yaml\" requirements.txt; grep -rn \"import yaml\" appctl_core tests",
+  "ls -la && python3 --version"
+ ],
+ "recli|c3|edit_tool": [
+  "/workspace/appctl_core/revertable.py",
+  "/workspace/appctl_core/semver.py"
+ ],
+ "recli|c3|edit_script": [
+  "python3 - <<'EOF' \u23ce p='appctl_core/migrations.py' \u23ce s=open(p).read() \u23ce s=s.replace('''        try: \u23ce             params = [p for p in inspect.signat",
+  "cat >> appctl_core/messages.py <<'EOF' \u23ce  \u23ce  \u23ce def migration_file_not_found(path): \u23ce     return f\"Unable to find migration file at '{path}'.\" \u23ce  \u23ce  \u23ce def "
+ ],
+ "recli|c3|edit_script+own_test_run": [
+  "python3 - <<'EOF' \u23ce p='appctl_core/db.py' \u23ce s=open(p).read() \u23ce s=s.replace('''        PRIMARY KEY (migration, type) \u23ce     )\"\"\", \u23ce )''','''        PRIM",
+  "python3 - <<'EOF' \u23ce p='appctl_core/catalog.py' \u23ce s=open(p).read() \u23ce s=s.replace('''from . import (config_spec, container_commands, dispatch, extra"
+ ],
+ "recli|c3|own_test_run+probe_tmp": [
+  ".venv/bin/python -m pytest -q 2>&1 | tail -2 \u23ce T=$(mktemp -d); mkdir -p $T/tool/migrations/db \u23ce printf 'def up(ctx):\\n    ctx.out.debug(\"hello f"
+ ],
+ "recli|c3|probe_tmp": [
+  "cat > /tmp/scratch/yt.py <<'EOF' \u23ce import yaml \u23ce from appctl_core import yaml_lite \u23ce samples = [ \u23ce \"\"\" \u23ce # comment \u23ce \"@staging\": \u23ce   ssh: ssh://deploy@sta",
+  "cd /tmp/scratch/t && export APPCTL_ROOT_DIR=$PWD/root && P=\"/workspace/.venv/bin/python /workspace/appctl.py\" \u23ce cat > bin/ssh <<'EOF' \u23ce #!/bin/s"
+ ],
+ "recli|c3|probe_run": [
+  "PYTHONPATH=/workspace .venv/bin/python /tmp/scratch/yt.py",
+  "PYTHONPATH=/workspace .venv/bin/python /tmp/scratch/yt.py"
+ ],
+ "recli|c3|edit_script+probe_tmp": [
+  "cat ~/.appctl/config/config.yml; cd /tmp/scratch && rm -rf t && mkdir -p t/root t/proj/sub t/bin && cd t \u23ce cat > proj/appctl.yml <<'EOF' \u23ce \"@sta",
+  "cd /workspace; python - <<'EOF' \u23ce p='appctl_core/app.py' \u23ce s=open(p).read() \u23ce s=s.replace(\"from . import (aliases, binding, config_files,\",\"from ."
+ ],
+ "recli|c3|edit_script+own_test_run+probe_tmp": [
+  "cd /workspace; python3 - <<'EOF' \u23ce p='appctl_core/catalog.py' \u23ce s=open(p).read() \u23ce s=s.replace(\"\"\"from . import (config_spec, dispatch,\"\"\",\"\"\"from"
+ ],
+ "recli|c3|edit_script+install_or_ref_lib": [
+  "python3 - <<'EOF' \u23ce import re \u23ce p='appctl_core/catalog.py'; s=open(p).read() \u23ce s=s.replace('''    fmt = args.option(\"format\", \"table\") \u23ce     if fiel"
+ ],
+ "recli|c3|own_test_run+probe_run": [
+  "printf '[pytest]\\npythonpath = .\\ntestpaths = tests\\n' > pytest.ini \u23ce .venv/bin/pytest -q -p no:cacheprovider 2>&1 | tail -1 \u23ce P=\".venv/bin/pyth"
+ ],
+ "recli|c3|bash_other": [
+  "docker --version; timeout 10 docker ps; echo \"rc=$?\"; docker compose version --short; docker-compose version --short; docker-compose --versi"
+ ],
+ "recli|c3|edit_script+probe_run": [
+  "cd /workspace; python - <<'EOF' \u23ce p='appctl_core/formatter.py' \u23ce s=open(p).read() \u23ce s=s.replace('''def render(records, fields, fmt, prefix=None): \u23ce ",
+  "cd /workspace; python - <<'EOF' \u23ce p='appctl_core/catalog.py' \u23ce s=open(p).read() \u23ce start=s.index('# --- cli ---------------------------------------"
+ ],
+ "recli|c3|edit_script+own_test_run+probe_run": [
+  "cd /workspace; python - <<'EOF' \u23ce p='appctl_core/file_cache.py' \u23ce s=open(p).read() \u23ce a='''    if cleaned == part and part not in (\".\", \"..\") and l",
+  "cd /workspace; python - <<'EOF' \u23ce p='tests/test_services.py' \u23ce s=open(p).read() \u23ce a='''    assert code == 0, err and (tmp_path / \"d\" / \"a.txt\").ex"
+ ],
+ "metric_transform_lang|c1|read": [
+  "cd /workspace; ls -la; cat requirements.txt 2>/dev/null; find . -path ./.venv -prune -o -type f -print | grep -v -E '\\.git/|venv|__pycache__",
+  "cd /workspace; cat mtl.py"
+ ],
+ "metric_transform_lang|c1|edit_script+probe_tmp": [
+  "cd /workspace; cp mtl.py /tmp/mtl_part1.py; mkdir -p /tmp/t && cd /tmp/t && cat > sales.csv <<'EOF' \u23ce timestamp,location,item,price,quantity,u",
+  "cd /workspace; python3 - <<'EOF' \u23ce p='mtl.py'; s=open(p).read() \u23ce old=s[s.index('def version_warning(declared, args):'):s.index('# -------------"
+ ],
+ "metric_transform_lang|c1|probe_run": [
+  "cd /workspace; python3 - <<'EOF' \u23ce src = open('mtl.py').read() \u23ce start = src.index('# ----------------------------------------------------------"
+ ],
+ "metric_transform_lang|c1|edit_tool": [
+  "/workspace/mtl.py",
+  "/tmp/ingest_section.py"
+ ],
+ "metric_transform_lang|c1|probe_tmp": [
+  "cd /tmp/t; PY=/workspace/.venv/bin/python \u23ce $PY /workspace/mtl.py --csv sales.csv --dsl p1.mtl | diff - p1.expected && echo P1 OK \u23ce cat > ex.mtl",
+  "mkdir -p /tmp/t/cases; cd /tmp/t/cases; PY=/workspace/.venv/bin/python \u23ce BASE='schema BaseSale { \u23ce   timestamp: timestamp \u23ce   location: string \u23ce   i"
+ ],
+ "metric_transform_lang|c1|install_or_ref_lib": [
+  "wc -l mtl.py && ls .venv/lib/*/site-packages && .venv/bin/python --version",
+  "wc -l mtl.py && ls .venv/lib/*/site-packages | head -50 && .venv/bin/python --version"
+ ],
+ "metric_transform_lang|c1|install_or_ref_lib+probe_run": [
+  ".venv/bin/python -m pip install pyarrow 2>&1 | tail -2 && .venv/bin/python -c \"import pyarrow; print(pyarrow.__version__)\"",
+  "cd /workspace; .venv/bin/pip install -q xxhash 2>&1 | grep -v notice; .venv/bin/python -c \"import xxhash; print(xxhash.VERSION)\"; cp mtl.py "
+ ],
+ "metric_transform_lang|c1|locate": [
+  "cp mtl.py /tmp/mtl_orig.py && grep -n \"^# ----\" mtl.py"
+ ],
+ "metric_transform_lang|c1|edit_script": [
+  "python3 - <<'EOF' \u23ce m = open('mtl.py').read() \u23ce m = m.replace('''import argparse \u23ce import csv \u23ce import io \u23ce import json \u23ce import math \u23ce import re \u23ce import s",
+  "python3 - <<'EOF' \u23ce m = open('mtl.py').read() \u23ce reps = [ \u23ce ('''            return BOOL, lambda row: not f(row) \u23ce ''', ''' \u23ce             def negate(row"
+ ],
+ "metric_transform_lang|c1|install_or_ref_lib+probe_tmp+static_check": [
+  "cd /tmp/t && cat legacy.dsl | /workspace/.venv/bin/python /workspace/mtl.py --input data/a.csv --dsl - --out o.json; echo \"exit $?\"; cat o.j"
+ ],
+ "metric_transform_lang|c1|edit_script+install_or_ref_lib+probe_tmp": [
+  "echo \"tzdata>=2024.1\" > requirements.txt && python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt && mkdir -p /tmp/t && cd /"
+ ],
+ "metric_transform_lang|c1|edit_script+probe_run": [
+  "cd /workspace; python3 - <<'EOF' \u23ce p='mtl.py'; s=open(p).read() \u23ce old='''            changed = [what for what, key in ((\"DSL\", \"dsl_sha256\"), (\""
+ ],
+ "metric_transform_lang|c1|edit_script+probe_tmp+static_check": [
+  "cd /workspace; sed -i 's/def run_settings_sha(args, cli_params, inputs):/def run_settings_sha(args, cli_params):/; s/settings_sha = run_sett"
+ ],
+ "metric_transform_lang|c1|edit_script+probe_run+static_check": [
+  "python3 - <<'EOF' \u23ce s = open('mtl.py').read() \u23ce start = s.index('def convert_parquet_value(') \u23ce end = s.index('\\ndef load_sources(') \u23ce body = s[star"
+ ],
+ "metric_transform_lang|c2|read": [
+  "ls -la && cat requirements.txt 2>/dev/null; ls -a .. ; find . -maxdepth 2 -not -path './.venv*' -not -path './venv*' | head -50",
+  "cd /workspace; wc -l mtl.py mtl_engine/*.py; cat mtl.py mtl_engine/__init__.py mtl_engine/errors.py mtl_engine/cli.py mtl_engine/dtypes.py"
+ ],
+ "metric_transform_lang|c2|install_or_ref_lib": [
+  "ls /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null && cat /tmp/agent_home/.claude/projects/-workspace/memory/* 2>/dev/null; ",
+  "cd /workspace && .venv/bin/pip install pyarrow 2>&1 | tail -2"
+ ],
+ "metric_transform_lang|c2|probe_tmp": [
+  "cd /workspace; mkdir -p /tmp/t && cat > /tmp/t/s.csv <<'EOF' \u23ce timestamp,location,item,price,quantity,unit,category,promo_code,session_id \u23ce 2024",
+  "cd /tmp/t; cat > promo.mtl <<'EOF' \u23ce schema BaseSale { \u23ce   timestamp: timestamp \u23ce   location: string \u23ce   item: string \u23ce   price: float \u23ce   quantity: flo"
+ ],
+ "metric_transform_lang|c2|bash_other": [
+  "cp -r /workspace /tmp/part1_baseline && rm -rf /tmp/part1_baseline/.venv && echo ok",
+  ".venv/bin/pip list 2>/dev/null; .venv/bin/python --version"
+ ],
+ "metric_transform_lang|c2|edit_script": [
+  "python3 - <<'EOF' \u23ce p='mtl_engine/lexer.py' \u23ce s=open(p).read() \u23ce s=s.replace('''_OPERATORS = (\"<=\", \">=\", \"==\", \"!=\", \"<\", \">\", \"&\", \"|\", \"!\", \u23ce    ",
+  "cd /workspace; python3 - <<'EOF' \u23ce p='mtl_engine/ast_nodes.py' \u23ce s=open(p).read() \u23ce s=s.replace('''class Filter:''','''class Cast(Expr): \u23ce     \"\"\"`c"
+ ],
+ "metric_transform_lang|c2|edit_tool": [
+  "/workspace/mtl_engine/casts.py",
+  "/workspace/mtl_engine/schema.py"
+ ],
+ "metric_transform_lang|c2|edit_script+probe_tmp": [
+  "cd /workspace; python3 - <<'EOF' \u23ce p='mtl_engine/cli.py' \u23ce s=open(p).read() \u23ce for a,b in [('''from . import csv_loader, output, pipeline \u23ce from .err",
+  "cd /workspace; python3 - <<'EOF' \u23ce p='mtl_engine/parser.py' \u23ce s=open(p).read() \u23ce for a,b in [('''            columns = [self.expect_ident(\"a colum"
+ ],
+ "metric_transform_lang|c2|probe_run+static_check": [
+  ".venv/bin/python - <<'EOF' \u23ce import ast, pathlib \u23ce for p in sorted(pathlib.Path('mtl_engine').glob('*.py')): \u23ce     src = p.read_text(); tree = ast",
+  "cd /workspace; .venv/bin/pip download -q pyflakes -d /tmp/pf --no-deps 2>/dev/null; PYTHONPATH=$(ls /tmp/pf/*.whl) .venv/bin/python -m pyfla"
+ ],
+ "metric_transform_lang|c2|locate": [
+  "rm -rf mtl_engine/__pycache__ && ls mtl_engine"
+ ],
+ "metric_transform_lang|c2|probe_run": [
+  ".venv/bin/python -c \" \u23ce import csv,io \u23ce t='a,b\\n1,2\\n\\\"x\\\"y,3\\n4,\\\"5\\n6\\\"\\n7,8\\n' \u23ce r=csv.reader(io.StringIO(t,newline=''),strict=True) \u23ce prev=0 \u23ce whi",
+  "cd /workspace; ls .venv/bin | head; .venv/bin/python -V; .venv/bin/pip list 2>/dev/null | head -30; .venv/bin/pip download xxhash -d /tmp/xx"
+ ],
+ "metric_transform_lang|c2|edit_script+install_or_ref_lib": [
+  "cat > mtl_engine/cli.py <<'EOF' \u23ce \"\"\"Command-line interface: argument parsing, stage orchestration and error reporting.\"\"\" \u23ce import argparse \u23ce imp"
+ ],
+ "metric_transform_lang|c2|edit_script+install_or_ref_lib+probe_run": [
+  "cd /workspace; .venv/bin/pip install -q /tmp/xxdl/xxhash-*.whl 2>&1 | grep -v notice; .venv/bin/python -c \"import xxhash; print(xxhash.xxh64"
+ ],
+ "metric_transform_lang|c2|edit_script+probe_run": [
+  "cd /workspace; python3 - <<'EOF' \u23ce p='/workspace/mtl_engine/state.py' \u23ce s=open(p).read() \u23ce s=s.replace('''def iso_z_exact(dt): \u23ce     from .timeutil "
+ ],
+ "metric_transform_lang|c3|read": [
+  "ls -la && cat *.md 2>/dev/null | head -50; cat requirements.txt; ls -R | head -50",
+  "ls -la /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null; cat /tmp/agent_home/.claude/projects/-workspace/memory/MEMORY.md 2>/"
+ ],
+ "metric_transform_lang|c3|edit_script": [
+  "cd /workspace; cat > mtl_core/program.py <<'EOF' \u23ce \"\"\"Abstract syntax of an MTL program. \u23ce  \u23ce This is the shared vocabulary between the parser and",
+  "cd /workspace; python3 - <<'EOF' \u23ce import re \u23ce p='mtl_core/expressions.py' \u23ce s=open(p).read() \u23ce  \u23ce s=s.replace('''\"\"\"Scalar and boolean expressions. \u23ce  \u23ce "
+ ],
+ "metric_transform_lang|c3|probe_tmp": [
+  "cd /workspace; cat > /tmp/parser_new.py <<'EOF' \u23ce \"\"\"MTL parser. \u23ce  \u23ce Secret: the concrete syntax of the DSL -- tokens, comments, how statements \u23ce a",
+  "mkdir -p /tmp/t && cd /tmp/t && cat > sales.csv <<'EOF' \u23ce timestamp,location,item,price,quantity,unit,category,promo_code,session_id \u23ce 2024-07-0"
+ ],
+ "metric_transform_lang|c3|install_or_ref_lib": [
+  ".venv/bin/pip install pyarrow 2>&1 | tail -2; sed -n 150,723p mtl_core/dsl_parser.py | grep -n \"def \\|strict\\|count\" | head -60",
+  ".venv/bin/pip install xxhash 2>&1 | tail -2"
+ ],
+ "metric_transform_lang|c3|edit_tool": [
+  "/workspace/mtl_core/quality.py",
+  "/workspace/mtl_core/inputs.py"
+ ],
+ "metric_transform_lang|c3|probe_run": [
+  "cd /workspace; P=.venv/bin/python \u23ce $P mtl.py --input /tmp/t/data --recursive --dsl /tmp/t/p.dsl --strict --bad-records-out /tmp/t/bad2.jsonl;",
+  "ls -la && python3 --version && python3 -c \"import zoneinfo; print(zoneinfo.ZoneInfo('America/New_York'))\""
+ ],
+ "metric_transform_lang|c3|install_or_ref_lib+probe_run+static_check": [
+  ".venv/bin/pip install -q pyflakes 2>/dev/null && .venv/bin/python -m pyflakes mtl.py mtl_core/; .venv/bin/pip uninstall -y -q pyflakes"
+ ],
+ "metric_transform_lang|c3|edit_script+probe_run": [
+  "sed -i 's/^from datetime import date, datetime, timedelta, timezone$/from datetime import date, datetime, timedelta/' mtl_core/sources.py &&",
+  "sed -i 's/from mtl_core.errors import InputError, MtlError, report  # noqa: E402/from mtl_core.errors import DslError, InputError, MtlError,"
+ ],
+ "metric_transform_lang|c3|edit_script+install_or_ref_lib": [
+  "mkdir -p /workspace/mtl_core && cd /workspace && python3 -m venv .venv && echo \"tzdata>=2024.1\" > requirements.txt && .venv/bin/pip install "
+ ],
+ "metric_transform_lang|c3|edit_script+probe_tmp": [
+  "cd /workspace && cat > mtl.py <<'EOF' \u23ce #!/usr/bin/env python3 \u23ce \"\"\"MTL: roll up a CSV of sales events according to a small pipeline DSL. \u23ce  \u23ce     p",
+  "sed -i 's/    except Exception as exc:\\n        raise ConfigError(\"cannot load UDF/X/' mtl_core/udfs.py && python3 - <<'EOF' \u23ce p='/workspace/m"
+ ],
+ "metric_transform_lang|c3|edit_script+install_or_ref_lib+probe_run+static_check": [
+  "echo \"xxhash>=3.0\" >> requirements.txt && cat requirements.txt && (python3 -m pyflakes --version >/dev/null 2>&1 || pip install -q --target "
+ ],
+ "metric_transform_lang|c3|static_check": [
+  "ls /tmp/pf 2>/dev/null | head -3; PYTHONPATH=/tmp/pf python3 -c \"import pyflakes; print(pyflakes.__version__)\""
+ ],
+ "metric_transform_lang|c3|locate": [
+  "echo \"- [MTL Part 5 design decisions](mtl-part5-design-decisions.md) \u2014 exit-code/resume/UDF interpretations chosen for ambiguous spec text\" "
+ ]
+}

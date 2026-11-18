@@ -1,0 +1,1087 @@
+### sith.py (modified)
+--- sith.py
++++ sith.py
+@@ -4,7 +4,7 @@
+ Usage:
+     python sith.py complete <file> <line> <col> [--fuzzy] [--project DIR]
+     python sith.py infer <file> <line> <col> [--project DIR]
+-    python sith.py goto <file> <line> <col> [--project DIR]
++    python sith.py goto <file> <line> <col> [--follow-imports] [--project DIR]
+ """
+ import sys
+ 
+
+### sithlib/cli.py (modified)
+--- sithlib/cli.py
++++ sithlib/cli.py
+@@ -35,6 +35,8 @@
+     _add_position_arguments(infer)
+     goto = commands.add_parser(GOTO, help="find where the name at a cursor position is defined")
+     _add_position_arguments(goto)
++    goto.add_argument("--follow-imports", action="store_true",
++                      help="follow imports to the definitions they import")
+     return parser
+ 
+ 
+@@ -43,7 +45,8 @@
+         completions = complete_file(args.file, args.line, args.col, fuzzy=args.fuzzy,
+                                     project=args.project)
+         return "completions", [c.to_dict() for c in completions]
+-    definitions = navigate(args.command, args.file, args.line, args.col, project=args.project)
++    definitions = navigate(args.command, args.file, args.line, args.col, project=args.project,
++                           follow_imports=getattr(args, "follow_imports", False))
+     return "definitions", [d.to_dict() for d in definitions]
+ 
+ 
+
+### sithlib/completion.py (modified)
+--- sithlib/completion.py
++++ sithlib/completion.py
+@@ -1,10 +1,11 @@
+ """The completion engine: ties context, parsing, scopes and inference together."""
+ import ast
++import os
+ from dataclasses import asdict, dataclass
+ 
+ from . import context as cursor_context
+ from .builtin_scope import KEYWORDS
+-from .describe import describe_keyword
++from .describe import describe_keyword, describe_module
+ from .inference import Inferrer
+ from .locate import find_scope
+ from .matching import make_matcher
+@@ -14,6 +15,13 @@
+ from .ranking import sort_keywords, sort_names
+ from .source import load_document
+ from .values import MODULE
++
++
++class ModuleEntry:
++    """A module name offered inside an import statement."""
++
++    def describe(self, name):
++        return describe_module(name)
+ 
+ 
+ @dataclass
+@@ -43,26 +51,33 @@
+         self.project = project
+ 
+     def run(self):
+-        request = cursor_context.analyze(self.document.text_before(self.line, self.col))
+-        if request.kind == cursor_context.NONE:
++        text_before = self.document.text_before(self.line, self.col)
++        import_request = cursor_context.analyze_import(text_before)
++        request = import_request or cursor_context.analyze(text_before)
++        if request.kind in (cursor_context.NONE, cursor_context.IMPORT_NOTHING):
+             return []
+ 
+-        importer = Importer(self.project or self.document.directory, self.document.directory)
++        importer = Importer(os.path.abspath(self.project or self.document.directory))
+         tree = parse_tolerant(self.document.text, cursor=(self.line, self.col))
+         module = ModuleContext(self.document.path, "__main__", tree, self.document.text)
+         importer.register(module)
+         inferrer = Inferrer(importer)
+-        scope = find_scope(module, self.line, self.col, self.document.lines[self.line - 1])
+ 
+-        if request.kind == cursor_context.ATTRIBUTE:
++        if import_request is not None:
++            entries, keywords = self._import_entries(inferrer, module, import_request)
++        elif request.kind == cursor_context.ATTRIBUTE:
++            scope = find_scope(module, self.line, self.col, self.document.lines[self.line - 1])
+             entries = self._attribute_entries(inferrer, scope, request.receiver)
+             keywords = []
+         else:
++            scope = find_scope(module, self.line, self.col, self.document.lines[self.line - 1])
+             entries = inferrer.visible_entries(scope, self.line)
+             keywords = KEYWORDS
++        return self._results(entries, keywords, request.prefix)
+ 
+-        matches = make_matcher(request.prefix, self.fuzzy)
+-        cut = len(request.prefix)
++    def _results(self, entries, keywords, prefix):
++        matches = make_matcher(prefix, self.fuzzy)
++        cut = len(prefix)
+         results = []
+         for name in sort_names(n for n in entries if matches(n)):
+             kind, description = entries[name].describe(name)
+@@ -71,6 +86,25 @@
+             kind, description = describe_keyword(name)
+             results.append(Completion(name, name[cut:], kind, description))
+         return results
++
++    def _import_entries(self, inferrer, context, request):
++        """(entries, keywords) for a cursor inside an import statement."""
++        importer = inferrer.importer
++        if request.kind == cursor_context.IMPORT_KEYWORD:
++            return {}, ["import"]
++        if request.kind == cursor_context.IMPORT_MODULE:
++            if request.level:
++                package = importer.import_relative(context, request.module, request.level)
++                names = importer.submodule_names(package)
++            elif request.module:
++                names = importer.submodule_names(importer.import_absolute(request.module))
++            else:
++                names = importer.top_level_names()
++            return {name: ModuleEntry() for name in names}, []
++        source = importer.import_module(context, request.module, request.level)
++        if source is None or source.kind != MODULE:
++            return {}, []
++        return inferrer.members.exported(source, submodules=True), []
+ 
+     def _attribute_entries(self, inferrer, scope, receiver):
+         try:
+
+### sithlib/context.py (modified)
+--- sithlib/context.py
++++ sithlib/context.py
+@@ -1,4 +1,5 @@
+ """Textual analysis of the cursor position: prefix and completion kind."""
++import re
+ from dataclasses import dataclass
+ 
+ NAME = "name"
+@@ -110,3 +111,136 @@
+             return None
+         i -= 1
+     return None
++
++
++# -- import statements --------------------------------------------------------------
++
++IMPORT_MODULE = "import-module"
++IMPORT_NAME = "import-name"
++IMPORT_KEYWORD = "import-keyword"
++IMPORT_NOTHING = "import-nothing"
++
++_STATEMENT_START = re.compile(r"\s*(?:from|import)\b")
++_DOTTED = r"((?:\w+\s*\.\s*)*)(\w*)"
++_IMPORT = re.compile(r"\s*import\s+(.*)", re.S)
++_FROM = re.compile(r"\s*from\s+(.*)", re.S)
++_FROM_NAMES = re.compile(r"(\.*)\s*([\w.\s]*?)\s*\bimport\s+(.*)", re.S)
++_FROM_KEYWORD = re.compile(r"(\.*)\s*(\w+(?:\s*\.\s*\w+)*|)\s+(\w*)", re.S)
++_FROM_MODULE = re.compile(r"(\.*)\s*" + _DOTTED, re.S)
++_ITEM = re.compile(_DOTTED, re.S)
++_NAME = re.compile(r"(\w*)")
++
++
++@dataclass
++class ImportContext:
++    """A cursor inside an import statement.
++
++    `module` is the dotted module (relative to `level` leading dots) whose
++    submodules or names are completed; `prefix` is what has been typed.
++    """
++
++    kind: str
++    prefix: str = ""
++    module: str = ""
++    level: int = 0
++
++
++def analyze_import(text_before_cursor):
++    """An ImportContext when the cursor is inside an import statement, else None."""
++    statement = _import_statement(text_before_cursor)
++    if statement is None:
++        return None
++    if re.fullmatch(r"\s*(?:import|from)", statement):
++        return None  # still typing the keyword itself
++    match = _IMPORT.fullmatch(statement)
++    if match:
++        item = match.group(1).split(",")[-1].lstrip()
++        found = _ITEM.fullmatch(item)
++        if not found:
++            return ImportContext(IMPORT_NOTHING)
++        return ImportContext(IMPORT_MODULE, found.group(2), _dotted(found.group(1)))
++    match = _FROM.fullmatch(statement)
++    if not match:
++        return ImportContext(IMPORT_NOTHING)
++    rest = match.group(1)
++    found = _FROM_NAMES.fullmatch(rest)
++    if found and (found.group(1) or found.group(2).strip()):
++        module = re.sub(r"\s+", "", found.group(2))
++        item = found.group(3).split(",")[-1].strip()
++        name = _NAME.fullmatch(item)
++        if not name or not (module.replace(".", "").isidentifier() or not module):
++            return ImportContext(IMPORT_NOTHING)
++        return ImportContext(IMPORT_NAME, name.group(1), module, len(found.group(1)))
++    found = _FROM_KEYWORD.fullmatch(rest)
++    if found and (found.group(1) or found.group(2)):
++        return ImportContext(IMPORT_KEYWORD, found.group(3))
++    found = _FROM_MODULE.fullmatch(rest)
++    if found:
++        return ImportContext(IMPORT_MODULE, found.group(3), _dotted(found.group(2)),
++                             len(found.group(1)))
++    return ImportContext(IMPORT_NOTHING)
++
++
++def _dotted(text):
++    """`a . b .` -> `a.b`."""
++    return ".".join(part for part in re.sub(r"\s+", "", text).split(".") if part)
++
++
++def _import_statement(text):
++    """The text of the import statement the cursor is in, joined onto one line, or None."""
++    lines = text.split("\n")
++    current = len(lines) - 1
++    lines[current] = _last_simple_statement(lines[current])
++    for start in range(current, max(-1, current - 100), -1):
++        if _STATEMENT_START.match(lines[start]):
++            if not _continues(lines[start:current]):
++                return None
++            joined = " ".join(_code(line).rstrip().rstrip("\\") for line in lines[start:current])
++            joined = (joined + " " + lines[current]) if start < current else lines[current]
++            return joined.replace("(", " ").replace(")", " ")
++    return None
++
++
++def _code(line):
++    """`line` without a trailing comment."""
++    quote = None
++    for index, char in enumerate(line):
++        if quote:
++            if char == quote:
++                quote = None
++        elif char in "\"'":
++            quote = char
++        elif char == "#":
++            return line[:index]
++    return line
++
++
++def _last_simple_statement(line):
++    """The part of `line` after its last top-level `;`."""
++    depth = 0
++    quote = None
++    start = 0
++    for index, char in enumerate(line):
++        if quote:
++            if char == quote:
++                quote = None
++        elif char in "\"'":
++            quote = char
++        elif char in "([{":
++            depth += 1
++        elif char in ")]}":
++            depth -= 1
++        elif char == ";" and depth <= 0:
++            start = index + 1
++    return line[start:]
++
++
++def _continues(lines):
++    """True when each of `lines` continues onto the next (open bracket or backslash)."""
++    depth = 0
++    for line in lines:
++        code = _code(line)
++        depth += code.count("(") - code.count(")")
++        if depth <= 0 and not code.rstrip().endswith("\\"):
++            return False
++    return True
+
+### sithlib/definitions.py (modified)
+--- sithlib/definitions.py
++++ sithlib/definitions.py
+@@ -67,6 +67,10 @@
+     return len(encoded[:byte_col].decode("utf-8", errors="ignore"))
+ 
+ 
++def posix_path(path):
++    return path.replace(os.sep, "/") if os.sep != "/" else path
++
++
+ def find_word(text, word, start=0):
+     """Column of the identifier `word` in `text` at or after `start`, or None."""
+     match = re.compile(r"(?<![\w])" + re.escape(word) + r"(?![\w])").search(text, max(start, 0))
+@@ -83,16 +87,17 @@
+     # -- modules and paths -----------------------------------------------------
+ 
+     def relative_path(self, path):
++        """`path` relative to the project root (absolute outside it), with `/` separators."""
+         if not path:
+             return ""
+         path = os.path.abspath(path)
+         try:
+             relative = os.path.relpath(path, self.project_root)
+         except ValueError:
+-            return path
++            return posix_path(path)
+         if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+-            return path
+-        return relative
++            return posix_path(path)
++        return posix_path(relative)
+ 
+     def module_name(self, context):
+         """Dotted module name of a parsed file, relative to the project root."""
+@@ -104,7 +109,7 @@
+                 return context.name
+             relative = os.path.basename(relative)
+         stem = os.path.splitext(relative)[0]
+-        parts = [p for p in stem.split(os.sep) if p]
++        parts = [p for p in stem.split("/") if p]
+         if len(parts) > 1 and parts[-1] == "__init__":
+             parts.pop()
+         return ".".join(parts)
+@@ -309,7 +314,7 @@
+                 name=name.split(".")[-1],
+                 type="module",
+                 full_name=name,
+-                module_path=self.relative_path(context.path),
++                module_path=self.relative_path(context.location),
+                 line=1,
+                 column=0,
+                 description=f"module {name.split('.')[-1]}",
+
+### sithlib/inference.py (modified)
+--- sithlib/inference.py
++++ sithlib/inference.py
+@@ -145,7 +145,7 @@
+             module = self.importer.import_module(scope.module, star.module, star.level)
+             if module is None:
+                 continue
+-            for name, entry in self.members.public(module).items():
++            for name, entry in self.members.exported(module).items():
+                 if name not in chosen or chosen[name][0] < star.line:
+                     chosen[name] = (star.line, entry)
+         entries = {name: entry for name, (_, entry) in chosen.items()}
+@@ -193,7 +193,7 @@
+             if id(star) not in self._star_names:
+                 module = self.importer.import_module(star.scope.module, star.module, star.level)
+                 self._star_names[id(star)] = (
+-                    set(self.members.public(module)) if module is not None else set())
++                    set(self.members.exported(module)) if module is not None else set())
+             binding = None
+             if name in self._star_names[id(star)]:
+                 binding = Binding(name, star.line, "importfrom", star.node, star.scope,
+@@ -454,10 +454,6 @@
+ 
+     def resolve_from_values(self, context, module, level, attribute):
+         """The values imported by `from <module> import <attribute>`."""
+-        if level and not module:
+-            submodule = self.importer.import_relative(context, attribute, level)
+-            if submodule is not None:
+-                return [submodule]
+         base = self.importer.import_module(context, module, level)
+         if base is not None:
+             values = self.members.member_values(base, attribute)
+
+### sithlib/members.py (modified)
+--- sithlib/members.py
++++ sithlib/members.py
+@@ -41,11 +41,13 @@
+         self._attribute_cache = {}
+ 
+     def all(self, value):
+-        """Every attribute entry of `value`, keyed by name."""
+-        if isinstance(value, LocalModule):
+-            return self.inferrer.scope_entries(value.context.root)
+-        if isinstance(value, RuntimeModule):
+-            return runtime_entries(value.obj)
++        """Every attribute entry of `value`, keyed by name (submodules included)."""
++        if isinstance(value, (LocalModule, RuntimeModule)):
++            entries = dict(self.namespace(value))
++            for name in self.inferrer.importer.submodule_names(value):
++                if name not in entries:
++                    entries[name] = ValueEntry(lambda name=name: self.member(value, name))
++            return entries
+         if isinstance(value, LocalClass):
+             return self.class_members(value)
+         if isinstance(value, LocalInstance):
+@@ -58,8 +60,39 @@
+             return runtime_entries(_sample_function)
+         return {}
+ 
++    def namespace(self, value):
++        """The names a module binds itself (no submodules that it does not import)."""
++        if isinstance(value, LocalModule):
++            return self.inferrer.scope_entries(value.context.root)
++        if isinstance(value, RuntimeModule):
++            return runtime_entries(value.obj)
++        return self.all(value)
++
+     def public(self, value):
+         return {name: entry for name, entry in self.all(value).items() if is_public(name)}
++
++    def dunder_all(self, value):
++        """The names listed in a module's `__all__`, or None when it has none."""
++        if isinstance(value, LocalModule):
++            return static_all(value.context.tree)
++        if isinstance(value, RuntimeModule):
++            names = getattr(value.obj, "__all__", None)
++            if isinstance(names, (list, tuple)) and all(isinstance(n, str) for n in names):
++                return list(names)
++        return None
++
++    def exported(self, value, submodules=False):
++        """Names a module exports: its `__all__`, else every name not starting with `_`.
++
++        Without `submodules`, only names the module binds itself count (as
++        for `from module import *`).
++        """
++        names = self.dunder_all(value)
++        entries = self.all(value) if submodules else self.namespace(value)
++        if names is None:
++            return {name: entry for name, entry in entries.items() if is_public(name)}
++        return {name: entries.get(name) or ValueEntry(lambda name=name: self.member(value, name))
++                for name in names}
+ 
+     def member(self, value, name):
+         """The (first) value of attribute `name` of `value`, or None."""
+@@ -97,7 +130,7 @@
+                         values += self._bind_member(member, cls, value.cls, value)
+                 return unique(values)
+             return self._runtime_base_member(value.cls, name)
+-        entry = self.all(value).get(name)
++        entry = self.namespace(value).get(name)
+         if entry is not None:
+             member = entry.value()
+             return [member] if member is not None else []
+@@ -268,6 +301,57 @@
+                     entries.setdefault(attribute, []).append(binding)
+ 
+ 
++def static_all(tree):
++    """The strings a module's top-level code puts in `__all__`, or None if it never assigns it."""
++    state = {"names": None}
++
++    def strings(node):
++        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
++            return [e.value for e in node.elts
++                    if isinstance(e, ast.Constant) and isinstance(e.value, str)]
++        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
++            return strings(node.left) + strings(node.right)
++        return []
++
++    def visit(statements):
++        for node in statements:
++            if isinstance(node, (ast.Assign, ast.AnnAssign)):
++                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
++                if any(isinstance(t, ast.Name) and t.id == "__all__" for t in targets):
++                    state["names"] = strings(node.value) if node.value is not None else []
++            elif isinstance(node, ast.AugAssign):
++                if isinstance(node.target, ast.Name) and node.target.id == "__all__":
++                    state["names"] = (state["names"] or []) + strings(node.value)
++            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
++                call = node.value
++                func = call.func
++                if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
++                        and func.value.id == "__all__" and len(call.args) == 1
++                        and state["names"] is not None):
++                    argument = call.args[0]
++                    if func.attr == "extend":
++                        state["names"] = state["names"] + strings(argument)
++                    elif func.attr in ("append", "remove") and isinstance(argument, ast.Constant) \
++                            and isinstance(argument.value, str):
++                        if func.attr == "append":
++                            state["names"] = state["names"] + [argument.value]
++                        elif argument.value in state["names"]:
++                            state["names"] = [n for n in state["names"] if n != argument.value]
++            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
++                continue
++            else:
++                for field in ("body", "orelse", "finalbody"):
++                    visit(getattr(node, field, None) or [])
++                for handler in getattr(node, "handlers", None) or []:
++                    visit(handler.body)
++
++    visit(tree.body)
++    names = state["names"]
++    if names is None:
++        return None
++    return list(dict.fromkeys(names))
++
++
+ def _property_getter(class_scope, binding):
+     """For the `@<name>.setter`/`.deleter` def `binding`, the `@property` getter; else `binding`."""
+     if binding.kind != "def":
+
+### sithlib/modules.py (modified)
+--- sithlib/modules.py
++++ sithlib/modules.py
+@@ -1,8 +1,12 @@
+-"""Module contexts and import resolution (local files first, then installed)."""
++"""Module contexts and import resolution (project files first, then the standard library)."""
++import ast
+ import contextlib
+ import importlib
++import importlib.util
+ import io
+ import os
++import pkgutil
++import sys
+ import warnings
+ 
+ from .parsing import parse_tolerant
+@@ -11,13 +15,22 @@
+ from .errors import SithError
+ from .values import LocalModule, RuntimeModule
+ 
++STDLIB_NAMES = frozenset(sys.stdlib_module_names) | frozenset(sys.builtin_module_names)
++
+ 
+ class ModuleContext:
+-    """A parsed Python module together with its scope tree."""
+-
+-    def __init__(self, path, name, tree, text=""):
++    """A parsed Python module together with its scope tree.
++
++    A namespace package (a directory without `__init__.py`) is a context
++    without a path and with an empty syntax tree.
++    """
++
++    def __init__(self, path, name, tree, text="", directory=None):
+         self.path = os.path.abspath(path) if path else None
+-        self.directory = os.path.dirname(self.path) if self.path else os.getcwd()
++        if directory is not None:
++            self.directory = os.path.abspath(directory)
++        else:
++            self.directory = os.path.dirname(self.path) if self.path else os.getcwd()
+         self.name = name
+         self.tree = tree
+         self.text = text
+@@ -28,8 +41,17 @@
+         self.binding_by_target = builder.binding_by_target
+ 
+     @property
++    def is_namespace(self):
++        return self.path is None
++
++    @property
+     def is_package(self):
+-        return bool(self.path) and os.path.basename(self.path) == "__init__.py"
++        return self.is_namespace or os.path.basename(self.path) == "__init__.py"
++
++    @property
++    def location(self):
++        """The file of the module, or the directory of a namespace package."""
++        return self.path or self.directory
+ 
+     def scope_of(self, node):
+         return self.scope_by_node.get(id(node))
+@@ -40,89 +62,174 @@
+ 
+ 
+ class Importer:
+-    """Resolves module names to values, preferring files in the project directory."""
+-
+-    def __init__(self, project_dir, *extra_dirs):
+-        self.project_dir = project_dir
+-        self.search_dirs = [project_dir] + [d for d in extra_dirs if d and d != project_dir]
++    """Resolves module names to values: project files first, then the standard library.
++
++    Anything else (third-party packages, missing modules) is unresolvable.
++    """
++
++    def __init__(self, project_dir):
++        self.project_dir = os.path.abspath(project_dir)
+         self._contexts = {}
++        self._namespaces = {}
+         self._runtime = {}
+ 
+     def register(self, context):
+         if context.path:
+             self._contexts[context.path] = context
+ 
+-    def context_for_file(self, path, name):
++    def module_name(self, location):
++        """Dotted name of the module at `location` (file or directory), relative to the root."""
++        try:
++            relative = os.path.relpath(os.path.abspath(location), self.project_dir)
++        except ValueError:  # another drive (Windows)
++            relative = os.pardir
++        if relative == os.curdir:
++            return ""
++        if relative == os.pardir or relative.startswith(os.pardir + os.sep):
++            relative = os.path.basename(location)
++        stem = os.path.splitext(relative)[0] if os.path.isfile(location) else relative
++        parts = [p for p in stem.split(os.sep) if p]
++        if parts and parts[-1] == "__init__":
++            parts.pop()
++        return ".".join(parts)
++
++    def context_for_file(self, path, name=None):
+         path = os.path.abspath(path)
+         if path not in self._contexts:
+             try:
+                 text = read_text(path)
+             except SithError:
+                 return None
++            if name is None:
++                name = self.module_name(path)
+             self._contexts[path] = ModuleContext(path, name, parse_tolerant(text), text)
+         return self._contexts[path]
++
++    def namespace_for(self, directory):
++        directory = os.path.abspath(directory)
++        if directory not in self._namespaces:
++            self._namespaces[directory] = ModuleContext(
++                None, self.module_name(directory), ast.Module(body=[], type_ignores=[]),
++                directory=directory)
++        return self._namespaces[directory]
++
++    def _local(self, found):
++        """A LocalModule for a `_locate` result."""
++        if found is None:
++            return None
++        kind, location = found
++        if kind == "namespace":
++            return LocalModule(self.namespace_for(location))
++        context = self.context_for_file(location)
++        return LocalModule(context) if context else None
++
++    # -- absolute and relative imports -------------------------------------------
+ 
+     def import_absolute(self, dotted):
+         """Resolve `import dotted` to a module value, or None."""
+         if not dotted:
+             return None
+-        path = None
+-        for directory in self.search_dirs:
+-            path = self._find_local(directory, dotted.split("."))
+-            if path:
+-                break
+-        if path:
+-            context = self.context_for_file(path, dotted)
+-            return LocalModule(context) if context else None
+-        return self._import_runtime(dotted)
++        parts = dotted.split(".")
++        module = self.top_level(parts[0])
++        if isinstance(module, RuntimeModule) and len(parts) > 1:
++            return self._import_runtime(dotted)
++        for part in parts[1:]:
++            if module is None:
++                return None
++            module = self.submodule(module, part)
++        return module
++
++    def top_level(self, name):
++        """The top-level module `name`: a project module or package, else stdlib."""
++        found = _locate(self.project_dir, name, namespace=False)
++        if found:
++            return self._local(found)
++        if name in STDLIB_NAMES:
++            module = self._import_runtime(name)
++            if module is not None:
++                return module
++        return self._local(_locate(self.project_dir, name, namespace=True))
++
++    def submodule(self, module, name):
++        """The submodule `name` of a package value, or None."""
++        if isinstance(module, LocalModule):
++            return self.local_submodule(module, name)
++        if isinstance(module, RuntimeModule):
++            return self.runtime_submodule(module, name)
++        return None
+ 
+     def import_relative(self, context, dotted, level):
+         """Resolve `from <level dots><dotted> import ...` relative to `context`."""
+         base = context.directory
+         for _ in range(level - 1):
+             base = os.path.dirname(base)
+-        parts = dotted.split(".") if dotted else []
+-        path = self._find_local(base, parts) if parts else _package_init(base)
+-        if not path:
+-            return None
+-        name = ".".join(p for p in [os.path.basename(base)] + parts if p)
+-        context = self.context_for_file(path, name)
+-        return LocalModule(context) if context else None
++        if not self.within_project(base):
++            return None
++        module = self.package_at(base)
++        for part in (dotted.split(".") if dotted else []):
++            if module is None:
++                return None
++            module = self.local_submodule(module, part)
++        return module
+ 
+     def import_module(self, context, dotted, level=0):
+         if level:
+             return self.import_relative(context, dotted, level)
+         return self.import_absolute(dotted)
+ 
++    def within_project(self, directory):
++        directory = os.path.abspath(directory)
++        root = self.project_dir
++        return directory == root or directory.startswith(root.rstrip(os.sep) + os.sep)
++
++    def package_at(self, directory):
++        """The package whose directory is `directory` (regular or namespace)."""
++        init = _package_init(directory)
++        if init:
++            context = self.context_for_file(init)
++            return LocalModule(context) if context else None
++        if os.path.isdir(directory):
++            return LocalModule(self.namespace_for(directory))
++        return None
++
+     def local_submodule(self, module_value, name):
+-        """A submodule `name` of a local package, if such a file exists."""
++        """A submodule `name` of a local package, if such a file or directory exists."""
+         context = module_value.context
+-        if not context.is_package:
+-            return None
+-        path = self._find_local(context.directory, [name])
+-        if not path:
+-            return None
+-        sub = self.context_for_file(path, f"{context.name}.{name}")
+-        return LocalModule(sub) if sub else None
++        if not context.is_package or not name:
++            return None
++        found = _locate(context.directory, name, namespace=False)
++        return self._local(found or _locate(context.directory, name, namespace=True))
+ 
+     def runtime_submodule(self, module_value, name):
+         if not hasattr(module_value.obj, "__path__"):
+             return None
+         return self._import_runtime(f"{module_value.obj.__name__}.{name}")
+ 
+-    @staticmethod
+-    def _find_local(base, parts):
+-        directory = base
+-        for part in parts[:-1]:
+-            directory = os.path.join(directory, part)
+-            if not os.path.isdir(directory):
+-                return None
+-        last = os.path.join(directory, parts[-1])
+-        if os.path.isfile(last + ".py"):
+-            return last + ".py"
+-        return _package_init(last)
++    # -- listing modules (import completion) ------------------------------------
++
++    def top_level_names(self):
++        """Names of every importable top-level module."""
++        return set(_module_names(self.project_dir)) | available_stdlib()
++
++    def submodule_names(self, module):
++        """Names of the submodules of a package value."""
++        if isinstance(module, LocalModule):
++            if not module.context.is_package:
++                return set()
++            return set(_module_names(module.context.directory))
++        if isinstance(module, RuntimeModule):
++            paths = getattr(module.obj, "__path__", None)
++            if paths is None:
++                return set()
++            try:
++                return {info.name for info in pkgutil.iter_modules(list(paths))}
++            except Exception:
++                return set()
++        return set()
+ 
+     def _import_runtime(self, dotted):
++        if dotted.split(".")[0] not in STDLIB_NAMES:
++            return None
+         if dotted not in self._runtime:
+             module = None
+             try:
+@@ -135,6 +242,65 @@
+         return self._runtime[dotted]
+ 
+ 
++_STDLIB_AVAILABLE = None
++
++
++def available_stdlib():
++    """Top-level standard library modules that exist in this runtime."""
++    global _STDLIB_AVAILABLE
++    if _STDLIB_AVAILABLE is None:
++        names = set()
++        for name in STDLIB_NAMES:
++            if name == "__main__":
++                continue
++            try:
++                if name in sys.modules or importlib.util.find_spec(name) is not None:
++                    names.add(name)
++            except Exception:
++                continue
++        _STDLIB_AVAILABLE = names
++    return _STDLIB_AVAILABLE
++
++
++def _locate(directory, name, namespace):
++    """("file", path) or ("namespace", directory) for module `name` inside `directory`.
++
++    Regular packages win over modules; namespace packages are only
++    considered when `namespace` is true.
++    """
++    if not name or not os.path.isdir(directory):
++        return None
++    candidate = os.path.join(directory, name)
++    if namespace:
++        if os.path.isdir(candidate) and name.isidentifier():
++            return "namespace", candidate
++        return None
++    init = _package_init(candidate)
++    if init:
++        return "file", init
++    if os.path.isfile(candidate + ".py"):
++        return "file", candidate + ".py"
++    return None
++
++
++def _module_names(directory):
++    """Names of the modules and packages (including namespace packages) in `directory`."""
++    try:
++        entries = os.listdir(directory)
++    except OSError:
++        return []
++    names = []
++    for entry in entries:
++        path = os.path.join(directory, entry)
++        if entry.endswith(".py") and os.path.isfile(path):
++            stem = entry[:-3]
++            if stem.isidentifier() and stem != "__init__":
++                names.append(stem)
++        elif os.path.isdir(path) and entry.isidentifier() and entry != "__pycache__":
++            names.append(entry)
++    return names
++
++
+ def _package_init(directory):
+     init = os.path.join(directory, "__init__.py")
+     return init if os.path.isfile(init) else None
+
+### sithlib/navigation.py (modified)
+--- sithlib/navigation.py
++++ sithlib/navigation.py
+@@ -1,6 +1,7 @@
+ """The `infer` and `goto` commands: what a name evaluates to, and where it is defined."""
+ import ast
+ import keyword
++import os
+ import re
+ from dataclasses import dataclass, field
+ 
+@@ -12,7 +13,8 @@
+ from .modules import Importer, ModuleContext
+ from .parsing import parse_tolerant, strip_comment
+ from .source import load_document
+-from .values import LocalClass, LocalFunction, LocalInstance, unique
++from .scopes import Binding
++from .values import LocalClass, LocalFunction, LocalInstance, LocalModule, unique
+ 
+ INFER = "infer"
+ GOTO = "goto"
+@@ -30,12 +32,16 @@
+     extra: dict = field(default_factory=dict)
+ 
+ 
+-def navigate(command, path, line, col, project=None):
+-    """Definitions for `command` ("infer" or "goto") at the cursor in `path`."""
++def navigate(command, path, line, col, project=None, follow_imports=False):
++    """Definitions for `command` ("infer" or "goto") at the cursor in `path`.
++
++    With `follow_imports`, `goto` follows import statements to the
++    definitions they import.
++    """
+     document = load_document(path)
+     document.check_position(line, col)
+-    root = project or document.directory
+-    importer = Importer(root, document.directory)
++    root = os.path.abspath(project or document.directory)
++    importer = Importer(root)
+     tree = parse_tolerant(document.text)
+     context = ModuleContext(document.path, "__main__", tree, document.text)
+     importer.register(context)
+@@ -46,6 +52,8 @@
+         raise SithError(f"no name at line {line}, column {col}")
+     if command == GOTO:
+         sources = navigator.goto(occurrence)
++        if follow_imports:
++            sources = navigator.follow_imports(sources)
+     else:
+         sources = navigator.infer(occurrence)
+     factory = navigator.factory
+@@ -226,6 +234,46 @@
+         handler = getattr(self, "_goto_" + occurrence.kind)
+         return handler(occurrence)
+ 
++    def follow_imports(self, sources):
++        """Replace import bindings among `sources` by the definitions they import.
++
++        An import whose chain ends outside the project (stdlib, third-party or
++        missing modules) is kept as it is: the import site is the fallback.
++        """
++        result = []
++        for source in sources:
++            followed = self._follow(source, set()) if _is_import(source) else None
++            result += followed or [source]
++        return result
++
++    def _follow(self, binding, seen):
++        """Definitions at the end of the import chain starting at `binding` ([] if unresolvable)."""
++        if id(binding) in seen:
++            return []
++        seen.add(id(binding))
++        importer = self.inferrer.importer
++        if binding.kind == "import":
++            module = importer.import_absolute(binding.extra.get("module", ""))
++            return [module] if isinstance(module, LocalModule) else []
++        context = binding.scope.module
++        base = importer.import_module(context, binding.extra.get("module", ""),
++                                      binding.extra.get("level", 0))
++        if not isinstance(base, LocalModule):
++            return []
++        name = binding.extra.get("attribute", binding.name)
++        root = base.context.root
++        if not self.inferrer.binds(root, name):
++            submodule = importer.local_submodule(base, name)
++            return [submodule] if submodule is not None else []
++        result = []
++        for fact in self.inferrer.scope_facts(root, name):
++            target = fact.binding
++            if _is_import(target):
++                result += self._follow(target, seen)
++            else:
++                result.append(target)
++        return result
++
+     def infer(self, occurrence):
+         """Values the name at the cursor evaluates to."""
+         handler = getattr(self, "_infer_" + occurrence.kind)
+@@ -413,3 +461,7 @@
+         for fact in self._name_facts(occurrence):
+             values += self.inferrer.fact_values(fact)
+         return values
++
++
++def _is_import(source):
++    return isinstance(source, Binding) and source.kind in ("import", "importfrom")
+
+### tests/test_sith.py (modified)
+--- tests/test_sith.py
++++ tests/test_sith.py
+@@ -498,5 +498,131 @@
+         self.assertEqual(self.goto(source, 4, 7), [function])
+ 
+ 
++class ImportTests(NavigationTestCase):
++    def setUp(self):
++        super().setUp()
++        self.write("pkg/__init__.py", """\
++            from .core import Engine
++            __all__ = ["Engine", "helper", "_secret"]
++            def helper(): pass
++            _secret = 1
++            other = 2
++            """)
++        self.write("pkg/core.py", """\
++            import os
++            from .util import tool as tool_alias
++
++            class Engine:
++                def start(self):
++                    return 1
++
++            def _private(): pass
++            CONST = "x"
++            """)
++        self.write("pkg/util.py", "def tool(x):\n    return [x]\n")
++        self.write("pkg/sub/__init__.py", "")
++        self.write("pkg/sub/deep.py", "VAL = 3\n")
++        self.write("ns/inner/mod.py", "def nsfunc():\n    return 1\n")
++
++    def run_json(self, command, path, line, col, *flags):
++        result = self.run_sith(path, line, col, *flags, command=command)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        key = "completions" if command == "complete" else "definitions"
++        return json.loads(result.stdout)[key]
++
++    def test_goto_follow_imports(self):
++        source = "from pkg import Engine\nfrom pkg.core import tool_alias\nEngine\ntool_alias\n"
++        [site] = self.goto(source, 3, 0)
++        self.assertEqual((site["module_path"], site["line"], site["column"], site["description"]),
++                         ("main.py", 1, 16, "from pkg import Engine"))
++        path = os.path.join(self.dir, "main.py")
++        [engine] = self.run_json("goto", path, 3, 0, "--follow-imports")
++        self.assertEqual((engine["full_name"], engine["module_path"], engine["line"], engine["column"]),
++                         ("pkg.core.Engine", "pkg/core.py", 4, 6))
++        [tool] = self.run_json("goto", path, 4, 0, "--follow-imports")
++        self.assertEqual((tool["full_name"], tool["module_path"], tool["line"]),
++                         ("pkg.util.tool", "pkg/util.py", 1))
++        [module] = self.run_json("goto", path, 1, 6, "--follow-imports")
++        self.assertEqual((module["type"], module["module_path"]), ("module", "pkg/__init__.py"))
++
++    def test_follow_imports_fallback(self):
++        self.write("helper.py", "from os.path import join\n")
++        source = "import os\nfrom helper import join\nfrom nowhere import thing\nos\njoin\nthing\n"
++        path = self.write("main.py", source)
++        for line, expected in ((4, (1, 7)), (5, (2, 19)), (6, (3, 20))):
++            [site] = self.run_json("goto", path, line, 0, "--follow-imports")
++            self.assertEqual((site["module_path"], site["line"], site["column"]),
++                             ("main.py",) + expected)
++
++    def test_infer_across_files(self):
++        source = ("import pkg.sub.deep\nfrom ns.inner.mod import nsfunc\nfrom pkg import Engine\n"
++                  "pkg.sub.deep.VAL\nnsfunc()\nEngine().start()\n")
++        self.assertEqual(self.summary(self.infer(source, 4, 13)), [("int", "instance")])
++        [nsfunc] = self.infer(source, 5, 0)
++        self.assertEqual((nsfunc["full_name"], nsfunc["module_path"]), ("ns.inner.mod.nsfunc",
++                                                                        "ns/inner/mod.py"))
++        self.assertEqual(self.summary(self.infer(source, 6, 10)), [("start", "function")])
++
++    def test_unresolvable_modules(self):
++        source = "import pip\nimport nothere\npip\nnothere.x\n"
++        self.assertEqual(self.infer(source, 3, 0), [])
++        self.assertEqual(self.infer(source, 4, 8), [])
++        self.assertEqual(self.complete(source + "nothere.\n", 5, 8), [])
++
++    def test_relative_imports(self):
++        path = self.write("pkg/rel.py", "from . import util\nfrom .. import ns\nutil.tool\nns\n")
++        [tool] = self.run_json("infer", path, 3, 6)
++        self.assertEqual(tool["module_path"], "util.py")
++        self.assertEqual(self.run_json("infer", path, 4, 0), [])
++        [tool] = self.run_json("infer", path, 3, 6, "--project", self.dir)
++        self.assertEqual((tool["full_name"], tool["module_path"]), ("pkg.util.tool", "pkg/util.py"))
++        [ns] = self.run_json("infer", path, 4, 0, "--project", self.dir)
++        self.assertEqual((ns["type"], ns["full_name"]), ("module", "ns"))
++
++    def test_star_import_all(self):
++        source = "from pkg import *\n\n"
++        names = self.names(self.complete(source, 2, 0), include_keywords=False)
++        self.assertIn("Engine", names)
++        self.assertIn("_secret", names)
++        self.assertNotIn("other", names)
++        source = "from pkg.core import *\n\n"
++        names = self.names(self.complete(source, 2, 0), include_keywords=False)
++        self.assertIn("CONST", names)
++        self.assertNotIn("_private", names)
++
++    def test_circular_imports(self):
++        self.write("a.py", "from b import *\nfrom b import bfunc\nA = 1\ndef afunc():\n    return 1\n")
++        self.write("b.py", "from a import *\nfrom a import afunc\nB = 2\ndef bfunc():\n    return afunc()\n")
++        source = "from a import *\nA\nB\nbfunc()\n"
++        self.assertEqual(self.summary(self.infer(source, 2, 0)), [("int", "instance")])
++        self.assertEqual(self.summary(self.infer(source, 3, 0)), [("int", "instance")])
++        self.assertEqual(self.summary(self.infer(source, 4, 0)), [("bfunc", "function")])
++
++    def test_import_completion(self):
++        source = "import \nimport pk\nimport pkg.\nfrom pkg import \nfrom pkg.core import _\nfrom pkg \n"
++        names = self.names(self.complete(source, 1, 7))
++        self.assertLess(names.index("pkg"), names.index("_thread"))
++        self.assertLess(names.index("_thread"), names.index("__future__"))
++        self.assertIn("ns", names)
++        self.assertIn("os", names)
++        self.assertNotIn("pip", names)
++        result = self.complete(source, 2, 9)
++        self.assertEqual(result[0], {"name": "pkg", "complete": "g", "type": "module",
++                                     "description": "module pkg"})
++        self.assertEqual(self.names(self.complete(source, 3, 11)), ["core", "sub", "util"])
++        self.assertEqual(self.names(self.complete(source, 4, 16)), ["Engine", "helper", "_secret"])
++        self.assertEqual(self.names(self.complete(source, 5, 22)), [])
++        self.assertEqual(self.names(self.complete(source, 6, 9)), ["import"])
++        names = self.names(self.complete("from pkg.core import (CONST,\n    \n", 2, 4))
++        self.assertEqual(names, ["CONST", "Engine", "os", "tool_alias"])
++        self.assertEqual(self.complete("import os as \n", 1, 13), [])
++
++    def test_cross_file_attribute_completion(self):
++        source = "import pkg\nfrom pkg import Engine\npkg.\nEngine().\n"
++        self.assertEqual(self.names(self.complete(source, 3, 4)),
++                         ["core", "Engine", "helper", "other", "sub", "util"])
++        self.assertEqual(self.names(self.complete(source, 4, 9)), ["start"])
++
++
+ if __name__ == "__main__":
+     unittest.main()
+

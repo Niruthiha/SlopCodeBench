@@ -1,0 +1,580 @@
+### eve_industry/__init__.py (created)
+--- eve_industry/__init__.py
++++ eve_industry/__init__.py
+@@ -0,0 +1 @@
++"""EVE Online industry recipe planner built on the Static Data Export."""
+
+### eve_industry/cli.py (created)
+--- eve_industry/cli.py
++++ eve_industry/cli.py
+@@ -0,0 +1,50 @@
++"""Command-line interface."""
++
++import argparse
++import sys
++from pathlib import Path
++from typing import List, Optional
++
++from .industry_data import IndustryData
++from .inventory import Inventory
++from .item_info import describe
++from .recipe import RecipeError, RecipeResolver
++from .report import render
++from .sde_loader import SDEFileError
++
++
++def build_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(
++        prog="industry.py",
++        description="Plan EVE Online industry builds from the Static Data Export.",
++    )
++    sub = parser.add_subparsers(dest="command", required=True)
++    recipe = sub.add_parser("recipe", help="Show the recipe for a product or blueprint")
++    recipe.add_argument("name", nargs="+", help="Exact typeName of a product or blueprint")
++    recipe.add_argument("--sde", required=True, help="Path to the SDE directory")
++    return parser
++
++
++def run_recipe(name: str, sde_dir: Path) -> str:
++    inventory = Inventory(sde_dir)
++    published = {t.type_id for t in inventory.types.values() if t.published}
++    industry = IndustryData(sde_dir, published)
++    recipe = RecipeResolver(inventory, industry).resolve(name)
++    return render(describe(inventory, recipe.product), recipe)
++
++
++def main(argv: Optional[List[str]] = None) -> int:
++    args = build_parser().parse_args(argv)
++    if args.command == "recipe":
++        name = " ".join(args.name)
++        sde_dir = Path(args.sde)
++        if not sde_dir.is_dir():
++            print(f"Error: SDE directory not found: {sde_dir}", file=sys.stderr)
++            return 2
++        try:
++            print(run_recipe(name, sde_dir))
++        except (RecipeError, SDEFileError) as exc:
++            print(f"Error: {exc}", file=sys.stderr)
++            return 1
++        return 0
++    return 2
+
+### eve_industry/constants.py (created)
+--- eve_industry/constants.py
++++ eve_industry/constants.py
+@@ -0,0 +1,21 @@
++"""Static identifiers and file names used by the SDE."""
++
++MANUFACTURING = 1
++REACTIONS = 11
++PRODUCTION_ACTIVITIES = (MANUFACTURING, REACTIONS)
++
++SHIP_CATEGORY_NAME = "Ship"
++DEFAULT_TECH_LEVEL = "Tech I"
++TECH_LEVELS = ("Tech III", "Tech II", "Tech I")  # longest suffix first
++
++INV_TYPES = "invTypes.csv.bz2"
++INV_GROUPS = "invGroups.csv.bz2"
++INV_CATEGORIES = "invCategories.csv.bz2"
++INV_MARKET_GROUPS = "invMarketGroups.csv.bz2"
++INV_META_TYPES = "invMetaTypes.csv.bz2"
++INV_META_GROUPS = "invMetaGroups.csv.bz2"
++INDUSTRY_ACTIVITY = "industryActivity.csv.bz2"
++INDUSTRY_PRODUCTS = "industryActivityProducts.csv.bz2"
++INDUSTRY_MATERIALS = "industryActivityMaterials.csv.bz2"
++RAM_ACTIVITIES = "ramActivities.csv.bz2"
++SHIP_VOLUMES = "ship_volumes.yaml"
+
+### eve_industry/industry_data.py (created)
+--- eve_industry/industry_data.py
++++ eve_industry/industry_data.py
+@@ -0,0 +1,72 @@
++"""Blueprint activities, products and materials from the industry tables."""
++
++from collections import defaultdict
++from pathlib import Path
++from typing import Dict, List, Optional, Set, Tuple
++
++from . import constants as C
++from .sde_loader import iter_csv, parse_int
++
++ActivityKey = Tuple[int, int]  # (blueprintTypeID, activityID)
++
++
++class IndustryData:
++    """Indexes manufacturing and reaction data, restricted to published blueprints."""
++
++    def __init__(self, sde_dir: Path, published_type_ids: Set[int]):
++        self.activity_names: Dict[int, str] = {}
++        self.times: Dict[ActivityKey, int] = {}
++        # (blueprint, activity) -> list of (productTypeID, quantity)
++        self.products: Dict[ActivityKey, List[Tuple[int, int]]] = defaultdict(list)
++        # productTypeID -> list of (blueprint, activity)
++        self.sources: Dict[int, List[ActivityKey]] = defaultdict(list)
++        # (blueprint, activity) -> {materialTypeID: quantity}
++        self.materials: Dict[ActivityKey, Dict[int, int]] = defaultdict(dict)
++        self._load(sde_dir, published_type_ids)
++
++    def _load(self, sde_dir: Path, published: Set[int]) -> None:
++        wanted = set(C.PRODUCTION_ACTIVITIES)
++
++        for row in iter_csv(sde_dir, C.RAM_ACTIVITIES):
++            self.activity_names[int(row["activityID"])] = row["activityName"]
++
++        for row in iter_csv(sde_dir, C.INDUSTRY_ACTIVITY):
++            key = (int(row["typeID"]), int(row["activityID"]))
++            if key[1] in wanted:
++                self.times[key] = parse_int(row["time"]) or 0
++
++        for row in iter_csv(sde_dir, C.INDUSTRY_PRODUCTS):
++            key = (int(row["typeID"]), int(row["activityID"]))
++            if key[1] not in wanted or key[0] not in published:
++                continue
++            product_id = int(row["productTypeID"])
++            self.products[key].append((product_id, parse_int(row["quantity"]) or 0))
++            self.sources[product_id].append(key)
++
++        for row in iter_csv(sde_dir, C.INDUSTRY_MATERIALS):
++            key = (int(row["typeID"]), int(row["activityID"]))
++            if key[1] not in wanted:
++                continue
++            material_id = int(row["materialTypeID"])
++            quantity = parse_int(row["quantity"]) or 0
++            bucket = self.materials[key]
++            bucket[material_id] = bucket.get(material_id, 0) + quantity
++
++    def activity_name(self, activity_id: int) -> str:
++        return self.activity_names.get(activity_id, str(activity_id))
++
++    def blueprint_activity(self, blueprint_id: int) -> Optional[ActivityKey]:
++        """The production activity a published blueprint performs, if any."""
++        for activity_id in C.PRODUCTION_ACTIVITIES:
++            key = (blueprint_id, activity_id)
++            if self.products.get(key):
++                return key
++        return None
++
++    def sources_of(self, product_id: int) -> List[ActivityKey]:
++        """Published (blueprint, activity) pairs producing a type, sorted deterministically."""
++        order = {a: i for i, a in enumerate(C.PRODUCTION_ACTIVITIES)}
++        return sorted(self.sources.get(product_id, []), key=lambda k: (order[k[1]], k[0]))
++
++    def is_buildable(self, type_id: int) -> bool:
++        return bool(self.sources.get(type_id))
+
+### eve_industry/inventory.py (created)
+--- eve_industry/inventory.py
++++ eve_industry/inventory.py
+@@ -0,0 +1,128 @@
++"""Item, group, category, market group and meta (tech level) data."""
++
++from collections import defaultdict
++from pathlib import Path
++from typing import Dict, List, Optional
++
++from . import constants as C
++from .models import Group, InvType, MarketGroup
++from .sde_loader import iter_csv, load_yaml, parse_float, parse_int
++
++
++class Inventory:
++    """Indexes the inv* tables and ship volumes from the SDE."""
++
++    def __init__(self, sde_dir: Path):
++        self.types: Dict[int, InvType] = {}
++        self.types_by_name: Dict[str, List[InvType]] = defaultdict(list)
++        self.groups: Dict[int, Group] = {}
++        self.categories: Dict[int, str] = {}
++        self.market_groups: Dict[int, MarketGroup] = {}
++        self.meta_group_of_type: Dict[int, int] = {}
++        self.meta_group_names: Dict[int, str] = {}
++        self.ship_volumes: Dict[str, float] = {}
++        self._load(sde_dir)
++
++    def _load(self, sde_dir: Path) -> None:
++        for row in iter_csv(sde_dir, C.INV_TYPES):
++            item = InvType(
++                type_id=int(row["typeID"]),
++                group_id=parse_int(row["groupID"]),
++                name=row["typeName"],
++                volume=parse_float(row["volume"]),
++                published=parse_int(row["published"]) == 1,
++                market_group_id=parse_int(row["marketGroupID"]),
++            )
++            self.types[item.type_id] = item
++            if item.published:
++                self.types_by_name[item.name].append(item)
++
++        for row in iter_csv(sde_dir, C.INV_GROUPS):
++            group = Group(
++                group_id=int(row["groupID"]),
++                category_id=parse_int(row["categoryID"]),
++                name=row["groupName"],
++            )
++            self.groups[group.group_id] = group
++
++        for row in iter_csv(sde_dir, C.INV_CATEGORIES):
++            self.categories[int(row["categoryID"])] = row["categoryName"]
++
++        for row in iter_csv(sde_dir, C.INV_MARKET_GROUPS):
++            mg = MarketGroup(
++                market_group_id=int(row["marketGroupID"]),
++                parent_id=parse_int(row["parentGroupID"]),
++                name=row["marketGroupName"],
++            )
++            self.market_groups[mg.market_group_id] = mg
++
++        for row in iter_csv(sde_dir, C.INV_META_TYPES):
++            meta_id = parse_int(row["metaGroupID"])
++            if meta_id is not None:
++                self.meta_group_of_type[int(row["typeID"])] = meta_id
++
++        for row in iter_csv(sde_dir, C.INV_META_GROUPS):
++            self.meta_group_names[int(row["metaGroupID"])] = row["metaGroupName"]
++
++        raw_volumes = load_yaml(sde_dir, C.SHIP_VOLUMES)
++        self.ship_volumes = {str(k): float(v) for k, v in raw_volumes.items()}
++
++    # --- lookups -----------------------------------------------------------
++
++    def published_by_name(self, name: str) -> List[InvType]:
++        """All published types whose name matches exactly (case-sensitive)."""
++        return sorted(self.types_by_name.get(name, []), key=lambda t: t.type_id)
++
++    def type_name(self, type_id: int) -> str:
++        item = self.types.get(type_id)
++        return item.name if item else str(type_id)
++
++    def group_of(self, item: InvType) -> Optional[Group]:
++        return self.groups.get(item.group_id)
++
++    def category_name_of(self, item: InvType) -> str:
++        group = self.group_of(item)
++        if group is None:
++            return "Unknown"
++        return self.categories.get(group.category_id, "Unknown")
++
++    def group_name_of(self, item: InvType) -> str:
++        group = self.group_of(item)
++        return group.name if group else "Unknown"
++
++    def market_group_path(self, item: InvType) -> Optional[List[str]]:
++        """Market group names from root to leaf, or None if not on the market."""
++        if item.market_group_id is None:
++            return None
++        path: List[str] = []
++        seen = set()
++        current = self.market_groups.get(item.market_group_id)
++        while current is not None and current.market_group_id not in seen:
++            seen.add(current.market_group_id)
++            path.append(current.name)
++            if current.parent_id is None:
++                break
++            current = self.market_groups.get(current.parent_id)
++        if not path:
++            return None
++        path.reverse()
++        return path
++
++    def tech_level_of(self, item: InvType) -> str:
++        meta_id = self.meta_group_of_type.get(item.type_id)
++        meta_name = self.meta_group_names.get(meta_id, "") if meta_id else ""
++        for level in C.TECH_LEVELS:
++            if meta_name == level or meta_name.endswith(" " + level):
++                return level
++        return C.DEFAULT_TECH_LEVEL
++
++    def is_ship(self, item: InvType) -> bool:
++        return self.category_name_of(item) == C.SHIP_CATEGORY_NAME
++
++    def packaged_volume(self, item: InvType) -> float:
++        """Packaged volume: ship_volumes.yaml for ships, invTypes otherwise."""
++        if self.is_ship(item):
++            group_name = self.group_name_of(item)
++            if group_name in self.ship_volumes:
++                return self.ship_volumes[group_name]
++        return item.volume
+
+### eve_industry/item_info.py (created)
+--- eve_industry/item_info.py
++++ eve_industry/item_info.py
+@@ -0,0 +1,29 @@
++"""Builds the descriptive header information for an item."""
++
++from .inventory import Inventory
++from .models import InvType, ItemInfo
++
++
++def format_volume(volume: float, is_ship: bool) -> str:
++    """Ships (packaged) use two decimals; other items keep their natural precision."""
++    if is_ship:
++        return f"{volume:.2f}"
++    text = repr(float(volume))
++    if "e" in text or "E" in text:
++        text = format(volume, "f").rstrip("0")
++        if text.endswith("."):
++            text += "0"
++    return text
++
++
++def describe(inventory: Inventory, item: InvType) -> ItemInfo:
++    is_ship = inventory.is_ship(item)
++    return ItemInfo(
++        type_id=item.type_id,
++        name=item.name,
++        category_name=inventory.category_name_of(item),
++        group_name=inventory.group_name_of(item),
++        market_group_path=inventory.market_group_path(item),
++        tech_level=inventory.tech_level_of(item),
++        volume_text=format_volume(inventory.packaged_volume(item), is_ship),
++    )
+
+### eve_industry/models.py (created)
+--- eve_industry/models.py
++++ eve_industry/models.py
+@@ -0,0 +1,57 @@
++"""Plain data structures used throughout the tool."""
++
++from dataclasses import dataclass, field
++from typing import List, Optional
++
++
++@dataclass(frozen=True)
++class InvType:
++    type_id: int
++    group_id: int
++    name: str
++    volume: float
++    published: bool
++    market_group_id: Optional[int]
++
++
++@dataclass(frozen=True)
++class Group:
++    group_id: int
++    category_id: int
++    name: str
++
++
++@dataclass(frozen=True)
++class MarketGroup:
++    market_group_id: int
++    parent_id: Optional[int]
++    name: str
++
++
++@dataclass(frozen=True)
++class Material:
++    type_id: int
++    name: str
++    quantity: int
++    buildable: bool
++
++
++@dataclass
++class Recipe:
++    blueprint: InvType
++    product: InvType
++    activity_name: str
++    output_quantity: int
++    run_time_minutes: int
++    materials: List[Material] = field(default_factory=list)
++
++
++@dataclass(frozen=True)
++class ItemInfo:
++    type_id: int
++    name: str
++    category_name: str
++    group_name: str
++    market_group_path: Optional[List[str]]
++    tech_level: str
++    volume_text: str
+
+### eve_industry/recipe.py (created)
+--- eve_industry/recipe.py
++++ eve_industry/recipe.py
+@@ -0,0 +1,73 @@
++"""Resolves a product or blueprint name into a concrete recipe."""
++
++import math
++from typing import Optional
++
++from .industry_data import ActivityKey, IndustryData
++from .inventory import Inventory
++from .models import InvType, Material, Recipe
++
++
++class RecipeError(Exception):
++    """Raised when no recipe can be resolved for the requested name."""
++
++
++class RecipeResolver:
++    def __init__(self, inventory: Inventory, industry: IndustryData):
++        self.inventory = inventory
++        self.industry = industry
++
++    def resolve(self, name: str) -> Recipe:
++        candidates = self.inventory.published_by_name(name)
++        if not candidates:
++            raise RecipeError(f"No published item named '{name}' found in the SDE")
++
++        # Prefer interpreting the name as a blueprint, then as a product.
++        for item in candidates:
++            key = self.industry.blueprint_activity(item.type_id)
++            if key is not None:
++                return self._build(key)
++        for item in candidates:
++            sources = self.industry.sources_of(item.type_id)
++            if sources:
++                return self._build(sources[0], product_id=item.type_id)
++
++        raise RecipeError(f"'{name}' has no manufacturing or reaction recipe")
++
++    def _build(self, key: ActivityKey, product_id: Optional[int] = None) -> Recipe:
++        blueprint_id, activity_id = key
++        products = self.industry.products[key]
++        if product_id is None:
++            product_id, quantity = products[0]
++        else:
++            quantity = next(q for p, q in products if p == product_id)
++
++        product = self._require_type(product_id)
++        blueprint = self._require_type(blueprint_id)
++        seconds = self.industry.times.get(key, 0)
++
++        materials = [
++            Material(
++                type_id=material_id,
++                name=self.inventory.type_name(material_id),
++                quantity=qty,
++                buildable=self.industry.is_buildable(material_id),
++            )
++            for material_id, qty in self.industry.materials.get(key, {}).items()
++        ]
++        materials.sort(key=lambda m: (m.name.lower(), m.name, m.type_id))
++
++        return Recipe(
++            blueprint=blueprint,
++            product=product,
++            activity_name=self.industry.activity_name(activity_id),
++            output_quantity=quantity,
++            run_time_minutes=math.ceil(seconds / 60),
++            materials=materials,
++        )
++
++    def _require_type(self, type_id: int) -> InvType:
++        item = self.inventory.types.get(type_id)
++        if item is None:
++            raise RecipeError(f"Type {type_id} referenced by industry data is missing")
++        return item
+
+### eve_industry/report.py (created)
+--- eve_industry/report.py
++++ eve_industry/report.py
+@@ -0,0 +1,27 @@
++"""Renders the canonical recipe report block."""
++
++from typing import List
++
++from .models import ItemInfo, Recipe
++
++
++def render(info: ItemInfo, recipe: Recipe) -> str:
++    market = " > ".join(info.market_group_path) if info.market_group_path else "None"
++    lines: List[str] = [
++        f"ITEM: {info.name} ({info.type_id})",
++        f"Group: {info.category_name} > {info.group_name}",
++        f"Market Group: {market}",
++        f"Tech Level: {info.tech_level}",
++        f"Volume: {info.volume_text}",
++        "",
++        "Recipe:",
++        f"Activity: {recipe.activity_name}",
++        f"Output Quantity: {recipe.output_quantity}",
++        f"Run Time: {recipe.run_time_minutes}",
++        "| Item | Quantity | Buildable |",
++        "|:-:|:---:|---:|",
++    ]
++    for material in recipe.materials:
++        buildable = "Yes" if material.buildable else "No"
++        lines.append(f"| {material.name} | {material.quantity} | {buildable} |")
++    return "\n".join(lines)
+
+### eve_industry/sde_loader.py (created)
+--- eve_industry/sde_loader.py
++++ eve_industry/sde_loader.py
+@@ -0,0 +1,52 @@
++"""Low-level readers for the raw SDE files (bz2-compressed CSVs and YAML)."""
++
++import bz2
++import csv
++import io
++from pathlib import Path
++from typing import Dict, Iterator
++
++import yaml
++
++
++class SDEFileError(Exception):
++    """Raised when a required SDE file is missing or unreadable."""
++
++
++def iter_csv(sde_dir: Path, filename: str) -> Iterator[Dict[str, str]]:
++    """Yield each row of a bz2-compressed CSV file as a dict."""
++    path = sde_dir / filename
++    if not path.is_file():
++        raise SDEFileError(f"Missing SDE file: {path}")
++    with bz2.open(path, "rb") as raw:
++        text = io.TextIOWrapper(raw, encoding="utf-8", newline="")
++        yield from csv.DictReader(text)
++
++
++def load_yaml(sde_dir: Path, filename: str):
++    """Load a plain YAML file."""
++    path = sde_dir / filename
++    if not path.is_file():
++        raise SDEFileError(f"Missing SDE file: {path}")
++    with open(path, "r", encoding="utf-8") as fh:
++        return yaml.safe_load(fh) or {}
++
++
++def parse_int(value: str):
++    """Parse an integer field, returning None for empty / 'None' values."""
++    if value is None:
++        return None
++    value = value.strip()
++    if value == "" or value == "None":
++        return None
++    return int(float(value))
++
++
++def parse_float(value: str, default: float = 0.0) -> float:
++    """Parse a float field, returning ``default`` for empty / 'None' values."""
++    if value is None:
++        return default
++    value = value.strip()
++    if value == "" or value == "None":
++        return default
++    return float(value)
+
+### industry.py (created)
+--- industry.py
++++ industry.py
+@@ -0,0 +1,9 @@
++#!/usr/bin/env python3
++"""Entry point: python industry.py recipe <Product or Blueprint name> --sde <SDE directory>"""
++
++import sys
++
++from eve_industry.cli import main
++
++if __name__ == "__main__":
++    sys.exit(main())
+
+### requirements.txt (created)
+--- requirements.txt
++++ requirements.txt
+@@ -0,0 +1 @@
++PyYAML>=6.0
+

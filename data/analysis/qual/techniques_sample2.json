@@ -1,0 +1,613 @@
+[
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "4",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "python3 - <<'EOF'\np='mtl_core/declarations.py'\ns=open(p).read()\na='''    if program.schema_name is None:\n        return None\n    schemas = program.schemas\n    chain = []\n    seen = set()\n    name = program.schema_name\n'''\nb='''    if program.schema_name is None:\n        return None\n    return resolve_named_schema(program.schemas, program.schema_name)\n\n\ndef resolve_named_schema(schemas, schema_name):\n    \"\"\"Resolve schema `schema_name` (with its inheritance chain) from `schemas`.\"\"\"\n    chain = []\n    seen = set()\n    name = schema_name\n'''\nassert a in s\ns=s.replace(a,b)\na='''    return ResolvedSchema(program.schema_name, fields, physical, _calc_order(fields))'''\nassert a in s\ns=s.replace(a,'''    return ResolvedSchema(schema_name, fields, physical, _calc_order(fields))''')\nopen(p,'w').write(s)\nEOF\ngrep -n \"chain\\[-1\\]\" mtl_core/declarations.py",
+  "id": 1
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "1",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "sed -i '/^import math$/d' csv_source.py && cat > program.py <<'EOF'\n\"\"\"Abstract syntax of an MTL program.\n\nThis is the shared vocabulary between the parser and the engine; it reveals\nnothing about concrete syntax or about how programs are executed.\n\"\"\"\n\nfrom collections import namedtuple\n\n# Expressions\nLiteral = namedtuple(\"Literal\", \"kind value\")        # kind: int|float|string|bool\nColumnRef = namedtuple(\"ColumnRef\", \"name\")\nUnary = namedtuple(\"Unary\", \"op operand\")            # op: ! - +\nBinary = namedtuple(\"Binary\", \"op left right\")       # op: | & == != < <= > >= in + - * / %\nCall = namedtuple(\"Call\", \"name args\")               # transform call\n\n# Statements\nFilter = namedtuple(\"Filter\", \"predicate\")\nApply = namedtuple(\"Apply\", \"expression column\")\nGroupBy = namedtuple(\"GroupBy\", \"columns\")\nWindow = namedtuple(\"Window\", \"amount unit\")         # unit: m|h|d\nAggregateItem = namedtuple(\"AggregateItem\", \"function column alias\")  # column None means *\nAggregate = namedtuple(\"Aggregate\", \"items\")\n\n\nclass Program:\n    \"\"\"A validated pipeline: row steps in order plus the rollup clauses.\"\"\"\n\n    def __init__(self, steps, group_by, window, aggregate):\n        self.steps = tuple(steps)        # Filter / Apply, in execution order\n        self.group_by = group_by         # GroupBy or None\n        self.window = window             # Window or None\n        self.aggregate = aggregate       # Aggregate\nEOF\ncat > dsl_parser.py <<'EOF'\n\"\"\"MTL parser.\n\nSecret: the concrete syntax of the DSL -- tokens, comments, how statements\nare delimited (including multi-line continuation), operator precedence, the\nshapes of statements, and the structural rules (exactly one aggregate, at\nmost one group_by/window, unique aliases).\n\"\"\"\n\nimport re\n\nfrom . import program as P\nfrom .errors import DslError\n\nAGGREGATE_FUNCTIONS = (\"average\", \"median\", \"sum\", \"count\", \"std\", \"var\", \"min\", \"max\")\n_RESERVED_OUTPUT = (\"window_start\", \"window_end\")\n\n_TOKEN_RE = re.compile(r\"\"\"\n    (?P<ws>\\s+)\n  | (?P<float>(\\d+\\.\\d*|\\.\\d+)([eE][+-]?\\d+)?|\\d+[eE][+-]?\\d+)\n  | (?P<int>\\d+)\n  | (?P<string>'[^'\\n]*')\n  | (?P<ident>[A-Za-z_][A-Za-z0-9_]*)\n  | (?P<op><=|>=|==|!=|[<>!&|()\\[\\],*+\\-/%])\n\"\"\", re.VERBOSE)\n\n\nclass _Token:\n    __slots__ = (\"kind\", \"text\", \"pos\")\n\n    def __init__(self, kind, text, pos):\n        self.kind = kind\n        self.text = text\n        self.pos = pos\n\n    def __repr__(self):\n        return \"%s %r\" % (self.kind, self.text)\n\n\ndef _logical_lines(text):\n    \"\"\"Split source into statements, dropping comments and blank lines.\n\n    A newline ends a statement unless it is inside brackets, the statement\n    so far ends with a comma, or the next non-blank line starts with one.\n    Yields (line_number, statement_text).\n    \"\"\"\n    statements = []\n    current = []\n    start_line = None\n    depth = 0\n    line = 1\n    i = 0\n    n = len(text)\n\n    def flush():\n        stmt = \"\".join(current).strip()\n        if stmt:\n            statements.append((start_line, stmt))\n        current.clear()\n\n    while i < n:\n        ch = text[i]\n        if ch == \"'\":\n            end = text.find(\"'\", i + 1)\n            nl = text.find(\"\\n\", i + 1)\n            if end == -1 or (nl != -1 and nl < end):\n                raise DslError(\"line %d: unterminated string literal\" % line)\n            if start_line is None:\n                start_line = line\n            current.append(text[i:end + 1])\n            i = end + 1\n            continue\n        if ch == \"#\":\n            nl = text.find(\"\\n\", i)\n            i = n if nl == -1 else nl\n            continue\n        if ch == \"\\r\":\n            i += 1\n            continue\n        if ch == \"\\n\":\n            line += 1\n            i += 1\n            so_far = \"\".join(current).strip()\n            if not so_far:\n                continue\n            if depth > 0 or so_far.endswith(\",\"):\n                current.append(\" \")\n                continue\n            if _next_significant_char(text, i) == \",\":\n                current.append(\" \")\n                continue\n            flush()\n            start_line = None\n            depth = 0\n            continue\n        if ch in \"([\":\n            depth += 1\n        elif ch in \")]\":\n            depth -= 1\n        if start_line is None and not ch.isspace():\n            start_line = line\n        current.append(ch)\n        i += 1\n    flush()\n    return statements\n\n\ndef _next_significant_char(text, i):\n    n = len(text)\n    while i < n:\n        ch = text[i]\n        if ch.isspace():\n            i += 1\n        elif ch == \"#\":\n            nl = text.find(\"\\n\", i)\n            if nl == -1:\n                return None\n            i = nl\n        else:\n            return ch\n    return None\n\n\ndef _tokenize(stmt, line):\n    tokens = []\n    pos = 0\n    while pos < len(stmt):\n        m = _TOKEN_RE.match(stmt, pos)\n        if not m:\n            raise DslError(\"line %d: unexpected character %r\" % (line, stmt[pos]))\n        kind = m.lastgroup\n        if kind != \"ws\":\n            tokens.append(_Token(kind, m.group(), pos))\n        pos = m.end()\n    tokens.append(_Token(\"eof\", \"\", pos))\n    return tokens\n\n\nclass _StatementParser:\n    def __init__(self, stmt, line):\n        self.line = line\n        self.stmt = stmt\n        self.tokens = _tokenize(stmt, line)\n        self.i = 0\n\n    # -- token helpers -------------------------------------------------\n    def peek(self, offset=0):\n        return self.tokens[min(self.i + offset, len(self.tokens) - 1)]\n\n    def advance(self):\n        tok = self.tokens[self.i]\n        if tok.kind != \"eof\":\n            self.i += 1\n        return tok\n\n    def fail(self, message, tok=None):\n        tok = tok or self.peek()\n        where = \"end of statement\" if tok.kind == \"eof\" else repr(tok.text)\n        raise DslError(\"line %d: %s (at %s)\" % (self.line, message, where))\n\n    def is_op(self, text):\n        tok = self.peek()\n        return tok.kind == \"op\" and tok.text == text\n\n    def expect_op(self, text):\n        if not self.is_op(text):\n            self.fail(\"expected %r\" % text)\n        return self.advance()\n\n    def expect_ident(self, what):\n        tok = self.peek()\n        if tok.kind != \"ident\":\n            self.fail(\"expected %s\" % what)\n        return self.advance().text\n\n    def expect_end(self):\n        if self.peek().kind != \"eof\":\n            self.fail(\"unexpected trailing input\")\n\n    # -- statements ----------------------------------------------------\n    def statement(self):\n        keyword = self.peek()\n        if keyword.kind != \"ident\":\n            self.fail(\"expected a statement keyword\")\n        name = keyword.text\n        if name == \"filter\":\n            return self.filter_statement()\n        if name == \"apply\":\n            return self.apply_statement()\n        if name == \"group_by\":\n            return self.group_by_statement()\n        if name == \"window\":\n            return self.window_statement()\n        if name == \"aggregate\":\n            return self.aggregate_statement()\n        self.fail(\"unknown statement %r\" % name, keyword)\n\n    def filter_statement(self):\n        self.advance()\n        self.expect_op(\"(\")\n        expr = self.expression()\n        self.expect_op(\")\")\n        self.expect_end()\n        return P.Filter(expr)\n\n    def apply_statement(self):\n        self.advance()\n        self.expect_op(\"(\")\n        expr = self.expression()\n        self.expect_op(\",\")\n        tok = self.peek()\n        if tok.kind == \"ident\":\n            column = self.advance().text\n        elif tok.kind == \"string\" and len(tok.text) > 2:\n            column = self.advance().text[1:-1]\n        else:\n            self.fail(\"expected a new column name\")\n        self.expect_op(\")\")\n        self.expect_end()\n        return P.Apply(expr, column)\n\n    def group_by_statement(self):\n        self.advance()\n        self.expect_op(\"(\")\n        bracketed = self.is_op(\"[\")\n        if bracketed:\n            self.advance()\n        columns = [self.expect_ident(\"a column name\")]\n        while self.is_op(\",\"):\n            self.advance()\n            columns.append(self.expect_ident(\"a column name\"))\n        if bracketed:\n            self.expect_op(\"]\")\n        self.expect_op(\")\")\n        self.expect_end()\n        if len(set(columns)) != len(columns):\n            raise DslError(\"line %d: duplicate column in group_by\" % self.line)\n        return P.GroupBy(tuple(columns))\n\n    def window_statement(self):\n        m = re.match(r\"^window\\s*\\(\\s*(\\d+)([mhd])\\s*\\)$\", self.stmt)\n        if not m:\n            raise DslError(\"line %d: invalid window statement, expected window(<n><m|h|d>)\"\n                           % self.line)\n        amount = int(m.group(1))\n        if amount <= 0:\n            raise DslError(\"line %d: window duration must be positive\" % self.line)\n        return P.Window(amount, m.group(2))\n\n    def aggregate_statement(self):\n        self.advance()\n        items = [self.aggregate_item()]\n        while self.is_op(\",\"):\n            self.advance()\n            items.append(self.aggregate_item())\n        self.expect_end()\n        aliases = [it.alias for it in items]\n        if len(set(aliases)) != len(aliases):\n            raise DslError(\"line %d: aggregate aliases must be unique\" % self.line)\n        return P.Aggregate(tuple(items))\n\n    def aggregate_item(self):\n        fn_tok = self.peek()\n        fn = self.expect_ident(\"an aggregate function\")\n        if fn not in AGGREGATE_FUNCTIONS:\n            self.fail(\"unknown aggregate function %r\" % fn, fn_tok)\n        self.expect_op(\"(\")\n        if self.is_op(\"*\"):\n            self.advance()\n            column = None\n        else:\n            column = self.expect_ident(\"a column name or *\")\n        self.expect_op(\")\")\n        tok = self.peek()\n        if not (tok.kind == \"ident\" and tok.text == \"as\"):\n            self.fail(\"expected 'as <alias>'\")\n        self.advance()\n        alias = self.expect_ident(\"an alias\")\n        return P.AggregateItem(fn, column, alias)\n\n    # -- expressions ---------------------------------------------------\n    def expression(self):\n        return self.or_expr()\n\n    def or_expr(self):\n        left = self.and_expr()\n        while self.is_op(\"|\"):\n            self.advance()\n            left = P.Binary(\"|\", left, self.and_expr())\n        return left\n\n    def and_expr(self):\n        left = self.not_expr()\n        while self.is_op(\"&\"):\n            self.advance()\n            left = P.Binary(\"&\", left, self.not_expr())\n        return left\n\n    def not_expr(self):\n        if self.is_op(\"!\"):\n            self.advance()\n            return P.Unary(\"!\", self.not_expr())\n        return self.comparison()\n\n    def comparison(self):\n        left = self.additive()\n        tok = self.peek()\n        if tok.kind == \"op\" and tok.text in (\"<\", \"<=\", \">\", \">=\", \"==\", \"!=\"):\n            op = self.advance().text\n            right = self.additive()\n            self.reject_chain()\n            return P.Binary(op, left, right)\n        if tok.kind == \"ident\" and tok.text == \"in\":\n            self.advance()\n            right = self.additive()\n            self.reject_chain()\n            return P.Binary(\"in\", left, right)\n        return left\n\n    def reject_chain(self):\n        tok = self.peek()\n        if (tok.kind == \"op\" and tok.text in (\"<\", \"<=\", \">\", \">=\", \"==\", \"!=\")) or \\\n                (tok.kind == \"ident\" and tok.text == \"in\"):\n            self.fail(\"comparisons cannot be chained\")\n\n    def additive(self):\n        left = self.term()\n        while self.peek().kind == \"op\" and self.peek().text in (\"+\", \"-\"):\n            op = self.advance().text\n            left = P.Binary(op, left, self.term())\n        return left\n\n    def term(self):\n        left = self.unary()\n        while self.peek().kind == \"op\" and self.peek().text in (\"*\", \"/\", \"%\"):\n            op = self.advance().text\n            left = P.Binary(op, left, self.unary())\n        return left\n\n    def unary(self):\n        if self.peek().kind == \"op\" and self.peek().text in (\"-\", \"+\"):\n            op = self.advance().text\n            return P.Unary(op, self.unary())\n        return self.primary()\n\n    def primary(self):\n        tok = self.peek()\n        if tok.kind == \"int\":\n            self.advance()\n            return P.Literal(\"int\", int(tok.text))\n        if tok.kind == \"float\":\n            self.advance()\n            return P.Literal(\"float\", float(tok.text))\n        if tok.kind == \"string\":\n            self.advance()\n            return P.Literal(\"string\", tok.text[1:-1])\n        if tok.kind == \"ident\":\n            if tok.text in (\"true\", \"false\"):\n                self.advance()\n                return P.Literal(\"bool\", tok.text == \"true\")\n            if tok.text in (\"in\", \"as\"):\n                self.fail(\"unexpected keyword\")\n            self.advance()\n            if self.is_op(\"(\"):\n                self.advance()\n                args = []\n                if not self.is_op(\")\"):\n                    args.append(self.expression())\n                    while self.is_op(\",\"):\n                        self.advance()\n                        args.append(self.expression())\n                self.expect_op(\")\")\n                return P.Call(tok.text, tuple(args))\n            return P.ColumnRef(tok.text)\n        if self.is_op(\"(\"):\n            self.advance()\n            inner = self.expression()\n            self.expect_op(\")\")\n            return inner\n        self.fail(\"expected an expression\")\n\n\ndef parse_program(text):\n    \"\"\"Parse DSL source into a program.Program; raises DslError.\"\"\"\n    steps = []\n    group_by = window = aggregate = None\n    for line, stmt in _logical_lines(text):\n        node = _StatementParser(stmt, line).statement()\n        if isinstance(node, (P.Filter, P.Apply)):\n            steps.append(node)\n        elif isinstance(node, P.GroupBy):\n            if group_by is not None:\n                raise DslError(\"line %d: group_by may appear at most once\" % line)\n            group_by = node\n        elif isinstance(node, P.Window):\n            if window is not None:\n                raise DslError(\"line %d: window may appear at most once\" % line)\n            window = node\n        else:\n            if aggregate is not None:\n                raise DslError(\"line %d: aggregate must appear exactly once\" % line)\n            aggregate = node\n    if aggregate is None:\n        raise DslError(\"program has no aggregate statement\")\n    _check_output_names(group_by, window, aggregate)\n    return P.Program(steps, group_by, window, aggregate)\n\n\ndef _check_output_names(group_by, window, aggregate):\n    taken = set(group_by.columns) if group_by else set()\n    if window:\n        taken.update(_RESERVED_OUTPUT)\n    for item in aggregate.items:\n        if item.alias in taken:\n            raise DslError(\"aggregate alias %r collides with another output field\" % item.alias)\nEOF",
+  "id": 2
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "5",
+  "cls": [
+   "own_test_run"
+  ],
+  "cmd": "cd /workspace; .venv/bin/python -m unittest discover -s tests 2>&1 | tail -3; rm -rf /tmp/p1 /tmp/p2 /tmp/p3 /tmp/p4 /tmp/p5 /tmp/p6 /tmp/p7; cat requirements.txt",
+  "id": 3
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c1",
+  "ck": "5",
+  "cls": [
+   "probe_run"
+  ],
+  "cmd": ".venv/bin/python -c \"\nprint(3/0.1, 30*0.1, 3/(10800*0.8/86400), 10800*0.8/86400, 30*10800*0.8/86400, 3/(10800/86400*0.8), 3*86400/(10800*0.8))\nimport math\nprint(3/(8640/86400), 30*8640/86400)\n\"",
+  "id": 4
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "edit_script",
+   "own_test_run",
+   "probe_tmp"
+  ],
+  "cmd": "cd /workspace; python - <<'EOF'\np='appctl_cli/file_cache.py'\ns=open(p).read()\ns=s.replace('''        except OSError:\n            return False\n        return path\n\n    def remove''','''        except OSError:\n            return False\n        return True\n\n    def remove''')\nopen(p,'w').write(s)\nEOF\nrm -rf /tmp/t3; mkdir -p /tmp/t3/c/sub; cd /tmp/t3; for n in a b c; do head -c 100 /dev/zero > c/sub/$n; done\ntouch -d '2020-01-01' c/sub/a; touch -d '2026-11-01' c/sub/b; touch -d '2026-11-02' c/sub/c\nAPPCTL_ROOT_DIR=/tmp/t3/r APPCTL_CACHE_DIR=/tmp/t3/c APPCTL_CACHE_MAX_SIZE=150 /workspace/.venv/bin/python /workspace/appctl.py cli version; ls c/sub\ncd /workspace && .venv/bin/python -m unittest discover tests 2>&1 | tail -2; rm -rf /tmp/t /tmp/t2 /tmp/t3; find . -name __pycache__ -newer appctl.py -path './appctl_cli*' | head -2",
+  "id": 5
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "5",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/t; P=/workspace/.venv/bin/python; M=/workspace/mtl.py\ncp out.json out1.json; cp meta.json meta1.json\n$P $M --dsl p.mtl --input data --out out.json --meta-out meta.json --state-dir st --resume; echo \"resume exit $?\"\ncmp out.json out1.json && echo OUT-IDENTICAL\ndiff <(grep -v -E 'run_id|_at\"|duration_ms|\"resume\"' meta.json) <(grep -v -E 'run_id|_at\"|duration_ms|\"resume\"' meta1.json) && echo META-IDENTICAL\n# modify b.csv keeping size+mtime\npython3 - <<'EOF'\nimport os\np='data/b.csv'; st=os.stat(p)\ns=open(p).read().replace('1.6,5','9.9,5'); open(p,'w').write(s)\nos.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))\nEOF\n$P $M --dsl p.mtl --input data --out out.json --state-dir st --resume; echo \"exit $?\"; cmp out.json out1.json && echo \"SKIPPED (stale content kept, as mtime_size says unchanged)\"\n$P $M --dsl p.mtl --input data --out out.json --state-dir st --resume --fingerprint xxhash64; echo \"exit $?\"; grep -A1 NYC out.json | head -3; grep '\"rev\"' out.json\ngrep -A3 fingerprint st/Kpis.state.json | head -5; ls st/Kpis.checkpoints\necho '--- errors'\n$P $M --dsl p.mtl --input data --out o.json --resume; echo \"exit $?\"\n$P $M --dsl p.mtl --input data --out o.json --resume --state-dir nost; echo \"exit $?\"\nsed 's/min_qty: float = 0/min_qty: float = 1/' p.mtl > p2.mtl; mkdir -p st2; cp st/Kpis.state.json st2/\n$P $M --dsl p2.mtl --input data --out o.json --resume --state-dir st2; echo \"exit $?\"\necho '{bad' > st2/Kpis.state.json; $P $M --dsl p.mtl --input data --out o.json --resume --state-dir st2; echo \"exit $?\"\ngrep -v mtl_version p.mtl > nov.mtl; $P $M --dsl nov.mtl --input data --out o.json; echo \"exit $?\"\nsed 's/mtl_version 1.5/mtl_version 2.0/' p.mtl > v2.mtl; $P $M --dsl v2.mtl --input data --out o.json; echo \"exit $?\"\nsed 's/mtl_version 1.5/mtl_version 1.9/' p.mtl > v19.mtl; $P $M --dsl v19.mtl --input data --out o.json; echo \"exit $?\"\nsed 's/mtl_version 1.5/mtl_version 1.2/' p.mtl > v12.mtl; $P $M --dsl v12.mtl --input data --out o.json; echo \"exit $?\"\nsed 's/mtl_version 1.5/mtl_version 1.3/' p.mtl > v13.mtl; $P $M --dsl v13.mtl --input data --out o.json; echo \"exit $?\"\nsed 's/mtl_version 1.5/mtl_version 1.1/' p.mtl > v11.mtl; $P $M --dsl v11.mtl --input data --out o.json; echo \"exit $?\"\nsed 's/mtl_version 1.5/mtl_version 1.x/' p.mtl > vx.mtl; $P $M --dsl vx.mtl --input data --out o.json; echo \"exit $?\"\ntouch afile; $P $M --dsl p.mtl --input data --out o.json --state-dir afile; echo \"exit $?\"",
+  "id": 6
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "6",
+  "cls": [
+   "edit_script",
+   "probe_tmp"
+  ],
+  "cmd": "cd /workspace; python - <<'EOF'\ns = open('sith.py').read()\nold = '''    if path is not None:\n        if not os.path.isdir(path):\n            raise SithError('directory not found: %s' % path)\n        dirs += _subdirs(path)'''\nassert s.count(old) == 1\ns = s.replace(old, '''    if path is not None:\n        dirs += _subdirs(path)''')\nopen('sith.py', 'w').write(s)\nEOF\ncd /tmp/t2; P=/workspace/sith.py\npython $P project init . --environment /workspace/venv/bin/python >/dev/null; python $P env info --project . | head -c 120; echo\npython $P project init /nonexistent; echo rc=$?\necho '{bad' > .sith/project.json; python $P goto main.py 4 10; echo rc=$?\npython $P project init .; echo rc=$?\nrm -rf .sith\npython $P project init --sys-path a,b --added-sys-path c; echo; cat .sith/project.json; python $P project init . --environment \"\"; echo\npython $P env bogus; echo rc=$?; python $P project; echo rc=$?; python $P context main.py 99 0; echo rc=$?",
+  "id": 7
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c3",
+  "ck": "5",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/t; P=\"/workspace/.venv/bin/python /workspace/industry.py plan\"\n$P Barrage L 10 None x10 --config c30.yaml --sde /workspace/sde --output o1 --build-all\n$P Barrage L 10 None x10 --config c3.yaml --sde /workspace/sde --output o2 --build-all\n$P Megathron 10 8 16 x2 --config c3.yaml --sde /workspace/sde --output o3 --build-all\ndiff exp1_jobs.csv o1/jobs.csv && diff exp_mat1.csv o1/materials.csv && diff exp2_jobs.csv o2/jobs.csv && diff exp_mat1.csv o2/materials.csv && diff exp3_jobs.csv o3/jobs.csv && diff exp3_mat.csv o3/materials.csv && echo ALL MATCH\n$P Small Mobile Siphon Unit 5 0 0 --config c3.yaml --sde /workspace/sde --output o6 --build-all && cat o6/*.csv\ncd /workspace && .venv/bin/python -c \"\nimport planner, build_string, catalog, blueprints\np=planner.Planner('sde', te_bonus=20)\nc=p._items; ind=p._industry\nn=0\nfor t in list(ind._makers):\n    r=ind.recipe_for(t)\n    req=build_string.BuildRequest(c.name(t), 7, 2, me=5, te=10)\n    plan=p.plan(req, build_all=True); n+=1\nprint('ok', n)\n\"",
+  "id": 8
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c1",
+  "ck": "5",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/t5 && P=/workspace/.venv/bin/python; M=/workspace/mtl.py\nfor mode in \"--dsl kpis.mtl --ingest-config ingest.yml\" \"--dsl join.mtl --ingest-config join.yml\" \"--dsl legacy.mtl --input data/web\" \"--dsl kpis.mtl --input data/web\"; do\n  cp -r data data.bak\n  rm -rf .st; $P $M $mode --out r0.json --state-dir .st 2>/dev/null\n  # same size + mtime, different content -> skipped under mtime_size\n  mt=$(stat -c %y data/web/a.csv); sed -i 's/NYC,apple,1.5,10/NYC,apple,9.5,10/' data/web/a.csv; touch -d \"$mt\" data/web/a.csv\n  $P $M $mode --out r1.json --state-dir .st --resume 2>/dev/null; cmp -s r0.json r1.json && echo \"[$mode] skip honoured (mtime_size)\"\n  # xxhash would detect: fresh from scratch with xxhash on state then compare\n  # add new file + modify b\n  printf 'timestamp,location,item,price,quantity,unit,category\\n2025-09-14T13:05:00Z,SF,apple,3,4,kg,fruit\\n' > data/web/c.csv\n  echo \"2025-09-14T12:45:00Z,NYC,pear,1,1,kg,fruit\" >> data/web/b.csv\n  $P $M $mode --out r2.json --state-dir .st --resume 2>/dev/null\n  # reference: fresh run with no state but a.csv as checkpointed (original content)\n  cp data.bak/web/a.csv data/web/a.csv\n  $P $M $mode --out ref.json 2>/dev/null\n  cmp -s r2.json ref.json && echo \"[$mode] incremental == fresh\" || { echo \"[$mode] MISMATCH\"; diff r2.json ref.json | head; }\n  rm -rf data; mv data.bak data\ndone",
+  "id": 9
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c1",
+  "ck": "5",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": ".venv/bin/python - <<'EOF'\np='industry.py'\ns=open(p).read()\nold_split=s[s.index('def split_runs'):s.index('def is_t1_capital')]\nnew_split='''def split_runs(runs, days_per_run, split_days):\n    \"\"\"Split a job into [(runs, count)] so every part finishes within split_days.\"\"\"\n    if runs <= 1 or days_per_run <= 0:\n        return [(runs, 1)]\n    limit = Fraction(str(split_days))\n    # Most runs a single job may take while staying under the limit.\n    max_runs = max(1, math.ceil(limit / days_per_run) - 1)\n    if runs <= max_runs:\n        return [(runs, 1)]\n    parts = -(-runs // max_runs)\n    base, extra = divmod(runs, parts)\n    if base + 1 == max_runs and extra > parts / 2 and runs // (parts + 1) + 1 < max_runs:\n        parts += 1\n        base, extra = divmod(runs, parts)\n    return [(r, c) for r, c in ((base + 1, extra), (base, parts - extra)) if c > 0]\n\n\n'''\ns=s.replace(old_split,new_split)\nold='''        seconds = sde.activity_time.get((job_bp, job_aid), 0) or 0\n        per_run = seconds * (1 - job_te / 100) * (1 - te_bonus / 100) / SECONDS_PER_DAY\n        for part_runs, part_count in split_runs(runs, per_run, config[\"split_days\"]):'''\nnew='''        seconds = sde.activity_time.get((job_bp, job_aid), 0) or 0\n        per_run = Fraction(seconds) * (100 - job_te) / 100 * (100 - te_bonus) / 100 / SECONDS_PER_DAY\n        for part_runs, part_count in split_runs(runs, per_run, config[\"split_days\"]):'''\nassert old in s\ns=s.replace(old,new)\ns=s.replace('''            days = (Fraction(seconds) * part_runs * (100 - job_te) / 100 * (100 - te_bonus) / 100\n                    / SECONDS_PER_DAY)\n            days = Decimal''','''            days = per_run * part_runs\n            days = Decimal''')\nopen(p,'w').write(s)\nEOF\n/tmp/t/run.sh",
+  "id": 10
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/ref/cmp && cd /tmp/ref/cmp && cp /tmp/ref/sith_orig.py old_sith.py && cp /workspace/sith.py new_sith.py && cat > cmp.py <<'EOF'\nimport sys, random, json, time\nsys.setrecursionlimit(10000)\nimport old_sith, new_sith\nfiles = sys.argv[1:]\nrandom.seed(1)\ndiffs = 0; total = 0; tn = 0; to = 0\nfor f in files:\n    text = open(f).read()\n    lines = text.split('\\n')\n    cands = []\n    for i, l in enumerate(lines):\n        for j, ch in enumerate(l):\n            if ch == '.' and j > 0 and l[j-1].isalnum():\n                cands.append((i+1, j+1))\n            elif ch == ' ' and j+1 < len(l) and l[j+1].isalpha():\n                cands.append((i+1, j+2))\n    random.shuffle(cands)\n    for (ln, col) in cands[:60]:\n        total += 1\n        t0 = time.time()\n        try: a = old_sith.complete(f, ln, col)\n        except Exception as e: a = 'ERR %r' % e\n        t1 = time.time()\n        try: b = new_sith.complete(f, ln, col)\n        except Exception as e: b = 'ERR %r' % e\n        t2 = time.time(); to += t1-t0; tn += t2-t1\n        if a != b:\n            diffs += 1\n            if isinstance(a, list) and isinstance(b, list):\n                an = {x['name']: x for x in a}; bn = {x['name']: x for x in b}\n                miss = sorted(set(an)-set(bn)); extra = sorted(set(bn)-set(an))\n                chg = [(n, an[n]['type'], an[n]['description'], bn[n]['type'], bn[n]['description']) for n in an if n in bn and an[n] != bn[n]]\n                print(f, ln, col, repr(lines[ln-1][:col][-40:]), 'missing', miss[:8], 'extra', extra[:8], 'changed', chg[:4])\n            else:\n                print(f, ln, col, 'A', str(a)[:200], 'B', str(b)[:200])\nprint('total', total, 'diffs', diffs, 'old %.1fs new %.1fs' % (to, tn))\nEOF\nL=/usr/local/lib/python3.12\ntimeout 900 /workspace/venv/bin/python cmp.py $L/json/decoder.py $L/argparse.py $L/dataclasses.py $L/http/client.py $L/logging/__init__.py /tmp/ref/q/main.py /tmp/ref/p/example.py 2>&1 | tail -40",
+  "id": 11
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "6",
+  "cls": [
+   "own_test_run"
+  ],
+  "cmd": "time .venv/bin/python -m unittest discover -s tests 2>&1 | tail -5",
+  "id": 12
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "8",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "cd /workspace; python - <<'EOF'\np='appctl_core/app.py'\ns=open(p).read()\nrep=[('''from . import (aliases, binding, catalog, config_files, db, dispatch, file_cache,\n               help_text, logfile, process, remote, rewrites, runtime_config,\n               tokens, upgrade, values)''','''from . import (aliases, binding, config_files, db, dispatch, file_cache,\n               help_text, logfile, process, remote, rewrites, runtime_config,\n               startup, tokens, values)'''),\n('''_COMPLETION = [\"cli\", \"completion\"]\n# Commands that never trigger the automatic upgrade on a version change.\n_NO_AUTO_UPGRADE = {\"cli completion\", \"cli migrate\"}\n''','''_COMPLETION_WORDS = (\"completions\", \"completion\")\n'''),\n('''    def __init__(self, command, args, out, config, tree, cwd=None, cache=None,\n                 launcher=None, db=None, env=None):\n        self.command = command\n        self.args = args''','''    def __init__(self, command, args, out, config, tree, cwd=None, cache=None,\n                 launcher=None, db=None, env=None, raw_options=()):\n        self.command = command\n        self.args = args\n        # ``(name, value)`` pairs in command-line order.\n        self.raw_options = list(raw_options)'''),\n('''    return words[:len(_COMPLETION)] == _COMPLETION\n''','''    return len(words) >= 2 and words[0] == \"cli\" and words[1] in _COMPLETION_WORDS\n'''),\n('''            if not node.is_runnable():\n                out.usage(help_text.composite_usage(node))\n                return 0\n            self.maybe_upgrade(node, config)\n''','''            self.start_command(node, options, config)\n            if not node.is_runnable():\n                out.usage(help_text.composite_usage(node))\n                return 0\n'''),\n('''            result = node.run(CommandContext(node, bound, out, config, tree,\n                                             cwd=self.cwd, cache=self.cache,\n                                             launcher=launcher, db=self.db,\n                                             env=self.env))''','''            result = node.run(CommandContext(node, bound, out, config, tree,\n                                             cwd=self.cwd, cache=self.cache,\n                                             launcher=launcher, db=self.db,\n                                             env=self.env, raw_options=options))'''),\n('''    def maybe_upgrade(self, node, config):\n        \"\"\"Run migrations and container upgrades once when the tool version\n        differs from the one recorded by the last upgrade.\"\"\"\n        if node.path in _NO_AUTO_UPGRADE or getattr(self, \"upgraded\", False):\n            return\n        if not upgrade.needs_upgrade(self.db, catalog.VERSION):\n            return\n        self.upgraded = True\n        catalog.upgrader(self.db, self.out, self.env, config).run()\n''','''    def start_command(self, node, options, config):\n        \"\"\"Check the host, set up a first run or migrate after a version\n        change, and check for updates: once per invocation.\"\"\"\n        if getattr(self, \"started\", False):\n            return\n        self.started = True\n        from . import cli_commands\n        startup.Startup(node, options, self.out, self.env, self.db, config, self.stdout,\n                        cache=self.cache,\n                        update=lambda: cli_commands.self_update(self.out, self.env)).run()\n'''),\n]\nfor a,b in rep:\n    assert a in s, a\n    s=s.replace(a,b)\nopen(p,'w').write(s)\nEOF\ngrep -n \"catalog\\|upgrade\" appctl_core/app.py",
+  "id": 13
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "cd /workspace; sed -i 's/from ._listing import LIST_OPTIONS, render_list, confirm/from ._listing import LIST_OPTIONS, confirm, render_list/' appctl_cli/commands/site.py\npython - <<'EOF'\np='appctl_cli/validator.py'; s=open(p).read()\ns=s.replace('''\"\"\"Validation of supplied arguments against a command's synopsis.\"\"\"\n\nfrom .errors''','''\"\"\"Validation of supplied arguments against a command's synopsis.\"\"\"\n\nimport json\n\nfrom .errors''')\ns=s.replace('''    # -- associative ----------------------------------------------------\n''','''    def fill_from_stdin(self, args, assoc, read_stdin):\n        \"\"\"Read the first missing positional value from STDIN, if piped.\n\n        With ``--format=json`` the value is decoded as JSON.\n        \"\"\"\n        if read_stdin is None or len(args) >= len(self.positionals):\n            return\n        raw = read_stdin()\n        if raw is None:\n            return\n        if raw.endswith(\"\\\\r\\\\n\"):\n            raw = raw[:-2]\n        elif raw.endswith(\"\\\\n\"):\n            raw = raw[:-1]\n        value = raw\n        if assoc.get(\"format\", self.command.defaults.get(\"format\")) == \"json\":\n            try:\n                value = json.loads(raw)\n            except ValueError:\n                raise AppctlError(f\"Invalid JSON: {raw}\", sensitive=True) from None\n        args.append(value)\n\n    # -- associative ----------------------------------------------------\n''')\ns=s.replace('''    def validate(self, args, assoc, warn=lambda message: None):\n        \"\"\"Validate and return ``(args, assoc)`` with defaults applied.\"\"\"\n        args = list(args)\n        assoc = dict(assoc)\n''','''    def validate(self, args, assoc, warn=lambda message: None, read_stdin=None):\n        \"\"\"Validate and return ``(args, assoc)`` with defaults applied.\n\n        ``read_stdin`` returns piped STDIN content (or ``None``) and is used\n        for a positional argument missing from the command line.\n        \"\"\"\n        args = list(args)\n        assoc = dict(assoc)\n        self.fill_from_stdin(args, assoc, read_stdin)\n''')\nopen(p,'w').write(s)\nEOF\ngrep -n \"stdin\" appctl_cli/validator.py",
+  "id": 14
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "cd /workspace; python3 - <<'EOF'\np='appctl_cli/commands/cli.py'\ns=open(p).read()\ns=s.replace('''        \"strict_args_mode\": ctx.strict,\n''','''        \"strict_args_mode\": ctx.strict,\n        \"global_config_path\": ctx.config.global_path if ctx.config else None,\n        \"project_config_path\": ctx.config.project_path if ctx.config else None,\n        \"packages_dir\": ctx.config.packages_dir if ctx.config else None,\n''')\ns=s.replace('''    ctx.output.line(f\"Strict args mode:\\\\t{'enabled' if ctx.strict else 'disabled'}\")\n''','''    ctx.output.line(f\"Strict args mode:\\\\t{'enabled' if ctx.strict else 'disabled'}\")\n    ctx.output.line(f\"Global config:\\\\t{data['global_config_path'] or ''}\")\n    ctx.output.line(f\"Project config:\\\\t{data['project_config_path'] or ''}\")\n    ctx.output.line(f\"Packages dir:\\\\t{data['packages_dir'] or ''}\")\n''')\nopen(p,'w').write(s)\nEOF\ngrep -n \"config\\|Packages\" appctl_cli/commands/cli.py | head; printf 'PyYAML>=6.0\\n' > requirements.txt; cat requirements.txt",
+  "id": 15
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "probe_run"
+  ],
+  "cmd": "source .venv/bin/activate; time python industry.py recipe Naga --sde sde; python industry.py recipe \"Fullerides\" --sde sde | tail -5; cat eve_industry/constants.py",
+  "id": 16
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/p2/app/pkg && cd /tmp/p2 && cat > a.py <<'EOF'\nfrom b import *\nimport b\nA_VAL = 1\ndef fa():\n    return b.fb()\nEOF\ncat > b.py <<'EOF'\nfrom a import *\nimport a\nB_VAL = \"s\"\ndef fb():\n    return a.A_VAL\nEOF\ncat > broken.py <<'EOF'\nclass Good:\n    def m(self):\n        return 1\n\ndef bad(:\n    pass\n\nGOOD2 = Good()\nEOF\ncat > stars.py <<'EOF'\nfrom app.pkg import *\nfrom broken import *\nEOF\ncat > app/pkg/__init__.py <<'EOF'\n__all__ = [\"mod\", \"X\"]\n__all__ += [\"Y\"]\nX = 1\nY = \"y\"\nZ = 2.0\nEOF\ncat > app/pkg/mod.py <<'EOF'\nfrom ... import a\nfrom .. import other\nfrom ...a import A_VAL\ndef mf(): return 1\nEOF\ncat > main.py <<'EOF'\nfrom a import *\nfrom stars import *\nfa()\nfb()\nA_VAL\nB_VAL\nmod\nX\nY\nZ\nGOOD2.m()\nGood\nEOF\nS=\"/workspace/.venv/bin/python /workspace/sith.py\"\nfor l in 3 4 5 6 7 8 9 10 11 12; do echo \"== $l: $(sed -n ${l}p main.py)\"; timeout 10 $S infer main.py $l 0; done\necho \"--- goto follow\"; for l in 3 7 8 12; do timeout 10 $S goto main.py $l 0 --follow-imports; done; for l in 3 7 8; do timeout 10 $S goto main.py $l 0 ; done\necho \"--- project app\"; timeout 10 $S infer app/pkg/mod.py 1 16 --project app; timeout 10 $S infer app/pkg/mod.py 1 16 ; timeout 10 $S infer app/pkg/mod.py 3 19; timeout 10 $S infer app/pkg/mod.py 3 19 --project app; timeout 10 $S infer app/pkg/mod.py 4 4 --project app",
+  "id": 17
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "2",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/t && cd /tmp/t && cat > sales.csv <<'EOF'\ntimestamp,location,item,price,quantity,unit,category,promo_code,session_id\n2024-07-01T10:05:00Z,NYC,apple,1.5,4,kg,fruit,Q3-A,s1\n2024-07-01T10:20:00Z,NYC,pear,2.0,1,kg,fruit,Q3-B,s2\n2024-07-01T10:40:00Z,SF,apple,1.0,3,kg,fruit,Q2-X,s3\n2024-07-01T11:10:00Z,NYC,milk,3.0,2,l,dairy,Q3-C,s4\n2024-07-01T11:30:00Z,SF,milk,2.5,5,l,dairy,Q3-D,s5\n2024-07-01T12:00:00Z,NYC,apple,1.5,0,kg,fruit,,s6\nEOF\ncat > ex1.mtl <<'EOF'\nschema BaseSale {\n  timestamp: timestamp\n  location: string\n  item: string\n  price: float\n  quantity: float\n  unit: string\n  category: string\n}\n\nschema WebSale extends BaseSale {\n  session_id: string\n  revenue: float = price * quantity\n}\n\npipeline HourlyKPIs using WebSale {\n  params {\n    min_qty: float = 0.0\n    k: int = 1\n  }\n\n  calc qty_ok = quantity >= param(\"min_qty\") : bool @stage(pre)\n  filter(qty_ok)\n  window(1h)\n  group_by(['location', 'category'])\n  aggregate sum(revenue) as total_rev,\n            average(price) as avg_price,\n            count(*) as n\n\n  calc prev_rev = lag(total_rev, param(\"k\")) : float @stage(post_agg)\n  calc rev_change = total_rev - coalesce(prev_rev, 0.0) : float @stage(post_agg)\n}\nEOF\ncat > ex2.mtl <<'EOF'\nschema BaseSale {\n  timestamp: timestamp\n  location: string\n  item: string\n  price: float\n  quantity: float\n  unit: string\n  category: string\n}\nschema PromoSale extends BaseSale {\n  quantity: float  # same type override is allowed but redundant\n  promo_code: string\n  revenue: float = price * quantity\n}\npipeline SalesSummary using PromoSale {\n  params {\n    price_min: float = 0.0\n    promo_prefix: string = 'Q3-'\n    k: int = 1\n  }\n\n  filter(price >= param(\"price_min\") & promo_code starts_with param(\"promo_prefix\"))\n  window(1h)\n  group_by(['location', 'category'])\n  aggregate sum(price) as total_revenue,\n            count(*) as n\n  calc prev_rev = lag(total_revenue, param(\"k\")) : float @stage(post_agg)\n}\nEOF\nP=/workspace/.venv/bin/python; M=/workspace/mtl.py\n$P $M --csv sales.csv --dsl ex1.mtl; echo \"exit=$?\"\n$P $M --csv sales.csv --dsl ex2.mtl --param k=2 --param price_min=1.6; echo \"exit=$?\"",
+  "id": 18
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "2",
+  "cls": [
+   "edit_script",
+   "probe_tmp"
+  ],
+  "cmd": "python - <<'EOF'\np='sithlib/navigation.py'\ns=open(p).read()\na='''        elif isinstance(node, ast.ClassDef):\n            for child in node.decorator_list + node.bases + node.keywords:\n                self._walk(child, scope, stmt, comprehension)'''\nb='''        elif isinstance(node, ast.ClassDef):\n            for child in node.decorator_list + node.bases:\n                self._walk(child, scope, stmt, comprehension)\n            for keyword in node.keywords:\n                if keyword.arg is not None:\n                    self._check(keyword.lineno, keyword.col_offset, keyword.arg,\n                                self._occurrence(\"nothing\", keyword, scope, stmt))\n                self._walk(keyword.value, scope, stmt, comprehension)\n            self._type_params(node, scope, stmt)'''\nassert a in s; s=s.replace(a,b)\na='''    def _function(self, node, scope, stmt):\n        for child in node.decorator_list:\n            self._walk(child, scope, stmt, {})'''\nb='''    def _type_params(self, node, scope, stmt):\n        for param in getattr(node, \"type_params\", None) or ():\n            name = getattr(param, \"name\", None)\n            if name:\n                self._check(param.lineno, param.col_offset + (len(param.__class__.__name__)\n                            and _type_param_prefix(param)), name,\n                            self._occurrence(\"nothing\", param, scope, stmt))\n\n    def _function(self, node, scope, stmt):\n        for child in node.decorator_list:\n            self._walk(child, scope, stmt, {})\n        self._type_params(node, scope, stmt)'''\nassert a in s; s=s.replace(a,b)\na='''def _module_position(tree, node):'''\nb='''def _type_param_prefix(param):\n    \"\"\"Width of the ``*``/``**`` before a type parameter's name.\"\"\"\n    if param.__class__.__name__ == \"TypeVarTuple\":\n        return 1\n    if param.__class__.__name__ == \"ParamSpec\":\n        return 2\n    return 0\n\n\ndef _module_position(tree, node):'''\nassert a in s; s=s.replace(a,b)\ns=s.replace('''            self._check(line, col, node.name, self._bound(node, scope, stmt))\n            inner = self.analysis.scope_of(node) or scope''','''            self._check(line, col, node.name, self._bound(node, scope, stmt))\n            inner = self.analysis.scope_of(node) or scope''')\nopen(p,'w').write(s)\nEOF\nsed -i 's/self._check(param.lineno, param.col_offset + (len(param.__class__.__name__)\\n//' /workspace/sithlib/navigation.py\npython - <<'EOF'\np='/workspace/sithlib/navigation.py'\ns=open(p).read()\ns=s.replace('''                self._check(param.lineno, param.col_offset + (len(param.__class__.__name__)\n                            and _type_param_prefix(param)), name,\n                            self._occurrence(\"nothing\", param, scope, stmt))''','''                self._check(param.lineno, param.col_offset + _type_param_prefix(param), name,\n                            self._occurrence(\"nothing\", param, scope, stmt))''')\nopen(p,'w').write(s)\nEOF\ngrep -n \"_type_param_prefix(param)\" /workspace/sithlib/navigation.py; cd /tmp/sw && printf 'class C(metaclass=type):\\n    pass\\ndef f[T](x: T) -> T:\\n    return x\\n' > tp.py && python /workspace/sith.py goto tp.py 1 9; python /workspace/sith.py infer tp.py 3 6; echo $?",
+  "id": 19
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "4",
+  "cls": [
+   "install_or_ref_lib",
+   "probe_run"
+  ],
+  "cmd": ".venv/bin/pip install pyyaml 2>&1 | tail -1 && .venv/bin/python -c \"import yaml; print(yaml.__version__)\"",
+  "id": 20
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/t6/stubs/tools /tmp/t6/tools && cd /tmp/t6 && cat > tools/__init__.py <<'EOF'\ndef run(cmd):\n    return execute(cmd)\n\ndef helper(a):\n    return a\nEOF\ncat > stubs/tools/__init__.pyi <<'EOF'\ndef run(cmd: list[str]) -> int: ...\nEOF\ncat > other.py <<'EOF'\ndef calc(x, y):\n    return x\nr = calc(1, 2)\nr\ncalc(\nEOF\ncat > other.pyi <<'EOF'\ndef calc(x: float, y: float) -> float: ...\nEOF\nmkdir -p stubs && cat > stubs/other.pyi <<'EOF'\ndef calc(x: bytes, y: bytes) -> bytes: ...\nEOF\ncat > main.py <<'EOF'\nimport tools\ntools.run([\"a\"])\ntools.helper(1)\nEOF\ncd /workspace; S=\".venv/bin/python sith.py\"\n$S infer /tmp/t6/main.py 2 6; $S infer /tmp/t6/main.py 2 8 ; $S signatures /tmp/t6/main.py 2 10; $S infer /tmp/t6/other.py 4 0; $S signatures /tmp/t6/other.py 5 5; $S goto /tmp/t6/main.py 2 6",
+  "id": 21
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "5",
+  "cls": [
+   "edit_script",
+   "probe_tmp"
+  ],
+  "cmd": "python3 - <<'EOF'\np='/workspace/sith.py'\ns=open(p).read()\nold='''    rets = flow.returns[:-1] if ends_return else flow.returns\n    if rets or (ends_return and flow.returns[-1] is not stmts[-1]):\n        raise'''\nnew='''    if flow.returns and not ends_return:\n        raise'''\nassert old in s; s=s.replace(old,new)\nopen(p,'w').write(s)\nEOF\ncd /tmp/t2 && S=\"/workspace/venv/bin/python /workspace/sith.py\"; $S extract-function h.py 2 0 --until 5:12 --name q --diff; $S extract-function h.py 2 0 --until 4:9 --name q; echo $?",
+  "id": 22
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "8",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "python3 - <<'EOF'\nsrc = open('appctl.py').read()\nstart = src.index(\"def cmd_cli_update(args, assoc):\")\nend = src.index(\"# ---------------------------------------------------------------------------\\n# Version upgrade\")\nnew = r'''def extract_archive_command(assoc):\n    archive = assoc[\"archive\"]\n    if not isinstance(archive, str) or archive == \"\":\n        error(\"The --archive parameter needs a value.\")\n    if archive_type(archive) is None:\n        error(\"Extraction only supported for '.zip' and '.tar.gz' file types.\")\n    archive = os.path.abspath(os.path.expanduser(archive))\n    if not os.path.isfile(archive):\n        error(\"Archive '%s' does not exist.\" % assoc[\"archive\"])\n    if not os.access(archive, os.R_OK):\n        error(\"Archive '%s' is not readable.\" % assoc[\"archive\"])\n    dest = assoc.get(\"path\")\n    if not isinstance(dest, str) or not dest:\n        dest = Runtime.config.get(\"path\")\n    if not isinstance(dest, str) or not dest:\n        dest = os.getcwd()\n    dest = os.path.abspath(os.path.expanduser(dest))\n    debug(\"Extracting '%s' to '%s'\" % (archive, dest), \"extract\")\n    try:\n        extract(archive, dest)\n    except ExtractionError as exc:\n        error(str(exc))\n    success(\"Extracted '%s' to '%s'.\" % (assoc[\"archive\"], dest))\n\n\n# ---------------------------------------------------------------------------\n# System requirements\n# ---------------------------------------------------------------------------\n\nREQUIREMENT_EXEMPT_FAMILIES = (\"cli\", \"config\", \"help\")\nMIN_RUNTIME_VERSION = \"3.8.0\"\nRUNTIME_CHECK_ATTEMPTS = 4\nRUNTIME_CHECK_DELAY = 0.5        # seconds; doubles after every failed attempt\nRUNTIME_CHECK_MAX_DELAY = 4.0\nPROBE_TIMEOUT = 30\nCONTAINER_RUNTIME_ERROR = \"Container runtime (docker) is either not installed or not running.\"\nDARWIN_RUNTIME_HINT = (\"Please install it with your system package manager: \"\n                       \"brew install --cask docker\")\nCOMPOSE_MISSING_ERROR = (\"Compose tool (docker-compose) is not installed. Please install \"\n                         \"version %s or newer.\")\nCOMPOSE_UNKNOWN_ERROR = \"Unable to determine the version of the compose tool `%s`.\"\nCOMPOSE_OLD_ERROR = (\"Compose tool version %s is older than the minimum required version %s. \"\n                     \"Please upgrade the compose tool.\")\nRUNTIME_OLD_ERROR = \"Python version %s is older than the minimum required version %s.\"\nLOOSE_VERSION_RE = re.compile(r\"(\\d+)\\.(\\d+)(?:\\.(\\d+))?(-[0-9A-Za-z.-]+)?\")\nBARE_VERSION_RE = re.compile(r\"^v?\\d+\\.\\d+(?:\\.\\d+)?(?:[-+][0-9A-Za-z.+-]*)?$\")\n\n\ndef _env_float(name, default):\n    value = os.environ.get(name, \"\").strip()\n    try:\n        return float(value) if value else default\n    except ValueError:\n        return default\n\n\ndef probe(command, timeout=PROBE_TIMEOUT):\n    \"\"\"Run ``command`` quietly; return ``(return_code, stdout)`` (127 when it cannot start).\"\"\"\n    import subprocess\n\n    debug(\"Running command: %s\" % command_string(command), \"requirements\")\n    try:\n        proc = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,\n                              stderr=subprocess.PIPE, timeout=timeout)\n    except (OSError, subprocess.SubprocessError) as exc:\n        debug(\"Command failed: %s\" % exc, \"requirements\")\n        return 127, \"\"\n    debug(\"Return code: %d\" % proc.returncode, \"requirements\")\n    return proc.returncode, proc.stdout.decode(\"utf-8\", \"replace\")\n\n\ndef loose_version(text):\n    \"\"\"The first ``X.Y[.Z][-pre]`` version in ``text`` as a semantic version, else None.\"\"\"\n    match = LOOSE_VERSION_RE.search(str(text))\n    if not match:\n        return None\n    major, minor, patch, pre = match.groups()\n    return \"%d.%d.%d%s\" % (int(major), int(minor), int(patch or 0), pre or \"\")\n\n\ndef container_runtime_responsive():\n    import shutil\n\n    binary = shutil.which(DOCKER_BIN)\n    if binary is None:\n        return False\n    return any(probe([binary] + args)[0] == 0 for args in ([\"ps\"], [\"info\"]))\n\n\ndef check_container_runtime():\n    \"\"\"None when the container runtime responds (retrying with backoff), else an error.\"\"\"\n    attempts = max(1, _env_int(\"APPCTL_RUNTIME_CHECK_ATTEMPTS\", RUNTIME_CHECK_ATTEMPTS))\n    delay = max(0.0, _env_float(\"APPCTL_RUNTIME_CHECK_DELAY\", RUNTIME_CHECK_DELAY))\n    for attempt in range(1, attempts + 1):\n        if container_runtime_responsive():\n            return None\n        if attempt < attempts:\n            wait = min(delay * 2 ** (attempt - 1), RUNTIME_CHECK_MAX_DELAY)\n            debug(\"Container runtime is not responding (attempt %d of %d); retrying in %.2fs.\"\n                  % (attempt, attempts, wait), \"requirements\")\n            time.sleep(wait)\n    message = CONTAINER_RUNTIME_ERROR\n    if is_darwin():\n        message += \" \" + DARWIN_RUNTIME_HINT\n    return message\n\n\ndef detect_compose_tool():\n    \"\"\"``(command, version or None)`` of the compose tool (standalone first), or None.\"\"\"\n    import shutil\n\n    if shutil.which(DOCKER_COMPOSE_BIN):\n        for args in ([\"version\", \"--short\"], [\"--version\"], [\"version\"]):\n            code, output = probe([DOCKER_COMPOSE_BIN] + args)\n            version = loose_version(output) if code == 0 else None\n            if version:\n                return [DOCKER_COMPOSE_BIN], version\n        return [DOCKER_COMPOSE_BIN], None\n    if shutil.which(DOCKER_BIN):\n        code, output = probe([DOCKER_BIN, \"compose\", \"version\", \"--short\"])\n        lines = output.strip().splitlines() if code == 0 else []\n        first = lines[0].strip() if lines else \"\"\n        if BARE_VERSION_RE.match(first) or \"compose\" in first.lower():\n            version = loose_version(first)\n            if version:\n                return [DOCKER_BIN, \"compose\"], version\n    return None\n\n\ndef minimum_compose_version():\n    return os.environ.get(\"APPCTL_MIN_COMPOSE_VERSION\") or MIN_COMPOSE_VERSION\n\n\ndef check_compose_tool():\n    minimum = minimum_compose_version()\n    found = detect_compose_tool()\n    if found is None:\n        return COMPOSE_MISSING_ERROR % minimum\n    command, version = found\n    if version is None:\n        return COMPOSE_UNKNOWN_ERROR % command_string(command)\n    if compare_semver(version, loose_version(minimum) or minimum) < 0:\n        return COMPOSE_OLD_ERROR % (version, minimum)\n    return None\n\n\ndef check_host_runtime():\n    import platform\n\n    minimum = os.environ.get(\"APPCTL_MIN_RUNTIME_VERSION\") or MIN_RUNTIME_VERSION\n    current = loose_version(platform.python_version())\n    if compare_semver(current, loose_version(minimum) or minimum) < 0:\n        return RUNTIME_OLD_ERROR % (platform.python_version(), minimum)\n    return None\n\n\ndef requirement_errors():\n    errors = []\n    for check in (check_container_runtime, check_compose_tool, check_host_runtime):\n        message = check()\n        if message:\n            errors.append(message)\n    return errors\n\n\ndef check_requirements():\n    \"\"\"Exit with code 1 (after reporting every problem) unless the host meets the requirements.\"\"\"\n    errors = requirement_errors()\n    if not errors:\n        return\n    for message in errors:\n        sys.stderr.write(colorize_prefix(\"Error\") + \" \" + message + \"\\n\")\n        write_log(\"Error: \" + message)\n    raise AppctlExit(1)\n\n\n# ---------------------------------------------------------------------------\n# Updates\n# ---------------------------------------------------------------------------\n\nRELEASES_URL = \"https://api.github.com/repos/appctl/appctl/releases?per_page=100\"\nBUILDS_URL = \"https://raw.githubusercontent.com/appctl/appctl-builds/main\"\nHTTP_TIMEOUT = 30\nUPDATE_CHECK_OPTION = \"last_update_check\"\nSELF_UPDATE_DARWIN_ERROR = (\"Self-update is not available. Please use your system package \"\n                            \"manager to update.\")\nBROKEN_UPDATE_ERROR = \"The downloaded update is broken, try running '%s cli update' again.\" % PROG\n\n\ndef releases_url():\n    return os.environ.get(\"APPCTL_RELEASES_URL\") or RELEASES_URL\n\n\ndef nightly_version_url():\n    return os.environ.get(\"APPCTL_NIGHTLY_VERSION_URL\") or BUILDS_URL + \"/NIGHTLY_VERSION\"\n\n\ndef nightly_package_url():\n    return os.environ.get(\"APPCTL_NIGHTLY_URL\") or BUILDS_URL + \"/%s-nightly.pyz\" % PROG\n\n\ndef stable_package_url():\n    return os.environ.get(\"APPCTL_STABLE_URL\") or BUILDS_URL + \"/%s.pyz\" % PROG\n\n\ndef http_get(url, headers=None, timeout=HTTP_TIMEOUT):\n    \"\"\"GET ``url``; returns ``(status, body)`` with status 0 when the request failed.\"\"\"\n    import urllib.error\n    import urllib.request\n\n    request_headers = {\"User-Agent\": \"%s/%s\" % (PROG, VERSION)}\n    request_headers.update(headers or {})\n    debug(\"HTTP GET %s\" % url, \"http\")\n    try:\n        request = urllib.request.Request(url, headers=request_headers)\n        with urllib.request.urlopen(request, timeout=timeout) as response:\n            status = getattr(response, \"status\", None) or 200\n            return int(status), response.read()\n    except urllib.error.HTTPError as exc:\n        try:\n            body = exc.read()\n        except Exception:\n            body = b\"\"\n        return int(exc.code or 0), body\n    except (urllib.error.URLError, OSError, ValueError) as exc:\n        debug(\"HTTP request to %s failed: %s\" % (url, exc), \"http\")\n        return 0, b\"\"\n\n\ndef named_semver(new_version, original_version):\n    \"\"\"``patch``, ``minor`` or ``major`` when ``new_version`` is newer, else None.\"\"\"\n    if compare_semver(new_version, original_version) <= 0:\n        return None\n    new, original = parse_semver(new_version), parse_semver(original_version)\n    if new[:2] == original[:2]:\n        return \"patch\"\n    if new[0] == original[0]:\n        return \"minor\"\n    return \"major\"\n\n\ndef nightly_updates():\n    status, body = http_get(nightly_version_url())\n    if status != 200:\n        error(\"Failed to get current nightly version (HTTP code %d).\" % status)\n    nightly = body.decode(\"utf-8\", \"replace\").strip()\n    if not nightly or nightly == VERSION:\n        return []\n    return [{\"version\": nightly, \"update_type\": \"nightly\", \"package_url\": nightly_package_url(),\n             \"status\": \"available\"}]\n\n\ndef get_updates(filter_type=None):\n    \"\"\"Newer releases, one per update type (newest first: major, minor, patch).\"\"\"\n    if is_nightly():\n        return nightly_updates()\n    headers = {\"Accept\": \"application/json\"}\n    if os.environ.get(\"GITHUB_TOKEN\"):\n        headers[\"Authorization\"] = \"token %s\" % os.environ[\"GITHUB_TOKEN\"]\n    status, body = http_get(releases_url(), headers)\n    if status != 200:\n        error(\"Failed to get latest version (HTTP code %d).\" % status)\n    try:\n        releases = json.loads(body.decode(\"utf-8\", \"replace\"))\n    except ValueError:\n        error(\"Failed to get latest version (invalid response).\")\n    if not isinstance(releases, list):\n        error(\"Failed to get latest version (invalid response).\")\n    current = VERSION if parse_semver(VERSION) else loose_version(VERSION) or \"0.0.0\"\n    updates = dict.fromkeys(UPDATE_TYPES)\n    for release in releases:\n        if not isinstance(release, dict) or release.get(\"draft\"):\n            continue\n        version = str(release.get(\"tag_name\") or release.get(\"version\") or \"\").strip()\n        if version.startswith(\"v\"):\n            version = version[1:]\n        if parse_semver(version) is None:\n            continue\n        kind = named_semver(version, current)\n        if kind is None:\n            continue\n        if updates[kind] and compare_semver(version, updates[kind][\"version\"]) <= 0:\n            continue\n        assets = release.get(\"assets\") if isinstance(release.get(\"assets\"), list) else []\n        package_url = \"\"\n        if assets and isinstance(assets[0], dict):\n            package_url = str(assets[0].get(\"browser_download_url\") or \"\")\n        updates[kind] = {\"version\": version, \"update_type\": kind, \"package_url\": package_url,\n                         \"status\": \"available\"}\n    if filter_type:\n        return [updates[filter_type]] if updates.get(filter_type) else []\n    return [updates[kind] for kind in UPDATE_TYPES if updates[kind]]\n\n\ndef _writable(path):\n    return os.access(path, os.W_OK)\n\n\ndef validate_download(path, url):\n    \"\"\"Verify the checksum and run the downloaded build; returns the version it reports.\"\"\"\n    import hashlib\n    import shutil\n    import subprocess\n    import tempfile\n\n    status, body = http_get(url + \".md5\")\n    if status != 200:\n        error(\"Couldn't access md5 hash for release (HTTP code %d).\" % status)\n    expected = (body.decode(\"utf-8\", \"replace\").split() or [\"\"])[0].lower()\n    with open(path, \"rb\") as handle:\n        actual = hashlib.md5(handle.read()).hexdigest()\n    if actual != expected:\n        error(\"md5 hash for download (%s) is different than the release hash (%s).\"\n              % (actual, expected))\n    log(\"md5 hash verified: %s\" % expected)\n    sandbox = tempfile.mkdtemp(prefix=\"%s-update-check-\" % PROG)\n    env = dict(os.environ, APPCTL_ROOT_DIR=sandbox, APPCTL_DISABLE_AUTO_CHECK_UPDATE=\"1\")\n    for name in (\"APPCTL_CONFIG_PATH\", \"APPCTL_CACHE_DIR\", \"APPCTL_PACKAGES_DIR\"):\n        env.pop(name, None)\n    try:\n        proc = subprocess.run([runtime_binary(), path, \"cli\", \"version\"], env=env,\n                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,\n                              stderr=subprocess.PIPE, timeout=120)\n        code, stdout, stderr = (proc.returncode, proc.stdout.decode(\"utf-8\", \"replace\"),\n                                proc.stderr.decode(\"utf-8\", \"replace\"))\n    except (OSError, subprocess.SubprocessError) as exc:\n        code, stdout, stderr = 127, \"\", str(exc)\n    finally:\n        shutil.rmtree(sandbox, ignore_errors=True)\n    version = loose_version(stdout) if code == 0 else None\n    if version is None:\n        for line in stderr.strip().splitlines():\n            sys.stderr.write(line + \"\\n\")\n        error(BROKEN_UPDATE_ERROR)\n    log(\"New version works. Proceeding to replace.\")\n    return version\n\n\ndef install_update(url, version=None):\n    \"\"\"Download ``url``, validate it and replace the running binary. Returns the version.\"\"\"\n    import tempfile\n\n    binary = binary_path()\n    log(\"Downloading from %s...\" % url)\n    handle, temp = tempfile.mkstemp(prefix=\".%s-update-\" % PROG, dir=os.path.dirname(binary))\n    try:\n        os.close(handle)\n        status, body = http_get(url)\n        if status != 200 or not body:\n            error(\"Failed to download the update from %s (HTTP code %d).\" % (url, status))\n        with open(temp, \"wb\") as stream:\n            stream.write(body)\n        reported = validate_download(temp, url)\n        try:\n            os.chmod(temp, os.stat(binary).st_mode & 0o777)\n        except OSError as exc:\n            error(\"Cannot chmod %s: %s\" % (temp, exc.strerror or exc))\n        try:\n            os.replace(temp, binary)\n        except OSError as exc:\n            error(\"Cannot move %s to %s: %s\" % (temp, binary, exc.strerror or exc))\n    finally:\n        if os.path.lexists(temp):\n            try:\n                os.unlink(temp)\n            except OSError:\n                pass\n    return version or reported\n\n\ndef cmd_cli_update(args, assoc):\n    if \"archive\" in assoc:\n        extract_archive_command(assoc)\n        return False\n    if is_darwin():\n        error(SELF_UPDATE_DARWIN_ERROR)\n    binary = binary_path()\n    if not _writable(binary):\n        error(\"%s is not writable by current user.\" % binary)\n    if not _writable(os.path.dirname(binary)):\n        error(\"%s is not writable by current user.\" % os.path.dirname(binary))\n    version = None\n    if assoc.get(\"nightly\"):\n        question = \"You have version %s. Would you like to update to the latest nightly?\"\n        url = nightly_package_url()\n    elif assoc.get(\"stable\"):\n        question = \"You have version %s. Would you like to update to the latest stable release?\"\n        url = stable_package_url()\n    else:\n        filter_type = update_filter(Runtime.assoc_list or list(assoc.items()))\n        updates = get_updates(filter_type)\n        if not updates:\n            success(\"%s is at the latest%sversion.\" % (PROG, update_type_str(filter_type)))\n            return False\n        newest = updates[0]\n        version, url = newest[\"version\"], newest[\"package_url\"]\n        question = \"You have version %%s. Would you like to update to %s?\" % version\n        if not url:\n            error(\"No download is available for version %s.\" % version)\n    if not confirm(question % VERSION, assoc):\n        return False\n    installed = install_update(url, version)\n    success(\"Updated AppCtl to %s.\" % installed)\n    return True\n\n\ndef auto_check_update(command):\n    \"\"\"Periodically look for updates in interactive sessions and offer to install them.\"\"\"\n    if os.environ.get(\"APPCTL_DISABLE_AUTO_CHECK_UPDATE\", \"\").strip().lower() not in (\n            \"\", \"0\", \"false\", \"no\", \"off\"):\n        return\n    if command is None or command.path in (\"cli update\", \"cli check-update\", \"cli completions\",\n                                           \"cli has-command\", \"cli self-uninstall\"):\n        return\n    if is_darwin():\n        return\n    try:\n        if not (sys.stdout.isatty() and _stdin_is_tty()):\n            return\n    except (AttributeError, ValueError):\n        return\n    binary = binary_path()\n    if not _writable(binary) or not _writable(os.path.dirname(binary)):\n        return\n    days = _env_int(\"APPCTL_AUTO_CHECK_UPDATE_DAYS\", 1)\n    if days < 0:\n        days = 1\n    now = int(time.time())\n    last = Option.get(UPDATE_CHECK_OPTION)\n    if last is False or not str(last).strip().isdigit():\n        Option.set(UPDATE_CHECK_OPTION, now)\n        return\n    if (now - int(last)) // 86400 < days:\n        return\n    Option.set(UPDATE_CHECK_OPTION, now)\n    try:\n        updates = get_updates()\n    except AppctlExit:\n        return\n    if not updates:\n        return\n    if cmd_cli_update([], {}):\n        raise AppctlExit(0)\n\n\n# ---------------------------------------------------------------------------\n# Self-uninstall\n# ---------------------------------------------------------------------------\n\ndef remove_labeled_resources(kind, list_args, remove_args):\n    log(\"Removing %s...\" % kind)\n    result = docker_run(list_args)\n    if result.return_code != 0:\n        warning(\"Unable to list %s: %s\" % (kind, (result.stderr or result.stdout).strip()))\n        return\n    ids = []\n    for item in result.stdout.split():\n        if item not in ids:\n            ids.append(item)\n    if not ids:\n        return\n    result = docker_run(remove_args + ids)\n    if result.return_code != 0:\n        warning(\"Unable to remove %s: %s\" % (kind, (result.stderr or result.stdout).strip()))\n\n\ndef remove_tree(path):\n    import shutil\n\n    if os.path.islink(path) or os.path.isfile(path):\n        os.unlink(path)\n    elif os.path.isdir(path):\n        shutil.rmtree(path)\n\n\ndef cmd_cli_self_uninstall(args, assoc):\n    check_requirements()\n    if not confirm(\"Are you sure you want to remove %s and all its sites (along with their \"\n                   \"data)? This is an irreversible action.\" % PROG, assoc):\n        return\n    label = \"label=%s\" % LABEL_VENDOR\n    remove_labeled_resources(\"containers\", [\"ps\", \"-aq\", \"--filter\", label], [\"rm\", \"-f\"])\n    remove_labeled_resources(\"networks\", [\"network\", \"ls\", \"-q\", \"--filter\", label],\n                             [\"network\", \"rm\"])\n    remove_labeled_resources(\"volumes\", [\"volume\", \"ls\", \"-q\", \"--filter\", label],\n                             [\"volume\", \"rm\", \"-f\"])\n    remove_labeled_resources(\"images\", [\"image\", \"ls\", \"-q\", \"--filter\", label],\n                             [\"image\", \"rm\", \"-f\"])\n    log(\"Removing project directories...\")\n    directories = []\n    try:\n        directories = [project_directory(project) for project in Project.all()]\n    except Exception as exc:\n        warning(\"Unable to read the list of projects: %s\" % exc)\n    directories.append(absolutize(str(Runtime.config.get(\"projects_path\")\n                                      or os.path.join(root_dir(), \"sites\")), root_dir()))\n    for directory in directories:\n        try:\n            remove_tree(directory)\n        except OSError as exc:\n            warning(\"Unable to remove '%s': %s\" % (directory, exc.strerror or exc))\n    log(\"Removing %s root directory...\" % PROG)\n    write_log(\"Removing %s root directory %s\" % (PROG, root_dir()))\n    Database.close()\n    FileLog.enabled = False\n    Runtime.cache = None\n    try:\n        remove_tree(root_dir())\n    except OSError as exc:\n        error(\"Unable to remove '%s': %s\" % (root_dir(), exc.strerror or exc))\n    archive = archive_path()\n    if archive:\n        log(\"Removing %s binary...\" % PROG)\n        try:\n            os.unlink(archive)\n        except OSError as exc:\n            error(\"Unable to remove '%s': %s\" % (archive, exc.strerror or exc))\n    success(\"%s and all its sites have been removed successfully.\" % PROG)\n\n\n'''\nsrc = src[:start] + new + src[end:]\nopen('appctl.py','w').write(src)\nEOF",
+  "id": 23
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c1",
+  "ck": "4",
+  "cls": [
+   "edit_script",
+   "probe_run"
+  ],
+  "cmd": ".venv/bin/python - <<'EOF'\nsrc = open('industry.py').read()\nplan_code = r'''\nSECONDS_PER_DAY = 86400\nMAX_TE = 20\n\n\nclass PlanError(Exception):\n    pass\n\n\ndef load_plan_config(path):\n    if not os.path.exists(path):\n        raise PlanError(f\"Config file not found: {path}\")\n    with open(path, \"r\", encoding=\"utf-8\") as fh:\n        text = fh.read()\n    if yaml is not None:\n        try:\n            data = yaml.safe_load(text)\n        except yaml.YAMLError as exc:\n            raise PlanError(f\"Invalid config file: {exc}\")\n    else:\n        data = {}\n        for line in text.splitlines():\n            line = line.split(\"#\", 1)[0].strip()\n            if \":\" in line:\n                key, _, val = line.partition(\":\")\n                data[key.strip()] = val.strip()\n    if data is None:\n        data = {}\n    if not isinstance(data, dict):\n        raise PlanError(\"Config file must be a mapping\")\n\n    def get_int(key, default, low, high):\n        value = data.get(key, default)\n        if value is None:\n            value = default\n        if isinstance(value, bool):\n            raise PlanError(f\"{key} must be an integer\")\n        try:\n            num = int(value) if isinstance(value, int) else int(str(value).strip())\n        except ValueError:\n            raise PlanError(f\"{key} must be an integer, got '{value}'\")\n        if not low <= num <= high:\n            raise PlanError(f\"{key} must be in range [{low},{high}], got {num}\")\n        return num\n\n    return {\n        \"te_bonus\": get_int(\"te_bonus\", 0, 0, 30),\n        \"invention_skill\": get_int(\"invention_skill\", 5, 1, 5),\n    }\n\n\ndef _decryptor_suffix(tokens):\n    \"\"\"Yield (decryptor, remaining tokens) for decryptor names ending the tokens.\"\"\"\n    for dec in DECRYPTORS:\n        words = dec[0].split()\n        n = len(words)\n        if len(tokens) > n and [t.lower() for t in tokens[-n:]] == [w.lower() for w in words]:\n            yield dec, tokens[:-n]\n\n\ndef _int_token(token):\n    return token.isdigit()\n\n\ndef parse_build_string(sde, text):\n    \"\"\"Parse a build string into a request dict.\"\"\"\n    tokens = text.split()\n    if not tokens:\n        raise PlanError(\"Empty build string\")\n    jobs = 1\n    if len(tokens) > 1 and len(tokens[-1]) > 1 and tokens[-1][0] in \"xX\" and tokens[-1][1:].isdigit():\n        jobs = int(tokens[-1][1:])\n        tokens = tokens[:-1]\n\n    relic_names = {}\n    for (src, aid) in sde.inv_products:\n        name = type_name(sde, src)\n        if aid in INVENTION_ACTIVITIES and sde.is_published(src) and relic_quality(name) is not None:\n            relic_names.setdefault(name.lower(), src)\n\n    candidates = []\n    # Reverse engineering: {Item} {Runs} {Decryptor|None} {Relic}\n    for n in range(1, len(tokens)):\n        relic = relic_names.get(\" \".join(tokens[-n:]).lower())\n        if relic is None:\n            continue\n        for dec, rest in _decryptor_suffix(tokens[:-n]):\n            if len(rest) > 1 and _int_token(rest[-1]):\n                candidates.append(dict(kind=\"invention\", name=\" \".join(rest[:-1]), runs=int(rest[-1]),\n                                       decryptor=dec, relic=relic))\n            candidates.append(dict(kind=\"invention\", name=\" \".join(rest), runs=None,\n                                   decryptor=dec, relic=relic))\n    # Invention: {Item} {Runs} {Decryptor|None}\n    for dec, rest in _decryptor_suffix(tokens):\n        if len(rest) > 1 and _int_token(rest[-1]):\n            candidates.append(dict(kind=\"invention\", name=\" \".join(rest[:-1]), runs=int(rest[-1]),\n                                   decryptor=dec, relic=None))\n        candidates.append(dict(kind=\"invention\", name=\" \".join(rest), runs=None,\n                               decryptor=dec, relic=None))\n    # Normal: {Item} {Runs} {ME} {TE}\n    if len(tokens) > 3 and all(_int_token(t) for t in tokens[-3:]):\n        candidates.append(dict(kind=\"normal\", name=\" \".join(tokens[:-3]), runs=int(tokens[-3]),\n                               me=int(tokens[-2]), te=int(tokens[-1])))\n    # Item: {Item} {Runs}\n    if len(tokens) > 1 and _int_token(tokens[-1]):\n        candidates.append(dict(kind=\"normal\", name=\" \".join(tokens[:-1]), runs=int(tokens[-1]), me=0, te=0))\n    # Item: {Item}\n    candidates.append(dict(kind=\"normal\", name=\" \".join(tokens), runs=1, me=0, te=0))\n\n    first_error = None\n    for cand in candidates:\n        cand[\"jobs\"] = jobs\n        try:\n            if cand[\"kind\"] == \"invention\":\n                cand[\"product\"], cand[\"bp\"] = resolve_invention(sde, cand[\"name\"])\n                cand[\"aid\"] = MANUFACTURING\n            else:\n                cand[\"product\"], cand[\"bp\"], cand[\"aid\"] = sde.resolve(cand[\"name\"])\n        except LookupError as exc:\n            if first_error is None:\n                first_error = exc\n            continue\n        return cand\n    raise PlanError(str(first_error) if first_error else f\"Could not parse build string '{text}'\")\n\n\ndef job_material_amount(qty, me, runs):\n    \"\"\"Materials for one job: max(runs, ceil(qty * runs * (1 - ME/100))).\"\"\"\n    return max(runs, math.ceil(Fraction(qty) * runs * (100 - me) / 100))\n\n\ndef format_decimal(value):\n    \"\"\"Round to two decimals and print like a float (at least one decimal).\"\"\"\n    text = format(Decimal(value).quantize(Decimal(\"0.01\"), rounding=ROUND_HALF_UP), \"f\")\n    whole, _, frac = text.partition(\".\")\n    frac = frac.rstrip(\"0\") or \"0\"\n    if whole in (\"-0\", \"\"):\n        whole = \"0\"\n    return f\"{whole}.{frac}\"\n\n\ndef invention_plan(sde, req, skill):\n    \"\"\"Return (bp ME, bp TE, max runs, {typeID: quantity}) for the invention step.\"\"\"\n    product, bp = req[\"product\"], req[\"bp\"]\n    dname, mult, druns, dme, dte = req[\"decryptor\"]\n    if req[\"relic\"] is not None:\n        sources = [(src, aid) for src, aid in sde.inv_sources.get(bp, []) if src == req[\"relic\"]]\n        if not sources:\n            raise PlanError(f\"'{type_name(sde, req['relic'])}' cannot be reverse engineered into \"\n                            f\"'{type_name(sde, bp)}'\")\n        primary = sources[0]\n    else:\n        _, _, _, primary = invention_sources(sde, product, bp)\n\n    quality = relic_quality(type_name(sde, primary[0]))\n    if quality is not None:\n        _, base, base_runs = quality\n    else:\n        base = sde.inv_probability.get((primary[0], primary[1], bp), 0.0)\n        base_runs = sde.inv_products.get(primary, {}).get(bp, 1)\n\n    skills = sde.inv_skills.get(primary, {})\n    factor = Fraction(1)\n    for sid in skills:\n        factor += Fraction(skill, 40 if is_encryption_skill(type_name(sde, sid)) else 30)\n    chance = min(Fraction(1), Fraction(str(base)) * factor * (100 + mult) / 100)\n    if chance <= 0:\n        raise PlanError(f\"Invention of '{type_name(sde, bp)}' has no chance of success\")\n\n    max_runs = base_runs + druns\n    if max_runs <= 0:\n        raise PlanError(f\"Invented '{type_name(sde, bp)}' would have no runs\")\n    runs, jobs = req[\"runs\"], req[\"jobs\"]\n    if runs <= max_runs:\n        # One invented blueprint can be used for several jobs.\n        copies = math.ceil(Fraction(jobs, max_runs // runs))\n    else:\n        copies = jobs * math.ceil(Fraction(runs, max_runs))\n    attempts = math.ceil(copies / chance)\n\n    mats = {}\n    for mid, qty in sde.inv_materials.get(primary, []):\n        mats[mid] = mats.get(mid, 0) + qty * attempts\n    if quality is not None:\n        mats[primary[0]] = mats.get(primary[0], 0) + attempts\n    if dname != \"None\":\n        ids = sorted(sde.by_name.get(dname, []))\n        if ids:\n            mats[ids[0]] = mats.get(ids[0], 0) + attempts\n    return BASE_ME + dme, BASE_TE + dte, max_runs, mats\n\n\ndef build_plan(sde, req, config):\n    \"\"\"Return (materials rows, jobs rows) for a parsed build request.\"\"\"\n    product, bp, aid = req[\"product\"], req[\"bp\"], req[\"aid\"]\n    jobs = req[\"jobs\"]\n    if jobs < 1:\n        raise PlanError(\"Number of jobs must be at least 1\")\n\n    mats = {}\n    if req[\"kind\"] == \"invention\":\n        if req[\"runs\"] is None:\n            req[\"runs\"] = 1\n        if req[\"runs\"] < 1:\n            raise PlanError(\"Runs per job must be at least 1\")\n        me, te, _, inv_mats = invention_plan(sde, req, config[\"invention_skill\"])\n        for mid, qty in inv_mats.items():\n            mats[mid] = mats.get(mid, 0) + qty\n    else:\n        me, te = req[\"me\"], req[\"te\"]\n        if req[\"runs\"] < 1:\n            raise PlanError(\"Runs per job must be at least 1\")\n        if not 0 <= me <= MAX_ME:\n            raise PlanError(f\"Material efficiency must be in range [0,{MAX_ME}], got {me}\")\n        if not 0 <= te <= MAX_TE:\n            raise PlanError(f\"Time efficiency must be in range [0,{MAX_TE}], got {te}\")\n    if aid != MANUFACTURING:\n        me = te = 0\n    runs = req[\"runs\"]\n\n    for mid, qty in sde.materials.get((bp, aid), {}).items():\n        if qty <= 0:\n            continue\n        mats[mid] = mats.get(mid, 0) + job_material_amount(qty, me, runs) * jobs\n\n    by_name = {}\n    for mid, qty in mats.items():\n        name = type_name(sde, mid)\n        vol = (sde.volume(mid) if mid in sde.types else Decimal(0)) * qty\n        prev = by_name.get(name, (0, Decimal(0)))\n        by_name[name] = (prev[0] + qty, prev[1] + vol)\n    material_rows = [[name, qty, format_decimal(vol), 0, 0]\n                     for name, (qty, vol) in sorted(by_name.items())]\n\n    seconds = sde.activity_time.get((bp, aid), 0) or 0\n    days = (Fraction(seconds) * runs * (100 - te) / 100 * (100 - config[\"te_bonus\"]) / 100\n            / SECONDS_PER_DAY)\n    days = Decimal(days.numerator) / Decimal(days.denominator)\n    job_rows = [[type_name(sde, bp), runs, format_decimal(days), jobs]]\n    job_rows.sort(key=lambda r: (r[0], r[1], r[3], Decimal(r[2])))\n    return material_rows, job_rows\n\n\ndef write_plan(output, material_rows, job_rows):\n    os.makedirs(output, exist_ok=True)\n    with open(os.path.join(output, \"materials.csv\"), \"w\", encoding=\"utf-8\", newline=\"\") as fh:\n        writer = csv.writer(fh, lineterminator=\"\\n\")\n        writer.writerow([\"name\", \"to_buy\", \"buy_volume\", \"start_amount\", \"end_amount\"])\n        writer.writerows(material_rows)\n    with open(os.path.join(output, \"jobs.csv\"), \"w\", encoding=\"utf-8\", newline=\"\") as fh:\n        writer = csv.writer(fh, lineterminator=\"\\n\")\n        writer.writerow([\"name\", \"runs\", \"days\", \"count\"])\n        writer.writerows(job_rows)\n\n'''\nsrc = src.replace(\"\\ndef main(argv=None):\", plan_code + \"\\ndef main(argv=None):\")\nsrc = src.replace(\"from decimal import Decimal, InvalidOperation\", \"from decimal import ROUND_HALF_UP, Decimal, InvalidOperation\")\n\nold = '''    args = parser.parse_args(argv)\n'''\nnew = '''    pp = sub.add_parser(\"plan\", help=\"Create a build plan for an item\")\n    pp.add_argument(\"build\", nargs=\"+\", help=\"Build string, e.g. 'Barrage L 10 None x10'\")\n    pp.add_argument(\"--config\", required=True, help=\"YAML build config file\")\n    pp.add_argument(\"--sde\", required=True, help=\"Path to SDE directory\")\n    pp.add_argument(\"--output\", required=True, help=\"Output directory\")\n    args = parser.parse_args(argv)\n\n    if args.command == \"plan\":\n        if not os.path.isdir(args.sde):\n            print(f\"Error: SDE directory not found: {args.sde}\", file=sys.stderr)\n            return 2\n        try:\n            config = load_plan_config(args.config)\n            sde = SDE(args.sde)\n            req = parse_build_string(sde, \" \".join(args.build))\n            material_rows, job_rows = build_plan(sde, req, config)\n        except (PlanError, LookupError) as exc:\n            print(f\"Error: {exc}\", file=sys.stderr)\n            return 1\n        write_plan(args.output, material_rows, job_rows)\n        return 0\n'''\nsrc = src.replace(old, new)\nopen('industry.py', 'w').write(src)\nEOF\nmkdir -p /tmp/t && printf 'te_bonus: 20\\ninvention_skill: 3\\n' > /tmp/t/c.yaml\nfor b in \"Barrage L 10 None x10\" \"Barrage L 10 10 20 x10\" \"Legion 5 Parity Decryptor Malfunctioning Hull Section x3\" \"Barrage L 3 x2\" \"Barrage L\" \"Fernite Carbide 5 x2\"; do echo \"== $b\"; .venv/bin/python industry.py plan $b --config /tmp/t/c.yaml --sde sde --output /tmp/t/o && cat /tmp/t/o/materials.csv /tmp/t/o/jobs.csv; done\n.venv/bin/python industry.py invention Legion --sde sde --skill 3 | head -12",
+  "id": 24
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "3",
+  "cls": [
+   "edit_script",
+   "probe_run"
+  ],
+  "cmd": "cd /workspace; cat > /tmp/patch3.py <<'EOF'\nsrc = open('appctl.py').read()\ndef rep(old, new, count=1):\n    global src\n    assert src.count(old) == count, (old, src.count(old))\n    src = src.replace(old, new)\n\nrep('''                 handler=None, defaults=None, longdesc=\"\"):\n        self.name = name''', '''                 handler=None, defaults=None, longdesc=\"\", stdin_args=()):\n        self.name = name''')\nrep('''        self.longdesc = longdesc\n        self.subcommands = {}''', '''        self.longdesc = longdesc\n        # Positional value arguments that may be read from STDIN (JSON-decoded\n        # when --format=json is active).\n        self.stdin_args = set(stdin_args)\n        self.subcommands = {}''')\nrep('''def register(path, description=\"\", synopsis=\"\", alias=None, handler=None,\n             defaults=None, longdesc=\"\"):''', '''def register(path, description=\"\", synopsis=\"\", alias=None, handler=None,\n             defaults=None, longdesc=\"\", stdin_args=()):''')\nrep('''                      alias=alias, handler=handler, defaults=defaults, longdesc=longdesc)''',\n    '''                      alias=alias, handler=handler, defaults=defaults, longdesc=longdesc,\n                      stdin_args=stdin_args)''')\n\nrep('''    # 1. Required positionals.\n    required = 0''', '''    # 0. A missing positional may be supplied through STDIN.\n    args = fill_from_stdin(command, list(args), positional_specs, assoc_list)\n\n    # 1. Required positionals.\n    required = 0''')\nrep('''def validate_and_prepare(command, args, assoc_list):''', '''def fill_from_stdin(command, args, positional_specs, assoc_list):\n    if len(args) >= len(positional_specs):\n        return args\n    spec = positional_specs[len(args)]\n    is_value = spec[\"name\"] in command.stdin_args\n    if spec[\"optional\"] and not is_value:\n        return args\n    raw = read_stdin()\n    if raw is None:\n        return args\n    fmt = command.defaults.get(\"format\")\n    for key, value in assoc_list:\n        if key == \"format\":\n            fmt = value\n    if is_value and fmt == \"json\":\n        try:\n            args.append(json.loads(raw))\n        except ValueError:\n            error(\"Invalid JSON: %s\" % raw, sensitive=True, box=False)\n    elif spec[\"repeating\"]:\n        args.extend(raw.split())\n    else:\n        args.append(raw)\n    return args\n\n\ndef validate_and_prepare(command, args, assoc_list):''')\n\nrep('''def cmd_cli_has_command(args, assoc):''', '''def completion_candidates(words, current):\n    node = ROOT\n    used = set()\n    for word in words:\n        parsed = parse_token(word)\n        if parsed is not None:\n            used.add(parsed[0])\n            continue\n        child = node.find_subcommand(word) if node.can_have_subcommands() else None\n        if child is not None and not is_command_disabled(child):\n            node = child\n    if node.can_have_subcommands() and not current.startswith(\"-\"):\n        names = [sub.name for sub in node.enabled_subcommands()]\n    else:\n        params = list(node.params) + list(GLOBAL_PARAMS) if node.handler else []\n        names = []\n        for spec in params:\n            if spec[\"type\"] not in (\"assoc\", \"flag\") or spec[\"name\"] in used:\n                continue\n            names.append(\"--%s%s\" % (spec[\"name\"], \"=\" if spec[\"type\"] == \"assoc\" else \"\"))\n    seen = []\n    for name in names:\n        if name.startswith(current) and name not in seen:\n            seen.append(name)\n    return seen\n\n\ndef cmd_cli_completions(args, assoc):\n    line = assoc.get(\"line\") if isinstance(assoc.get(\"line\"), str) else \"\"\n    point = assoc.get(\"point\")\n    if isinstance(point, str) and point.isdigit():\n        line = line[:int(point)]\n    words = line.split()\n    if words:\n        words = words[1:]\n    current = \"\"\n    if words and not line[-1:].isspace():\n        current = words.pop()\n    for name in completion_candidates(words, current):\n        out(name)\n\n\ndef cmd_cli_has_command(args, assoc):''')\nrep('''    register(\"cli cmd-dump\",''', '''    register(\"cli completions\", \"Generate tab completion strings.\",\n             \"--line=<line> [--point=<point>]\", handler=cmd_cli_completions)\n    register(\"cli cmd-dump\",''')\n\nrep('''             handler=cmd_site_meta_set, defaults={\"format\": \"plaintext\"})''',\n    '''             handler=cmd_site_meta_set, defaults={\"format\": \"plaintext\"}, stdin_args=(\"value\",))''')\nrep('''             handler=cmd_config_set, defaults={\"type\": \"all\"})''',\n    '''             handler=cmd_config_set, defaults={\"type\": \"all\"}, stdin_args=(\"value\",))''')\nrep('''             defaults={\"group\": \"default\", \"expiration\": 0})''',\n    '''             defaults={\"group\": \"default\", \"expiration\": 0}, stdin_args=(\"value\",))''')\nrep('''             handler=cmd_db_query)''', '''             handler=cmd_db_query, stdin_args=(\"sql\",))''')\nrep('''             handler=cmd_option_add, defaults={\"format\": \"plaintext\", \"autoload\": \"yes\"})''',\n    '''             handler=cmd_option_add, defaults={\"format\": \"plaintext\", \"autoload\": \"yes\"},\n             stdin_args=(\"value\",))''')\nrep('''             handler=cmd_option_update, defaults={\"format\": \"plaintext\"})''',\n    '''             handler=cmd_option_update, defaults={\"format\": \"plaintext\"}, stdin_args=(\"value\",))''')\n\nrep('''debug(\"Unable to write the global config file '%s'.\" % path)''',\n    '''debug(\"Unable to write the global config file '%s'.\" % path, \"bootstrap\")''')\nfor m in ['\"Using global config: %s\" % global_path', '\"No readable global config found\"',\n          '\"Using project config: %s\" % project_path', '\"No project config found\"',\n          '\"Using alias: %s\" % alias',\n          '\"Resolved config: %s\" % json.dumps(config, sort_keys=True, default=str)',\n          '\"Runtime config: %s\" % json.dumps(runtime, sort_keys=True)']:\n    rep('debug(%s)' % m, 'debug(%s, \"bootstrap\")' % m)\nrep('debug(\"Running SSH command: %s\" % full_command)', 'debug(\"Running SSH command: %s\" % full_command, \"ssh\")')\nrep('debug(\"Running command: %s\" % command.path)', 'debug(\"Running command: %s\" % command.path, \"commands\")')\n\nrep('''    Runtime.debug = runtime.get(\"debug\") not in (None, False)''',\n    '''    value = runtime.get(\"debug\")\n    Runtime.debug = value not in (None, False)\n    Runtime.debug_group = value if isinstance(value, str) and value else None''')\n\nrep('''    positionals, assoc_list, runtime = split_args(tokens, strict)\n    apply_runtime_config(dict(runtime), runtime)''', '''    positionals, assoc_list, runtime = split_args(tokens, strict)\n    FileLog.enabled = not is_completion(positionals)\n    log_invocation(argv if alias is None else [alias] + argv)\n    apply_runtime_config(dict(runtime), runtime)''')\nrep('''def run(argv):''', '''def is_completion(positionals):\n    \"\"\"Tab completion invocations never write to the log file.\"\"\"\n    return positionals[:2] == [\"cli\", \"completions\"]\n\n\ndef run(argv):''')\nrep('''    if argv is None:\n        argv = sys.argv[1:]\n    try:''', '''    if argv is None:\n        argv = sys.argv[1:]\n    Runtime.start_time = time.time()\n    try:''')\nopen('appctl.py','w').write(src)\nEOF\npython /tmp/patch3.py && python -c \"import ast;ast.parse(open('appctl.py').read())\" && echo ok",
+  "id": 25
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "1",
+  "cls": [
+   "edit_script",
+   "install_or_ref_lib",
+   "own_test_run",
+   "probe_run"
+  ],
+  "cmd": "python3 - <<'EOF'\nimport re\np='appctl_core/catalog.py'; s=open(p).read()\ns=s.replace('''    fmt = args.option(\"format\", \"table\")\n    if field and not args.has_option(\"format\"):\n        for record in records:''','''    fmt = args.option(\"format\", \"table\")\n    if field and fmt == \"table\":\n        for record in records:''')\ns=s.replace('''    info = dict(ctx.config.as_dict(), version=VERSION)\n    fmt = ctx.args.option(\"format\")\n    if fmt == \"json\":\n        ctx.out.line(formatter.render([info], list(info), \"json\")[1:-1])\n    elif fmt == \"list\":\n        width = max(len(k) for k in info)\n        for key, value in info.items():\n            ctx.out.line(f\"{key.ljust(width)}  {value}\")\n    else:\n        raise CliError(f\"Invalid format: {fmt}. Supported formats: list, json\")\n    return 0''','''    info = dict(ctx.config.as_dict(), version=VERSION)\n    fmt = ctx.args.option(\"format\")\n    try:\n        ctx.out.line(formatter.render_mapping(info, fmt))\n    except ValueError:\n        raise CliError(f\"Invalid format: {fmt}. Supported formats: \"\n                       + \", \".join(formatter.supported_mapping_formats()))\n    return 0''')\nopen(p,'w').write(s)\nEOF\ncat >> appctl_core/formatter.py <<'EOF'\n\n\n_MAPPING_FORMATS = (\"list\", \"json\", \"yaml\")\n\n\ndef supported_mapping_formats():\n    return list(_MAPPING_FORMATS)\n\n\ndef render_mapping(mapping, fmt):\n    \"\"\"Render a single key/value mapping. Raises ``ValueError`` for an\n    unsupported format.\"\"\"\n    if fmt == \"list\":\n        width = max((len(k) for k in mapping), default=0)\n        return \"\\n\".join(f\"{k.ljust(width)}  {v}\" for k, v in mapping.items())\n    if fmt == \"json\":\n        return json.dumps(mapping)\n    if fmt == \"yaml\":\n        return \"\\n\".join([\"---\"] + [f\"{k}: {json.dumps(v)}\" for k, v in mapping.items()])\n    raise ValueError(fmt)\nEOF\ncat > appctl_core/app.py <<'EOF'\n\"\"\"Pipeline wiring.\n\nSecret: the order in which the stages run (lex, rewrite, extract globals,\nresolve, bind, run) and how failures map to output and exit codes.\n\"\"\"\n\nfrom . import binding, catalog, dispatch, help_text, rewrites, runtime_config, tokens\nfrom .command_tree import CommandTree\nfrom .errors import CliError, MissingPositional\nfrom .output import Output\n\n\nclass CommandContext:\n    \"\"\"Everything a command handler may use.\"\"\"\n\n    def __init__(self, command, args, out, config, tree):\n        self.command = command\n        self.args = args\n        self.out = out\n        self.config = config\n        self.tree = tree\n\n\ndef build_tree():\n    tree = CommandTree()\n    catalog.register_all(tree)\n    return tree\n\n\ndef run(argv, env, stdout, stderr, tree=None):\n    \"\"\"Run one invocation and return its exit code.\"\"\"\n    out = Output(stdout, stderr)\n    try:\n        items = rewrites.apply(tokens.lex(argv))\n        config, items = runtime_config.extract(items, env)\n    except CliError as exc:\n        out.error(exc.message)\n        return exc.exit_code\n    out = Output(stdout, stderr, quiet=config.quiet(), debug=config.debug())\n    tree = tree if tree is not None else build_tree()\n\n    words = [t.text for t in items if not t.is_option()] or [\"help\"]\n    options = [(t.name, t.value) for t in items if t.is_option()]\n    node = None\n    try:\n        node, remaining = dispatch.resolve(tree, words)\n        out.debug(f\"Resolved command '{node.path}' with arguments {remaining}\")\n        if not node.is_runnable():\n            out.usage(help_text.composite_usage(node))\n            return 0\n        bound = binding.bind(node.path, node.synopsis, node.defaults(),\n                             remaining, options)\n        result = node.run(CommandContext(node, bound, out, config, tree))\n        return int(result or 0)\n    except MissingPositional:\n        out.usage(help_text.usage_line(node))\n        return 1\n    except CliError as exc:\n        out.error(exc.message)\n        return exc.exit_code\nEOF\ncat > appctl.py <<'EOF'\n#!/usr/bin/env python3\n\"\"\"appctl: hierarchical command-line dispatcher.\"\"\"\n\nimport os\nimport sys\n\nfrom appctl_core.app import run\n\n\ndef main():\n    return run(sys.argv[1:], os.environ, sys.stdout, sys.stderr)\n\n\nif __name__ == \"__main__\":\n    sys.exit(main())\nEOF\nprintf 'pytest>=8.0\\n' > requirements.txt\npython3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt && echo ok",
+  "id": 26
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": ".venv/bin/python - <<'EOF'\np='mtl_core/sources.py'\ns=open(p).read()\ns=s.replace('''        self.rows = rows          # list of (line, cells)\n\n    def load(self, wanted):\n        pass\n''','''        self.rows = rows          # list of (line, cells)\n''')\ns=s.replace('''    import pyarrow as pa\n    arr = chunked.combine_chunks() if hasattr(chunked, \"combine_chunks\") else chunked\n    if isinstance(arr, pa.ChunkedArray):\n        arr = pa.concat_arrays(arr.chunks) if arr.num_chunks else pa.array([], arr.type)\n    t = arr.type''','''    import pyarrow as pa\n    if chunked.num_chunks == 1:\n        arr = chunked.chunk(0)\n    elif chunked.num_chunks == 0:\n        arr = pa.array([], chunked.type)\n    else:\n        arr = pa.concat_arrays(chunked.chunks)\n    t = arr.type''')\nopen(p,'w').write(s)\nEOF",
+  "id": 27
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "4",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "python3 - <<'EOF'\np='mtl_core/expressions.py'\ns=open(p).read()\na='''def _finite(value):'''\ns=s.replace(a,'''def cast_value(value, source, target, ts_parser=None):\n    \"\"\"Convert a non-null `source`-typed value to `target` the way cast() does.\n\n    Raises TypeCheckError if the cast is not allowed and ExecutionError (or\n    ValueError) if this value cannot be converted.\n    \"\"\"\n    if target not in _CASTS.get(source, ()):\n        raise TypeCheckError(\"cannot cast %s to %s\" % (T.type_name(source), T.type_name(target)))\n    return _caster(source, target, ts_parser)(value)\n\n\n'''+a,1)\nopen(p,'w').write(s)\n\np='mtl_core/inputs.py'\ns=open(p).read()\na=s[s.index('def resolve('):]\ns=s.replace(a,'''def expand(spec, forced=AUTO, recursive=False):\n    \"\"\"Files named by one path-or-glob, as a dict realpath -> InputFile.\n\n    An explicitly named file must have a recognisable format and a path\n    that is neither a file, a directory nor a glob is an error; files\n    reached through a directory or a glob are skipped when their format\n    cannot be decided.\n    \"\"\"\n    chosen = {}\n\n    def add(path, explicit):\n        name = os.path.basename(path)\n        if not explicit and name.startswith(\"_\") and detect(name, AUTO) is None:\n            return  # marker files such as _SUCCESS\n        detected = detect(name, forced)\n        if detected is None:\n            if explicit:\n                raise InputError(\"cannot determine the format of %r (use --format)\" % path)\n            return\n        display = os.path.normpath(path)\n        key = os.path.realpath(path)\n        current = chosen.get(key)\n        if current is None or display < current.path:\n            chosen[key] = InputFile(display, detected[0], detected[1])\n\n    if os.path.isdir(spec):\n        for path in _walk(spec, recursive):\n            add(path, False)\n    elif os.path.isfile(spec):\n        add(spec, True)\n    elif glob.has_magic(spec):\n        for match in sorted(glob.glob(spec, recursive=True)):\n            if os.path.isdir(match):\n                for path in _walk(match, recursive):\n                    add(path, False)\n            elif os.path.isfile(match):\n                add(match, False)\n    else:\n        raise InputError(\"input %r does not exist\" % spec)\n    return chosen\n\n\ndef resolve(specs, recursive=False, forced=AUTO):\n    \"\"\"Expand (path-or-glob, forced_format) pairs into a sorted list of InputFile.\"\"\"\n    chosen = {}\n    for spec, override in specs:\n        for key, entry in expand(spec, override or forced, recursive).items():\n            current = chosen.get(key)\n            if current is None or entry.path < current.path:\n                chosen[key] = entry\n    if not chosen:\n        raise InputError(\"no input files found\")\n    return sorted(chosen.values(), key=lambda f: f.path)\n''')\nopen(p,'w').write(s)\nEOF",
+  "id": 28
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/t/cases; cd /tmp/t/cases; PY=/workspace/.venv/bin/python\nBASE='schema BaseSale {\n  timestamp: timestamp\n  location: string\n  item: string\n  price: float\n  quantity: float\n  unit: string\n  category: string\n}\n'\nrun() { # name expected_code extra-args ; dsl on stdin\n  cat > \"$1.mtl\"; local name=$1 exp=$2; shift 2\n  out=$($PY /workspace/mtl.py --csv ../sales.csv --dsl \"$name.mtl\" \"$@\" 2>&1); code=$?\n  if [ \"$code\" = \"$exp\" ]; then echo \"ok   $name ($code) $(echo \"$out\" | grep ERROR)\"; else echo \"FAIL $name got $code want $exp\"; echo \"$out\" | head -20; fi\n}\nrun promo 0 <<EOF\n$BASE\nschema PromoSale extends BaseSale {\n  quantity: float  # redundant\n  promo_code: string\n  revenue: float = price * quantity\n}\npipeline SalesSummary using PromoSale {\n  params {\n    price_min: float = 0.0\n    promo_prefix: string = 'Q3-'\n    k: int = 1\n  }\n\n  filter(price >= param(\"price_min\") & promo_code starts_with param(\"promo_prefix\"))\n  window(1h)\n  group_by(['location', 'category'])\n  aggregate sum(price) as total_revenue,\n            count(*) as n\n  calc prev_rev = lag(total_revenue, param(\"k\")) : float @stage(post_agg)\n}\nEOF\nrun illegal_override 2 <<EOF\n$BASE\nschema P extends BaseSale { price: int }\npipeline X using P { aggregate count(*) as n }\nEOF\nrun str_to_int 2 <<EOF\n$BASE\nschema P extends BaseSale { item: int }\npipeline X using P { aggregate count(*) as n }\nEOF\nrun cycle 1 <<EOF\nschema A extends B { x: int }\nschema B extends A { y: int }\npipeline X using A { aggregate count(*) as n }\nEOF\nrun forward 1 <<EOF\nschema A { timestamp: timestamp\n price: float\n r: float = price * quantity\n quantity: float }\npipeline X using A { aggregate count(*) as n }\nEOF\nrun unknown_ref 1 <<EOF\n$BASE\nschema A extends BaseSale { r: float = price * nope }\npipeline X using A { aggregate count(*) as n }\nEOF\nrun missing_param 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  params { cat: string }\n  filter(category == param(\"cat\"))\n  aggregate count(*) as n }\nEOF\nrun given_param 0 --param cat=fruit <<EOF\n$BASE\npipeline X using BaseSale {\n  params { cat: string }\n  filter(category == param(\"cat\"))\n  aggregate count(*) as n }\nEOF\nrun bad_param_type 2 --param k=abc <<EOF\n$BASE\npipeline X using BaseSale {\n  params { k: int = 1 }\n  aggregate count(*) as n\n  calc p = lag(n, param(\"k\")) : int @stage(post_agg) }\nEOF\nrun alias_in_pre 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc bad = n * 2 : int @stage(pre)\n  aggregate count(*) as n }\nEOF\nrun post_day 2 <<EOF\n$BASE\npipeline X using BaseSale {\n  group_by(location)\n  aggregate count(*) as n\n  calc d = day(timestamp) : int @stage(post_agg) }\nEOF\nrun post_day_ws 0 <<EOF\n$BASE\npipeline X using BaseSale {\n  window(1h)\n  aggregate count(*) as n\n  calc d = day(window_start) : int @stage(post_agg) }\nEOF\nrun calc_mismatch 2 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc c = price * 2 : int @stage(pre)\n  aggregate sum(c) as s }\nEOF\nrun div0 4 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc up = price / quantity : float @stage(pre)\n  aggregate sum(up) as s }\nEOF\nrun dup_calc 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc price = 1.0 : float @stage(pre)\n  aggregate count(*) as n }\nEOF\nrun dup_post 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  aggregate count(*) as n\n  calc n = 1 : int @stage(post_agg) }\nEOF\nrun lag_pre 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc l = lag(price, 1) : float @stage(pre)\n  aggregate count(*) as n }\nEOF\nrun lag_zero 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  aggregate count(*) as n\n  calc l = lag(n, 0) : int @stage(post_agg) }\nEOF\nrun lag_float 2 <<EOF\n$BASE\npipeline X using BaseSale {\n  aggregate count(*) as n\n  calc l = lag(n, 1.5) : int @stage(post_agg) }\nEOF\nrun lag_global 0 <<EOF\n$BASE\npipeline X using BaseSale {\n  aggregate count(*) as n\n  calc l = lag(n, 1) : int @stage(post_agg)\n  calc m = lead(n) : int @stage(post_agg) }\nEOF\nrun empty_rows 0 <<EOF\n$BASE\npipeline X using BaseSale {\n  filter(price > 1000)\n  window(1h)\n  aggregate count(*) as n\n  calc l = lag(n, 1) : int @stage(post_agg) }\nEOF\nrun group_pre 0 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc expensive = price >= 2.0 : bool @stage(pre)\n  group_by(expensive)\n  aggregate count(*) as n, sum(quantity) as q\n  calc ratio = cast(q as int) : int @stage(post_agg) }\nEOF\nrun missing_csv_col 3 <<EOF\n$BASE\nschema P extends BaseSale { nope: string }\npipeline X using P { aggregate count(*) as n }\nEOF\nrun unknown_schema 1 <<EOF\npipeline X using Nope { aggregate count(*) as n }\nEOF\nrun window_param 0 --param w=2h <<EOF\n$BASE\npipeline X using BaseSale {\n  params { w: string = '1h' }\n  window(param(\"w\"))\n  aggregate count(*) as n }\nEOF\nrun str_funcs 0 <<EOF\n$BASE\npipeline X using BaseSale {\n  filter(starts_with(item, 'a') | ends_with(item, 'k') | contains(item, \"ea\"))\n  aggregate count(*) as n }\nEOF\nrun untyped_default 0 --param k=2 <<EOF\n$BASE\npipeline X using BaseSale {\n  params { k = 1 }\n  window(1h)\n  aggregate count(*) as n\n  calc l = lead(n, param(\"k\")) : float @stage(post_agg) }\nEOF\nrun neg_param 4 --param k=-1 <<EOF\n$BASE\npipeline X using BaseSale {\n  params { k: int = 1 }\n  window(1h)\n  aggregate count(*) as n\n  calc l = lead(n, param(\"k\")) : float @stage(post_agg) }\nEOF\nrun fwd_post 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  aggregate count(*) as n\n  calc a = b + 1 : int @stage(post_agg)\n  calc b = n : int @stage(post_agg) }\nEOF\nrun two_pipelines 1 <<EOF\n$BASE\npipeline X using BaseSale { aggregate count(*) as n }\npipeline Y using BaseSale { aggregate count(*) as n }\nEOF\nrun multi_inherit 1 <<EOF\n$BASE\nschema A extends BaseSale, BaseSale { x: int }\npipeline X using A { aggregate count(*) as n }\nEOF\nrun int_widen 0 <<EOF\nschema A { timestamp: timestamp\n  quantity: int\n  price: float }\nschema B extends A { quantity: float }\npipeline X using B { aggregate sum(quantity) as q }\nEOF\nrun int_q 0 <<EOF\nschema A { timestamp: timestamp\n  quantity: int\n  price: float }\npipeline X using A { aggregate sum(quantity) as q }\nEOF\nfor f in group_pre lag_global empty_rows int_widen int_q window_param; do echo \"== $f\"; $PY /workspace/mtl.py --csv ../sales.csv --dsl $f.mtl $( [ $f = window_param ] && echo --param w=2h ) ; done",
+  "id": 29
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "3",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "cd /workspace; cp appctl.py /tmp/appctl.py.orig; python - <<'EOF'\nimport re\nsrc = open('appctl.py').read()\nold_start = src.index('class Runtime:')\nold_end = src.index('# ---------------------------------------------------------------------------\\n# Suggestions')\nnew = r'''class Runtime:\n    quiet = False\n    debug = False\n    debug_group = None\n    config = {}\n    aliases = {}\n    global_config_path = None\n    project_config_path = None\n    start_time = time.time()\n\n\n# ANSI color codes for message prefixes.\nCOLORS = {\n    \"Error\": \"\\033[31;1m\",\n    \"Warning\": \"\\033[33;1m\",\n    \"Success\": \"\\033[32;1m\",\n    \"Debug\": \"\\033[34;1m\",\n}\nCOLOR_RESET = \"\\033[0m\"\nBOX_COLOR = \"\\033[37;41;1m\"\nLOG_DELIMITER = \"=\" * 80\nSTDIN_TIMEOUT = 1.0\nPROMPT_TIMEOUT = 2.0\nSENSITIVE_KEY_RE = re.compile(r\"pass|secret|token\", re.IGNORECASE)\n\n\ndef use_color():\n    \"\"\"Return whether colorized output is enabled (``color`` config: auto/true/false).\"\"\"\n    value = Runtime.config.get(\"color\", \"auto\")\n    if isinstance(value, str):\n        lowered = value.strip().lower()\n        if lowered in (\"true\", \"1\", \"yes\", \"on\", \"always\"):\n            value = True\n        elif lowered in (\"false\", \"0\", \"no\", \"off\", \"never\"):\n            value = False\n    if value is True:\n        return True\n    if value is False or value is None:\n        return False\n    if os.name == \"nt\" or sys.platform.startswith(\"win\"):\n        return False\n    try:\n        return sys.stdout.isatty()\n    except (AttributeError, ValueError):\n        return False\n\n\ndef colorize_prefix(label):\n    \"\"\"Return ``<label>:`` colorized according to its message category.\"\"\"\n    text = label + \":\"\n    if not use_color():\n        return text\n    return COLORS[label.split()[0]] + text + COLOR_RESET\n\n\n# ---------------------------------------------------------------------------\n# File logging\n# ---------------------------------------------------------------------------\n\nclass FileLog:\n    enabled = True\n\n\ndef log_file_path():\n    return os.path.join(root_dir(), \"logs\", \"%s.log\" % PROG)\n\n\ndef log_timestamp():\n    return datetime.datetime.now(datetime.timezone.utc).strftime(\"%Y-%m-%dT%H:%M:%SZ\")\n\n\ndef write_log(text, delimiter=False):\n    \"\"\"Append ``text`` to the log file; every line gets a UTC timestamp.\"\"\"\n    if not FileLog.enabled:\n        return\n    stamp = log_timestamp()\n    lines = [LOG_DELIMITER] if delimiter else []\n    lines.extend(\"[%s] %s\" % (stamp, line) for line in str(text).split(\"\\n\"))\n    try:\n        path = log_file_path()\n        os.makedirs(os.path.dirname(path), exist_ok=True)\n        with open(path, \"a\", encoding=\"utf-8\") as handle:\n            handle.write(\"\\n\".join(lines) + \"\\n\")\n    except (OSError, ValueError):\n        pass\n\n\ndef redact_argv(argv):\n    \"\"\"Hide the values of password-like options before they reach the log file.\"\"\"\n    redacted = []\n    for token in argv:\n        parsed = parse_token(token)\n        if parsed is not None and isinstance(parsed[1], str) and SENSITIVE_KEY_RE.search(parsed[0]):\n            token = \"--%s=[REDACTED]\" % parsed[0]\n        redacted.append(token)\n    return redacted\n\n\ndef log_invocation(argv):\n    write_log(\"Command: %s\" % \" \".join([PROG] + redact_argv(argv)), delimiter=True)\n\n\n# ---------------------------------------------------------------------------\n# Output helpers\n# ---------------------------------------------------------------------------\n\ndef out(text=\"\"):\n    sys.stdout.write(text + \"\\n\")\n\n\ndef success(message):\n    if not Runtime.quiet:\n        out(colorize_prefix(\"Success\") + \" \" + message)\n\n\ndef log(message, sensitive=False):\n    \"\"\"Informational output: STDOUT plus the log file (unless sensitive).\"\"\"\n    if Runtime.quiet:\n        return\n    out(message)\n    if not sensitive:\n        write_log(message)\n\n\ndef warning(message):\n    sys.stderr.write(colorize_prefix(\"Warning\") + \" \" + message + \"\\n\")\n    write_log(\"Warning: \" + message)\n\n\ndef debug(message, group=None):\n    if not Runtime.debug:\n        return\n    if Runtime.debug_group and group != Runtime.debug_group:\n        return\n    label = \"Debug (%s)\" % group if Runtime.debug_group else \"Debug\"\n    text = \"%s (%.3fs)\" % (message, time.time() - Runtime.start_time)\n    sys.stderr.write(colorize_prefix(label) + \" \" + text + \"\\n\")\n    write_log(\"%s: %s\" % (label, text))\n\n\ndef error_box(lines):\n    \"\"\"Write ``lines`` to STDERR inside a highlighted box.\"\"\"\n    lines = [line.replace(\"\\t\", \"    \") for line in lines]\n    width = max(len(line) for line in lines)\n    border = \"+\" + \"-\" * (width + 2) + \"+\"\n    rows = [border] + [\"| %s |\" % line.ljust(width) for line in lines] + [border]\n    if use_color():\n        rows = [BOX_COLOR + row + COLOR_RESET for row in rows]\n    sys.stderr.write(\"\\n\".join(rows) + \"\\n\")\n\n\ndef error(message, code=1, sensitive=False, box=None):\n    \"\"\"Report an error and exit. Sensitive errors are never written to the log file.\"\"\"\n    message = str(message)\n    lines = message.split(\"\\n\")\n    if box is None:\n        box = len(lines) > 1\n    if box:\n        error_box([\"Error: \" + lines[0]] + lines[1:])\n    else:\n        sys.stderr.write(colorize_prefix(\"Error\") + \" \" + message + \"\\n\")\n    if not sensitive:\n        write_log(\"Error: \" + message)\n    raise AppctlExit(code)\n\n\n# ---------------------------------------------------------------------------\n# User input\n# ---------------------------------------------------------------------------\n\ndef _stdin_ready(timeout):\n    \"\"\"Return False when STDIN is a pipe that stays empty for ``timeout`` seconds.\"\"\"\n    if os.name == \"nt\":\n        return True\n    import select\n    try:\n        ready, _, _ = select.select([sys.stdin], [], [], timeout)\n    except (OSError, ValueError, TypeError):\n        return True\n    return bool(ready)\n\n\ndef _stdin_is_tty():\n    try:\n        return sys.stdin.isatty()\n    except (AttributeError, ValueError):\n        return False\n\n\ndef prompt(question):\n    \"\"\"Display ``question``, read one line from STDIN, return it lowercased and trimmed.\"\"\"\n    sys.stdout.write(question)\n    sys.stdout.flush()\n    if sys.stdin is None:\n        return \"\"\n    if not _stdin_is_tty() and not _stdin_ready(PROMPT_TIMEOUT):\n        return \"\"\n    try:\n        answer = sys.stdin.readline()\n    except (OSError, ValueError):\n        answer = \"\"\n    if not answer.endswith(\"\\n\"):\n        sys.stdout.write(\"\\n\")\n    return answer.strip().lower()\n\n\ndef confirm(question, assoc=None):\n    \"\"\"Ask a ``[y/n]`` question; ``--yes`` auto-confirms. Returns True when confirmed.\"\"\"\n    if assoc and assoc.get(\"yes\"):\n        return True\n    if prompt(question + \" [y/n] \") != \"y\":\n        warning(\"Operation cancelled.\")\n        return False\n    return True\n\n\ndef read_stdin():\n    \"\"\"Read all of STDIN for a missing positional argument (None when unavailable).\"\"\"\n    if sys.stdin is None or _stdin_is_tty():\n        return None\n    if not _stdin_ready(STDIN_TIMEOUT):\n        return None\n    try:\n        data = sys.stdin.read()\n    except (OSError, ValueError):\n        return None\n    data = data.rstrip(\"\\r\\n\")\n    return data if data != \"\" else None\n\n\n'''\nsrc = src[:old_start] + new + src[old_end:]\nsrc = src.replace(\"import json\\nimport os\\nimport re\\nimport sys\\n\", \"import csv\\nimport datetime\\nimport io\\nimport json\\nimport os\\nimport re\\nimport sys\\nimport time\\n\")\nopen('appctl.py','w').write(src)\nEOF\ngrep -n \"^import\" appctl.py",
+  "id": 30
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "7",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; sed -n 1,60p appctl.py; sed -n 2040,2330p appctl.py",
+  "id": 31
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "locate"
+  ],
+  "cmd": "cd /workspace; wc -l sithlib/*.py; grep -n \"^    def \\|^def \\|^class \" sithlib/inference.py",
+  "id": 32
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "5",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null && cat /tmp/agent_home/.claude/projects/-workspace/memory/MEMORY.md 2>/dev/null",
+  "id": 33
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cat mtl_core/expressions.py mtl_core/engine.py mtl_core/aggregates.py",
+  "id": 34
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c3",
+  "ck": "5",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && cat requirements.txt 2>/dev/null; find . -path ./.venv -prune -o -type f -name \"*.py\" -print | head -50; ls /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null",
+  "id": 35
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; grep -n \"build_registry()\" appctl.py; sed -n 275,310p appctl.py",
+  "id": 36
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "install_or_ref_lib"
+  ],
+  "cmd": "ls /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null && cat /tmp/agent_home/.claude/projects/-workspace/memory/* 2>/dev/null; ls /workspace/.venv/lib/*/site-packages",
+  "id": 37
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && cat requirements.txt 2>/dev/null; ls -a /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null; find . -path ./.venv -prune -o -type f -print | grep -v -E '\\.git/|__pycache__|venv' | head -100",
+  "id": 38
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cat /tmp/claude-1000/-workspace/aeb7e65a-6adb-4fd6-a183-a2f68fc78299/tasks/bk2k2gghv.output | tail -40",
+  "id": 39
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "5",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd sithlib; cat scopes.py parsing.py",
+  "id": 40
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && cat requirements.txt 2>/dev/null; ls -a .. ; find . -maxdepth 2 -not -path './.venv*' -not -path './venv*' | head -50",
+  "id": 41
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "install_or_ref_lib"
+  ],
+  "cmd": "cd /workspace; cat mtl_engine/timeutil.py; sed -n 1,30p mtl_engine/functions.py; .venv/bin/python --version; .venv/bin/pip install pyyaml 2>&1 | tail -2",
+  "id": 42
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat tests/test_sith.py",
+  "id": 43
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "7",
+  "cls": [
+   "read"
+  ],
+  "cmd": "df -h / /tmp /dev/shm /workspace 2>&1; which docker docker-compose; sed -n 60,100p /workspace/appctl.py; sed -n 1515,1540p /workspace/appctl.py",
+  "id": 44
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "8",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat appctl_core/container_commands.py appctl_core/synopsis.py appctl_core/binding.py appctl_core/tokens.py",
+  "id": 45
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "5",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; sed -n 67,210p appctl.py; sed -n 2455,2475p appctl.py",
+  "id": 46
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c2",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat eve_industry/industry_data.py eve_industry/sde_loader.py",
+  "id": 47
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat sithlib/cli.py sithlib/modules.py sithlib/entries.py sithlib/source.py sithlib/errors.py sithlib/describe.py sithlib/ranking.py sithlib/matching.py sithlib/builtin_scope.py sithlib/completion.py sithlib/context.py",
+  "id": 48
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "file /usr/bin/docker /usr/bin/docker-compose; ls -la /usr/bin/docker /usr/bin/docker-compose; head -c 600 /usr/bin/docker-compose; echo; docker version 2>&1 | head; docker compose version 2>&1|head -3; docker-compose version 2>&1 | head -3",
+  "id": 49
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && cat requirements.txt 2>/dev/null; find . -path ./.venv -prune -o -type f -print | grep -v __pycache__ | head -100; which python; python --version",
+  "id": 50
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && cat requirements.txt; find . -name \"*.py\" -not -path \"./.venv/*\" -not -path \"./venv/*\" | head -50",
+  "id": 51
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "5",
+  "cls": [
+   "install_or_ref_lib"
+  ],
+  "cmd": ".venv/bin/pip install xxhash 2>&1 | tail -2",
+  "id": 52
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "7",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; sed -n 1625,1720p appctl.py; sed -n 1040,1090p appctl.py",
+  "id": 53
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "locate"
+  ],
+  "cmd": "cd /workspace; cp appctl.py /tmp/appctl.orig.py; grep -n \"GLOBAL_PARAMS\\|GLOBAL_NAMES\" appctl.py",
+  "id": 54
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "7",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cat appctl_core/container_commands.py appctl_core/process.py appctl_core/config_files.py",
+  "id": 55
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; ls -la; cat *.md 2>/dev/null | head -100; cat requirements.txt; find . -name \"*.py\" -not -path \"./.venv/*\" -not -path \"*/venv/*\" | head -50; wc -l *.py",
+  "id": 56
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; ls -la; find . -path ./.venv -prune -o -type f -print | grep -v '/\\.' | head -100; cat requirements.txt 2>/dev/null; which python; python --version",
+  "id": 57
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; wc -l sithlib/*.py tests/*.py; cat sith.py; ls -la tests tests/*; ls .venv/bin; .venv/bin/python --version",
+  "id": 58
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "8",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace && grep -n \"archive\\|SCRIPT\\|def test\" tests/test_process_cache_extract.py | head -40; sed -n 120,317p appctl_cli/file_cache.py | grep -n \"def \" ",
+  "id": 59
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "until grep -q \"^total\" /tmp/reg/big.log || ! pgrep -f \"cmp.py 250\" >/dev/null; do sleep 5; done; tail -5 /tmp/reg/big.log",
+  "id": 60
+ }
+]

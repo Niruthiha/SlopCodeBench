@@ -1,0 +1,607 @@
+[
+ {
+  "task": "metric_transform_lang",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/t/cases; cd /tmp/t/cases; PY=/workspace/.venv/bin/python\nBASE='schema BaseSale {\n  timestamp: timestamp\n  location: string\n  item: string\n  price: float\n  quantity: float\n  unit: string\n  category: string\n}\n'\nrun() { # name expected_code extra-args ; dsl on stdin\n  cat > \"$1.mtl\"; local name=$1 exp=$2; shift 2\n  out=$($PY /workspace/mtl.py --csv ../sales.csv --dsl \"$name.mtl\" \"$@\" 2>&1); code=$?\n  if [ \"$code\" = \"$exp\" ]; then echo \"ok   $name ($code) $(echo \"$out\" | grep ERROR)\"; else echo \"FAIL $name got $code want $exp\"; echo \"$out\" | head -20; fi\n}\nrun promo 0 <<EOF\n$BASE\nschema PromoSale extends BaseSale {\n  quantity: float  # redundant\n  promo_code: string\n  revenue: float = price * quantity\n}\npipeline SalesSummary using PromoSale {\n  params {\n    price_min: float = 0.0\n    promo_prefix: string = 'Q3-'\n    k: int = 1\n  }\n\n  filter(price >= param(\"price_min\") & promo_code starts_with param(\"promo_prefix\"))\n  window(1h)\n  group_by(['location', 'category'])\n  aggregate sum(price) as total_revenue,\n            count(*) as n\n  calc prev_rev = lag(total_revenue, param(\"k\")) : float @stage(post_agg)\n}\nEOF\nrun illegal_override 2 <<EOF\n$BASE\nschema P extends BaseSale { price: int }\npipeline X using P { aggregate count(*) as n }\nEOF\nrun str_to_int 2 <<EOF\n$BASE\nschema P extends BaseSale { item: int }\npipeline X using P { aggregate count(*) as n }\nEOF\nrun cycle 1 <<EOF\nschema A extends B { x: int }\nschema B extends A { y: int }\npipeline X using A { aggregate count(*) as n }\nEOF\nrun forward 1 <<EOF\nschema A { timestamp: timestamp\n price: float\n r: float = price * quantity\n quantity: float }\npipeline X using A { aggregate count(*) as n }\nEOF\nrun unknown_ref 1 <<EOF\n$BASE\nschema A extends BaseSale { r: float = price * nope }\npipeline X using A { aggregate count(*) as n }\nEOF\nrun missing_param 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  params { cat: string }\n  filter(category == param(\"cat\"))\n  aggregate count(*) as n }\nEOF\nrun given_param 0 --param cat=fruit <<EOF\n$BASE\npipeline X using BaseSale {\n  params { cat: string }\n  filter(category == param(\"cat\"))\n  aggregate count(*) as n }\nEOF\nrun bad_param_type 2 --param k=abc <<EOF\n$BASE\npipeline X using BaseSale {\n  params { k: int = 1 }\n  aggregate count(*) as n\n  calc p = lag(n, param(\"k\")) : int @stage(post_agg) }\nEOF\nrun alias_in_pre 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc bad = n * 2 : int @stage(pre)\n  aggregate count(*) as n }\nEOF\nrun post_day 2 <<EOF\n$BASE\npipeline X using BaseSale {\n  group_by(location)\n  aggregate count(*) as n\n  calc d = day(timestamp) : int @stage(post_agg) }\nEOF\nrun post_day_ws 0 <<EOF\n$BASE\npipeline X using BaseSale {\n  window(1h)\n  aggregate count(*) as n\n  calc d = day(window_start) : int @stage(post_agg) }\nEOF\nrun calc_mismatch 2 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc c = price * 2 : int @stage(pre)\n  aggregate sum(c) as s }\nEOF\nrun div0 4 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc up = price / quantity : float @stage(pre)\n  aggregate sum(up) as s }\nEOF\nrun dup_calc 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc price = 1.0 : float @stage(pre)\n  aggregate count(*) as n }\nEOF\nrun dup_post 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  aggregate count(*) as n\n  calc n = 1 : int @stage(post_agg) }\nEOF\nrun lag_pre 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc l = lag(price, 1) : float @stage(pre)\n  aggregate count(*) as n }\nEOF\nrun lag_zero 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  aggregate count(*) as n\n  calc l = lag(n, 0) : int @stage(post_agg) }\nEOF\nrun lag_float 2 <<EOF\n$BASE\npipeline X using BaseSale {\n  aggregate count(*) as n\n  calc l = lag(n, 1.5) : int @stage(post_agg) }\nEOF\nrun lag_global 0 <<EOF\n$BASE\npipeline X using BaseSale {\n  aggregate count(*) as n\n  calc l = lag(n, 1) : int @stage(post_agg)\n  calc m = lead(n) : int @stage(post_agg) }\nEOF\nrun empty_rows 0 <<EOF\n$BASE\npipeline X using BaseSale {\n  filter(price > 1000)\n  window(1h)\n  aggregate count(*) as n\n  calc l = lag(n, 1) : int @stage(post_agg) }\nEOF\nrun group_pre 0 <<EOF\n$BASE\npipeline X using BaseSale {\n  calc expensive = price >= 2.0 : bool @stage(pre)\n  group_by(expensive)\n  aggregate count(*) as n, sum(quantity) as q\n  calc ratio = cast(q as int) : int @stage(post_agg) }\nEOF\nrun missing_csv_col 3 <<EOF\n$BASE\nschema P extends BaseSale { nope: string }\npipeline X using P { aggregate count(*) as n }\nEOF\nrun unknown_schema 1 <<EOF\npipeline X using Nope { aggregate count(*) as n }\nEOF\nrun window_param 0 --param w=2h <<EOF\n$BASE\npipeline X using BaseSale {\n  params { w: string = '1h' }\n  window(param(\"w\"))\n  aggregate count(*) as n }\nEOF\nrun str_funcs 0 <<EOF\n$BASE\npipeline X using BaseSale {\n  filter(starts_with(item, 'a') | ends_with(item, 'k') | contains(item, \"ea\"))\n  aggregate count(*) as n }\nEOF\nrun untyped_default 0 --param k=2 <<EOF\n$BASE\npipeline X using BaseSale {\n  params { k = 1 }\n  window(1h)\n  aggregate count(*) as n\n  calc l = lead(n, param(\"k\")) : float @stage(post_agg) }\nEOF\nrun neg_param 4 --param k=-1 <<EOF\n$BASE\npipeline X using BaseSale {\n  params { k: int = 1 }\n  window(1h)\n  aggregate count(*) as n\n  calc l = lead(n, param(\"k\")) : float @stage(post_agg) }\nEOF\nrun fwd_post 1 <<EOF\n$BASE\npipeline X using BaseSale {\n  aggregate count(*) as n\n  calc a = b + 1 : int @stage(post_agg)\n  calc b = n : int @stage(post_agg) }\nEOF\nrun two_pipelines 1 <<EOF\n$BASE\npipeline X using BaseSale { aggregate count(*) as n }\npipeline Y using BaseSale { aggregate count(*) as n }\nEOF\nrun multi_inherit 1 <<EOF\n$BASE\nschema A extends BaseSale, BaseSale { x: int }\npipeline X using A { aggregate count(*) as n }\nEOF\nrun int_widen 0 <<EOF\nschema A { timestamp: timestamp\n  quantity: int\n  price: float }\nschema B extends A { quantity: float }\npipeline X using B { aggregate sum(quantity) as q }\nEOF\nrun int_q 0 <<EOF\nschema A { timestamp: timestamp\n  quantity: int\n  price: float }\npipeline X using A { aggregate sum(quantity) as q }\nEOF\nfor f in group_pre lag_global empty_rows int_widen int_q window_param; do echo \"== $f\"; $PY /workspace/mtl.py --csv ../sales.csv --dsl $f.mtl $( [ $f = window_param ] && echo --param w=2h ) ; done",
+  "id": 1
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "6",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/ct && cd /tmp/ct && cat > docker-compose.yml <<'EOF'\nservices:\n  zeta:\n    image: nginx\n  alpha:\n    image: redis\n    depends_on: [zeta]\n  mid:\n    image: busybox\nEOF\ndocker compose config --services; echo ---; docker-compose config --services; echo; docker compose -f docker-compose.yml -f nonexist.yml config --services; echo rc=$?",
+  "id": 2
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/scratch/big && sed -n '2579,2581p' argparse.py; time (../q.sh infer argparse.py 2579 9 | cut -c1-300); time (../q.sh infer argparse.py 2580 20 | cut -c1-300); time (../q.sh goto argparse.py 2580 20 | cut -c1-300)",
+  "id": 3
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "3",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/reg && sed -i \"s/for mode in ('infer', 'goto', 'complete')/for mode in MODES/; s/^f = sys.argv\\[1\\]/f = sys.argv[1]; MODES = sys.argv[2].split(',')/\" run.py && /workspace/venv/bin/python run.py s.py infer,goto 2>&1 | tail -8",
+  "id": 4
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "edit_script",
+   "probe_run"
+  ],
+  "cmd": "cat > /tmp/patch2.py <<'EOF'\np='/workspace/report.py'\ns=open(p).read()\ns=s.replace('''    materials: tuple  # of (name, quantity, buildable)\n''','''    materials: tuple  # of (name, quantity, buildable, waste)\n    show_waste: bool = False\n''')\ns=s.replace('''        \"| Item | Quantity | Buildable |\",\n        \"|:-:|:---:|---:|\",\n    ]\n    for name, quantity, buildable in sorted(data.materials, key=lambda m: (m[0].lower(), m[0])):\n        lines.append(\"| %s | %d | %s |\" % (name, quantity, \"Yes\" if buildable else \"No\"))\n''','''    ]\n    if data.show_waste:\n        lines += [\"| Item | Quantity | Waste | Buildable |\", \"|:-:|:---:|:---:|---:|\"]\n    else:\n        lines += [\"| Item | Quantity | Buildable |\", \"|:-:|:---:|---:|\"]\n    for name, quantity, buildable, waste in sorted(\n        data.materials, key=lambda m: (m[0].lower(), m[0])\n    ):\n        cells = [name, \"%d\" % quantity]\n        if data.show_waste:\n            cells.append(\"%d\" % waste)\n        cells.append(\"Yes\" if buildable else \"No\")\n        lines.append(\"| %s |\" % \" | \".join(cells))\n''')\nopen(p,'w').write(s)\n\np='/workspace/industry.py'\ns=open(p).read()\ns=s.replace('''  python industry.py recipe <Product or Blueprint name> --sde <SDE directory>\n''','''  python industry.py recipe <Product or Blueprint name> --sde <SDE directory>\n      [-me <0-10>] [-te <0-20, even>] [-waste]\n''')\ns=s.replace('''def _build_report(name, sde_dir):''','''def _build_report(name, sde_dir, me=0, te=0, show_waste=False):''')\ns=s.replace('''    materials = tuple(\n        (items.name(mid) if items.is_valid(mid) else str(mid), qty, industry.is_buildable(mid))\n        for mid, qty in recipe.materials\n    )\n''','''    if not blueprints.material_efficiency_applies(recipe.activity):\n        me = 0\n    materials = []\n    for mid, qty in recipe.materials:\n        needed = blueprints.material_amount(qty, me)\n        waste = blueprints.material_amount(qty, 0) - needed\n        name_text = items.name(mid) if items.is_valid(mid) else str(mid)\n        materials.append((name_text, needed, industry.is_buildable(mid), waste))\n''')\ns=s.replace('''            seconds=recipe.seconds,\n            materials=materials,\n        )''','''            seconds=blueprints.job_seconds(recipe.seconds, te),\n            materials=tuple(materials),\n            show_waste=show_waste,\n        )''')\ns=s.replace('''def main(argv=None):''','''def _efficiency(low, high, step, label):\n    def parse(text):\n        try:\n            value = int(text)\n        except ValueError:\n            raise argparse.ArgumentTypeError(\"%s must be an integer\" % label)\n        if not low <= value <= high or value % step:\n            kind = \"an even integer\" if step == 2 else \"an integer\"\n            raise argparse.ArgumentTypeError(\n                \"%s must be %s in [%d,%d], got %r\" % (label, kind, low, high, text)\n            )\n        return value\n    return parse\n\n\ndef main(argv=None):''')\ns=s.replace('''    recipe.add_argument(\"--sde\", required=True, help=\"SDE directory\")\n''','''    recipe.add_argument(\"--sde\", required=True, help=\"SDE directory\")\n    recipe.add_argument(\"--material-efficiency\", \"-me\", dest=\"me\", default=0, metavar=\"ME\",\n                        type=_efficiency(0, 10, 1, \"material efficiency\"),\n                        help=\"material efficiency, integer in [0,10] (default 0)\")\n    recipe.add_argument(\"--time-efficiency\", \"-te\", dest=\"te\", default=0, metavar=\"TE\",\n                        type=_efficiency(0, 20, 2, \"time efficiency\"),\n                        help=\"time efficiency, even integer in [0,20] (default 0)\")\n    recipe.add_argument(\"--display-waste\", \"-waste\", dest=\"waste\", action=\"store_true\",\n                        help=\"show materials wasted because ME is below 10\")\n''')\ns=s.replace('''            text = _build_report(\" \".join(args.name), args.sde)''','''            text = _build_report(\" \".join(args.name), args.sde, args.me, args.te, args.waste)''')\nopen(p,'w').write(s)\nEOF\n.venv/bin/python /tmp/patch2.py\ncd /workspace; P=\".venv/bin/python industry.py recipe\"\n$P Naga --sde sde -me 10 | tail -8; $P Naga --sde sde -me 5 -waste| tail -9; $P Naga --sde sde -te 20 | tail -10 | head -1; $P Naga --sde sde --material-efficiency 10 --time-efficiency 20 | tail -10\n$P Fullerides --sde sde -me 10 -te 10 -waste | tail -6; $P Naga --sde sde -te 3; $P Naga --sde sde -me 11; $P Naga --sde sde -te -2",
+  "id": 5
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/ref/r && /tmp/ref/s.sh n.py infer:35:3 goto:35:3 infer:34:0 | cut -c1-250; echo \"complete: $(/workspace/venv/bin/python /workspace/sith.py complete n.py 36 3 | python3 -c 'import json,sys; print([(c[\"name\"],c[\"type\"],c[\"description\"]) for c in json.load(sys.stdin)[\"completions\"] if not c[\"name\"].startswith(\"_\")])')\"",
+  "id": 6
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/t; PY=/workspace/.venv/bin/python\n$PY /workspace/mtl.py --csv sales.csv --dsl p1.mtl | diff - p1.expected && echo P1 OK\ncat > ex.mtl <<'EOF'\nschema BaseSale {\n  timestamp: timestamp\n  location: string\n  item: string\n  price: float\n  quantity: float\n  unit: string\n  category: string\n}\n\nschema WebSale extends BaseSale {\n  session_id: string\n  revenue: float = price * quantity\n}\n\npipeline HourlyKPIs using WebSale {\n  params {\n    min_qty: float = 0.0\n    k: int = 1\n  }\n\n  calc qty_ok = quantity >= param(\"min_qty\") : bool @stage(pre)\n  filter(qty_ok)\n  window(1h)\n  group_by(['location', 'category'])\n  aggregate sum(revenue) as total_rev,\n            average(price) as avg_price,\n            count(*) as n\n\n  calc prev_rev = lag(total_rev, param(\"k\")) : float @stage(post_agg)\n  calc rev_change = total_rev - coalesce(prev_rev, 0.0) : float @stage(post_agg)\n}\nEOF\n$PY /workspace/mtl.py --csv sales.csv --dsl ex.mtl; echo \"exit $?\"\n$PY /workspace/mtl.py --csv sales.csv --dsl ex.mtl --param min_qty=2 --param k=2 | head -30; echo \"exit $?\"",
+  "id": 7
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "cd /workspace; python3 - <<'EOF'\np='mtl_engine/evaluator.py'\ns=open(p).read()\nfor a,b in [('''\"\"\"Row-level evaluation of type-checked expressions (nulls propagate SQL-style).\"\"\"''','''\"\"\"Row-level evaluation of type-checked expressions (nulls propagate SQL-style).\n\nPost-aggregation expressions are evaluated with a frame: the ordered list of\noutput rows and the current index, which lag()/lead() navigate.\n\"\"\"'''),\n('''from . import dtypes, functions\nfrom .ast_nodes import Binary, Call, ColumnRef, InExpr, Literal, Unary''','''from . import casts, dtypes, functions\nfrom .ast_nodes import Binary, Call, Cast, ColumnRef, InExpr, Literal, Unary'''),\n('''def evaluate(expr, row):\n    if isinstance(expr, Literal):\n        return expr.value\n    if isinstance(expr, ColumnRef):\n        return row[expr.name]\n    if isinstance(expr, Binary):\n        return _eval_binary(expr, row)\n    if isinstance(expr, Unary):\n        value = evaluate(expr.operand, row)''','''def evaluate(expr, row, frame=None):\n    if isinstance(expr, Literal):\n        return expr.value\n    if isinstance(expr, ColumnRef):\n        return row[expr.name]\n    if isinstance(expr, Binary):\n        return _eval_binary(expr, row, frame)\n    if isinstance(expr, Unary):\n        value = evaluate(expr.operand, row, frame)'''),\n('''        haystack = evaluate(expr.haystack, row)\n        if haystack is None:\n            return None\n        return evaluate(expr.needle, row) in haystack\n    if isinstance(expr, Call):\n        args = [evaluate(a, row) for a in expr.args]\n        return _check_finite(functions.call(expr.name, args), expr)\n    raise AssertionError(f\"unknown expression node {expr!r}\")\n\n\ndef _eval_binary(expr, row):\n    op = expr.op\n    if op == \"&\":\n        left = evaluate(expr.left, row)\n        if left is False:\n            return False\n        right = evaluate(expr.right, row)''','''        haystack = evaluate(expr.haystack, row, frame)\n        if haystack is None:\n            return None\n        return evaluate(expr.needle, row, frame) in haystack\n    if isinstance(expr, Cast):\n        value = evaluate(expr.operand, row, frame)\n        return casts.convert(value, expr.operand.type, expr.target, expr.line)\n    if isinstance(expr, Call):\n        return _check_finite(_eval_call(expr, row, frame), expr)\n    raise AssertionError(f\"unknown expression node {expr!r}\")\n\n\ndef _eval_call(expr, row, frame):\n    name = expr.name\n    if name == \"param\":\n        return expr.value\n    if name == \"coalesce\":\n        value = evaluate(expr.args[0], row, frame)\n        if value is None or (isinstance(value, float) and math.isnan(value)):\n            return evaluate(expr.args[1], row, frame)\n        return value\n    if name in functions.WINDOW_FUNCTIONS:\n        return _eval_offset(expr, row, frame)\n    args = [evaluate(a, row, frame) for a in expr.args]\n    return functions.call(name, args)\n\n\ndef _eval_offset(expr, row, frame):\n    \"\"\"lag(expr, k) / lead(expr, k): the value of expr k rows before/after this one.\"\"\"\n    k = evaluate(expr.args[1], row, frame)\n    if k is None or k <= 0:\n        raise RuntimeFailure(f\"line {expr.line}: {expr.name}() offset must be a positive \"\n                             f\"integer, got {k}\")\n    rows, index = frame\n    target = index - k if expr.name == \"lag\" else index + k\n    if not 0 <= target < len(rows):\n        return None\n    return evaluate(expr.args[0], rows[target], (rows, target))\n\n\ndef _eval_binary(expr, row, frame):\n    op = expr.op\n    if op == \"&\":\n        left = evaluate(expr.left, row, frame)\n        if left is False:\n            return False\n        right = evaluate(expr.right, row, frame)'''),\n('''    if op == \"|\":\n        left = evaluate(expr.left, row)\n        if left is True:\n            return True\n        right = evaluate(expr.right, row)''','''    if op == \"|\":\n        left = evaluate(expr.left, row, frame)\n        if left is True:\n            return True\n        right = evaluate(expr.right, row, frame)'''),\n('''    left = evaluate(expr.left, row)\n    right = evaluate(expr.right, row)\n    if left is None''','''    left = evaluate(expr.left, row, frame)\n    right = evaluate(expr.right, row, frame)\n    if left is None'''),\n]:\n    assert s.count(a)==1,a\n    s=s.replace(a,b)\nopen(p,'w').write(s)\nEOF\ngrep -n \"evaluate(\" mtl_engine/evaluator.py | grep -v frame",
+  "id": 8
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "6",
+  "cls": [
+   "own_test_run"
+  ],
+  "cmd": "time .venv/bin/python -m unittest discover -s tests 2>&1 | tail -1; .venv/bin/python -c \"\nimport cProfile,pstats,sys,io\nsys.argv=['sith.py']\nsys.path.insert(0,'.')\nimport sith\ncProfile.run('sith.main([\\\"complete\\\",\\\"sithlib/navigation.py\\\",\\\"300\\\",\\\"10\\\"])','/tmp/prof')\n\" >/dev/null; .venv/bin/python -c \"\nimport pstats; pstats.Stats('/tmp/prof').sort_stats('cumtime').print_stats(25)\" | grep -E \"search_roots|_package_root|probe|active|cumtime\" ",
+  "id": 9
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "edit_script",
+   "probe_run"
+  ],
+  "cmd": "cd /workspace/mtl_engine && .venv/bin/python 2>/dev/null; ../.venv/bin/python - <<'EOF'\np='typecheck.py'\ns=open(p).read()\nold='''        col_type = schema[item.column]\n        if not dtypes.is_numeric(col_type):'''\nnew='''        col_type = schema[item.column]\n        if item.func != \"count\" and not dtypes.is_numeric(col_type):'''\nassert old in s\nopen(p,'w').write(s.replace(old,new))\nEOF\ncd /tmp/t && M=/workspace/mtl.py; P=/workspace/.venv/bin/python\nsed -i 's/  d: int/  d: int\\n  missing: string/' e.dsl\n$P $M --input e.parquet --dsl e.dsl --tz America/New_York --bad-records-out eb.jsonl; echo \"exit=$?\"; cat eb.jsonl\n$P $M --input e.parquet --dsl e.dsl --strict; echo \"exit=$?\"\nsed -i 's/  missing: string//' e.dsl; $P $M --input e.parquet --dsl e.dsl --strict; echo \"exit=$?\"",
+  "id": 10
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp; cat > /tmp/t.py <<'EOF'\ndec=[0,20,80,-40,90,-10,50,10,0]\nexp={0.26:\"37.92 45.50 68.25 22.75 72.04 34.13 56.88 41.71 37.92\",0.21:\"30.63 36.75 55.12 18.38 58.19 27.56 45.94 33.69 30.63\",0.14:\"20.42 24.50 36.75 12.25 38.79 18.38 30.63 22.46 20.42\",0.34:\"49.58 59.50 89.25 29.75 94.21 44.63 74.38 54.54 49.58\"}\nexp3={0.34:\"43.35 52.02 78.03 26.01 82.37 39.02 65.03 47.69 43.35\"}\nforms={\n'a':lambda b,s,d: b*(1+(2*s)/30+s/40)*(1+d/100),\n'b':lambda b,s,d: b*(1+(s+s)/30+s/40)*(1+d/100),\n'c':lambda b,s,d: b*(1+(s+s)/30.0+s/40.0)*((100+d)/100),\n'd':lambda b,s,d: b*(1+d/100)*(1+(s+s)/30+s/40),\n}\nfor k,f in forms.items():\n    for rnd in ('fmt','round'):\n        ok=True\n        for s,E in ((5,exp),(3,exp3)):\n            for b,e in E.items():\n                got=\" \".join((f\"{f(b,s,d)*100:.2f}\" if rnd=='fmt' else f\"{round(f(b,s,d)*100,2):.2f}\") for d in dec)\n                if got!=e: ok=False; print(k,rnd,s,b,got,'!=',e)\n        print(k,rnd,ok)\nEOF\npython3 /tmp/t.py",
+  "id": 11
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c1",
+  "ck": "3",
+  "cls": [
+   "edit_script",
+   "probe_run"
+  ],
+  "cmd": ".venv/bin/python - <<'EOF'\nimport re\np='industry.py'\ns=open(p).read()\ns=s.replace(\"from decimal import Decimal, InvalidOperation\\n\",\"from decimal import Decimal, InvalidOperation\\nfrom fractions import Fraction\\n\")\ns=s.replace('''def render(sde, product, bp, aid):\n    t = sde.types[product]''','''MAX_ME = 10\n\n\ndef material_amount(qty, me, runs=1):\n    \"\"\"Amount needed = ceil(max(1, qty * (1 - ME/100) * runs)), computed exactly.\"\"\"\n    return math.ceil(max(1, Fraction(qty) * (100 - me) / 100 * runs))\n\n\ndef efficiency_arg(name, upper, even=False):\n    def parse(value):\n        try:\n            num = int(value)\n        except ValueError:\n            raise argparse.ArgumentTypeError(f\"{name} must be an integer, got '{value}'\")\n        if not 0 <= num <= upper:\n            raise argparse.ArgumentTypeError(f\"{name} must be in range [0,{upper}], got {num}\")\n        if even and num % 2:\n            raise argparse.ArgumentTypeError(f\"{name} must be an even integer, got {num}\")\n        return num\n    return parse\n\n\ndef render(sde, product, bp, aid, me=0, te=0, waste=False):\n    t = sde.types[product]''')\ns=s.replace('''    seconds = sde.activity_time.get((bp, aid), 0) or 0\n    minutes = math.ceil(seconds / 60)\n\n    lines = [\n        f\"ITEM: {t['name']} ({product})\",\n        f\"Group: {category} > {group}\",\n        f\"Market Group: {sde.market_path(product)}\",\n        f\"Tech Level: {sde.tech_level(product)}\",''','''    if aid != MANUFACTURING:\n        me = te = 0\n    seconds = sde.activity_time.get((bp, aid), 0) or 0\n    minutes = math.ceil(Fraction(seconds) * (100 - te) / 100 / 60)\n\n    lines = [\n        f\"ITEM: {t['name']} ({product})\",\n        f\"Group: {category} > {group}\",\n        f\"Market Group: {sde.market_path(product)}\",\n        f\"Tech Level: {sde.tech_level(product)}\",''')\ns=s.replace('''        f\"Run Time: {minutes}\",\n        \"| Item | Quantity | Buildable |\",\n        \"|:-:|:---:|---:|\",\n    ]''','''        f\"Run Time: {minutes}\",\n    ]\n    if waste:\n        lines += [\"| Item | Quantity | Waste | Buildable |\", \"|:-:|:---:|:---:|---:|\"]\n    else:\n        lines += [\"| Item | Quantity | Buildable |\", \"|:-:|:---:|---:|\"]''')\ns=s.replace('''        buildable = \"Yes\" if sde.is_buildable(mid) else \"No\"\n        lines.append(f\"| {mname} | {mqty} | {buildable} |\")''','''        buildable = \"Yes\" if sde.is_buildable(mid) else \"No\"\n        needed = material_amount(mqty, me)\n        if waste:\n            extra = needed - material_amount(mqty, MAX_ME if aid == MANUFACTURING else 0)\n            lines.append(f\"| {mname} | {needed} | {extra} | {buildable} |\")\n        else:\n            lines.append(f\"| {mname} | {needed} | {buildable} |\")''')\ns=s.replace('''    rp.add_argument(\"--sde\", required=True, help=\"Path to SDE directory\")\n''','''    rp.add_argument(\"--sde\", required=True, help=\"Path to SDE directory\")\n    rp.add_argument(\"--material-efficiency\", \"-me\", dest=\"me\", default=0, metavar=\"ME\",\n                    type=efficiency_arg(\"Material efficiency\", 10),\n                    help=\"Material efficiency, integer in [0,10] (default 0)\")\n    rp.add_argument(\"--time-efficiency\", \"-te\", dest=\"te\", default=0, metavar=\"TE\",\n                    type=efficiency_arg(\"Time efficiency\", 20, even=True),\n                    help=\"Time efficiency, even integer in [0,20] (default 0)\")\n    rp.add_argument(\"--display-waste\", \"-waste\", dest=\"waste\", action=\"store_true\",\n                    help=\"Display material waste due to ME not being max\")\n''')\ns=s.replace(\"sys.stdout.write(render(sde, product, bp, aid) + \\\"\\\\n\\\")\",\"sys.stdout.write(render(sde, product, bp, aid, args.me, args.te, args.waste) + \\\"\\\\n\\\")\")\nopen(p,'w').write(s)\nEOF\ngrep -n \"args.me\" industry.py\nP=\".venv/bin/python industry.py recipe\"\n$P Naga --sde sde -me 10 | tail -9; $P Naga --sde sde -me 5 -waste | tail -10; $P Naga --sde sde -te 20 | tail -9 | head -2; $P Naga --sde sde --material-efficiency 10 --time-efficiency 20 | tail -9\n$P Naga --sde sde -te 3; echo $?; $P Naga --sde sde -me 11; echo $?",
+  "id": 12
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "1",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/s && t(){ printf '%s' \"$1\" > z.py; python3 /tmp/h/c.py z.py ${@:2} | tail -${N:-8}; echo ---; }\nN=4 t 'def broken(:\n    pass\nval = 1\nclass K:\n    def m(self): pass\nk = K()\nk.@@'\nN=4 t 'x = [1, 2\ny = 3\ny.real@@'\nN=3 t 'def f(a, b):\n    c = a +\n    @@'\nN=3 t 'import os\nos.gcwd@@' --fuzzy\nN=3 t 'x = 1  # x.@@'\nN=3 t 's = \"abc.@@\"'\nN=3 t '[1].ap@@'\nN=3 t '{}.ke@@'\nN=3 t '{1}.ad@@'\nN=3 t '(1).real@@'\nN=3 t 'x = 1.@@'\nN=3 t 'from collections import OrderedDict as OD\nfrom os import getcwd, path, sep, nonexist\nimport nothere\nOD@@'\nN=6 t 'from collections import OrderedDict as OD\nfrom os import getcwd, path, sep, nonexist\nimport nothere\n@@' --full",
+  "id": 13
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "1",
+  "cls": [
+   "edit_script",
+   "probe_run"
+  ],
+  "cmd": "python3 - <<'EOF'\np='sithlib/scopes.py'; s=open(p).read()\ns=s.replace('''    def _bind(self, scope, name, line, kind, node, value=None, **extra):\n        if PLACEHOLDER in name:\n            return\n        if scope.kind == FUNCTION:\n            if name in scope.nonlocal_names:\n                return\n            if name in scope.global_names:\n                scope = scope.root()\n''','''    def _bind(self, scope, name, line, kind, node, value=None, **extra):\n        if PLACEHOLDER in name:\n            return\n        if scope.kind == FUNCTION:\n            if name in scope.nonlocal_names:\n                return\n            if name in scope.global_names:\n                scope = scope.root()\n        if name in scope.bindings and _mentions_placeholder(value):\n            # An incomplete assignment at the cursor must not hide an earlier one.\n            return\n''')\ns=s.replace('''def _declared(statements, kind):''','''def _mentions_placeholder(node):\n    if node is None:\n        return False\n    return any(isinstance(n, ast.Name) and PLACEHOLDER in n.id for n in ast.walk(node))\n\n\ndef _declared(statements, kind):''')\nopen(p,'w').write(s)\nEOF\ncd /tmp/st; S=\"/workspace/.venv/bin/python /workspace/sith.py complete\"\nprintf 'xval = 1\\nxval = \\n' > p.py; $S p.py 2 7 | head -c 200; echo\nprintf 'xval = 1\\nxval = xv\\n' > p.py; $S p.py 2 9 | head -c 200; echo",
+  "id": 14
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "7",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/t && cd /tmp/t && cat > fakedocker.sh <<'EOF'\n#!/bin/bash\necho \"$*\" >> \"$FAKE_LOG\"\ncase \"$*\" in\n  \"info --format {{.DockerRootDir}}\") echo \"${FAKE_ROOT:-/var/lib/docker}\";;\n  \"compose version --short\") echo \"${FAKE_COMPOSE_VERSION:-2.20.0}\";;\n  \"image inspect\"*) exit ${FAKE_INSPECT_RC:-1};;\n  pull*) if [ -n \"$FAKE_PULL_FAIL\" ] && [[ \"$*\" == *\"$FAKE_PULL_FAIL\"* ]]; then echo \"pull failed\" >&2; exit 1; fi;;\n  *\" ps --services --filter status=running\") echo \"${FAKE_RUNNING:-web db}\";;\n  *\" up -d --no-deps\"*) if [ -n \"$FAKE_UP_FAIL\" ] && [ ! -f \"$FAKE_UP_FAIL\" ]; then touch \"$FAKE_UP_FAIL\"; exit 1; fi;;\nesac\nexit 0\nEOF\nchmod +x fakedocker.sh; mkdir -p bin; cp fakedocker.sh bin/docker; ls bin",
+  "id": 15
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "8",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "python3 - <<'EOF'\nsrc = open('appctl.py').read()\n# Runtime.assoc_list\nsrc = src.replace(\"\"\"    runtime_args = {}\n    cache = None\n\"\"\", \"\"\"    runtime_args = {}\n    assoc_list = []\n    cache = None\n\"\"\", 1)\n# global descriptions after GLOBAL_NAMES\nanchor = 'GLOBAL_NAMES = {p[\"name\"] for p in GLOBAL_PARAMS}\\n'\ndesc = anchor + '''GLOBAL_DESCRIPTIONS = {\n    \"path\": \"Path to the application files.\",\n    \"url\": \"Pretend request came from given URL.\",\n    \"user\": \"Set the user.\",\n    \"ssh\": \"Perform operation against a remote server over SSH (or a container).\",\n    \"skip-plugins\": \"Skip loading all plugins, or a comma-separated list of plugins.\",\n    \"skip-themes\": \"Skip loading all themes, or a comma-separated list of themes.\",\n    \"skip-packages\": \"Skip loading all installed packages.\",\n    \"require\": \"Load a file before running the command (may be used more than once).\",\n    \"exec\": \"Execute code before running the command (may be used more than once).\",\n    \"context\": \"Load the application in a given context.\",\n    \"prompt\": \"Prompt the user to enter values for all command arguments, or a subset.\",\n    \"blog\": \"Deprecated. Use --url instead.\",\n    \"disabled_commands\": \"List of commands to disable.\",\n    \"projects_path\": \"Directory holding the project directories.\",\n    \"locale\": \"Locale to use.\",\n    \"cert-email\": \"E-mail address used for certificates.\",\n    \"env\": \"Environment name.\",\n    \"admin-email\": \"Administrator e-mail address.\",\n    \"sysctl\": \"Kernel parameters applied to containers.\",\n    \"skip-tty\": \"Do not allocate a TTY for remote commands.\",\n    \"custom-compose\": \"Additional compose file to merge into the project configuration.\",\n    \"installer_version\": \"Installer release channel.\",\n    \"color\": \"Whether to colorize the output.\",\n    \"debug\": \"Show all errors and add verbose information; optionally limited to a group.\",\n    \"quiet\": \"Suppress informational messages.\",\n}\n'''\nassert anchor in src\nsrc = src.replace(anchor, desc, 1)\nsrc = src.replace('''DOCKER_BIN = \"docker\"\n''', '''DOCKER_BIN = \"docker\"\nRUNTIME_FALLBACK_BIN = \"python3\"\n''', 1)\nsrc = src.replace('''def is_darwin(platform=None):\n    return (platform or sys.platform) == \"darwin\"''', '''def is_darwin(platform=None):\n    if platform is not None:\n        return platform == \"darwin\"\n    if sys.platform == \"darwin\":\n        return True\n    import platform as platform_module\n    return platform_module.system() == \"Darwin\"''', 1)\nopen('appctl.py','w').write(src)\nEOF\ngrep -n \"is_darwin(\" appctl.py",
+  "id": 16
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "5",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "cd /workspace; python3 - <<'EOF'\np='/workspace/mtl_engine/loader.py'\ns=open(p).read()\nold=\"\"\"    kind = \"text\"\n\n    def __init__(self, path, header, header_line, records):\n        self.path = path\"\"\"\nassert old in s\ns=s.replace(old,\"\"\"    kind = \"text\"\n\n    def __init__(self, path, header, header_line, records, file_format=inputs.CSV):\n        self.path = path\n        self.format = file_format\"\"\")\nold=\"\"\"    @property\n    def columns(self):\n        return self.header\n\"\"\"\ns=s.replace(old,old+\"\"\"\n    @property\n    def rows_read(self):\n        return len(self.records)\n\"\"\")\nold=\"\"\"    kind = \"parquet\"\n\n    def __init__(self, path, table):\n        self.path = path\n        self.table = table\"\"\"\ns=s.replace(old,\"\"\"    kind = \"parquet\"\n    format = inputs.PARQUET\n\n    def __init__(self, path, table):\n        self.path = path\n        self.table = table\"\"\")\nold=\"\"\"        _check_columns(path, self.columns)\n\"\"\"\ns=s.replace(old,old+\"\"\"\n    @property\n    def rows_read(self):\n        return self.table.num_rows\n\"\"\",1)\ns=s.replace(\"\"\"    return _parse_delimited(path, text, \"\\\\t\" if fmt == inputs.TSV else \",\")\"\"\",\"\"\"    return _parse_delimited(path, text, \"\\\\t\" if fmt == inputs.TSV else \",\", fmt)\"\"\")\ns=s.replace(\"\"\"def _parse_delimited(path, text, delimiter):\"\"\",\"\"\"def _parse_delimited(path, text, delimiter, file_format):\"\"\")\ns=s.replace(\"\"\"    return TextSource(path, header, header_line, records)\"\"\",\"\"\"    return TextSource(path, header, header_line, records, file_format)\"\"\")\nopen(p,'w').write(s)\nEOF\ngrep -n \"file_format\\|rows_read\\|format = \" mtl_engine/loader.py",
+  "id": 17
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "1",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/t; P=/workspace/.venv/bin/python; M=/workspace/mtl.py\nt(){ printf \"$1\" | $P $M --csv ev.csv --dsl - \"${@:2}\"; echo \"  -> exit $?\"; }\nt 'filter(price > 1)\\n'\nt 'aggregate count(*) as n\\naggregate count(*) as m\\n'\nt 'group_by(item)\\ngroup_by(item)\\naggregate count(*) as n\\n'\nt 'window(1h)\\nwindow(2h)\\naggregate count(*) as n\\n'\nt 'window(1s)\\naggregate count(*) as n\\n'\nt 'aggregate count(*) as n, sum(price) as n\\n'\nt 'aggregate sum(item) as n\\n'\nt 'filter(price > 1\\naggregate count(*) as n\\n'\nt \"filter(item > 1)\\naggregate count(*) as n\\n\"\nt \"filter(item in 'apple')\\naggregate count(*) as n\\n\"\nt \"filter(timestamp > '2025-01-01')\\naggregate count(*) as n\\n\"\nt \"filter('it\\\\\\\\s' in item)\\naggregate count(*) as n\\n\"\nt \"apply(price / 0, x)\\naggregate count(*) as n\\n\"\nt \"apply(len(price), x)\\naggregate count(*) as n\\n\"\nt \"apply(day(timestamp), d)\\ngroup_by(d)\\naggregate count(*) as n\\n\"\nt \"apply(year(timestamp) + month(timestamp), d)\\nfilter(d == 2034 & 'pp' in item | false)\\naggregate count(*) as n, sum(d) as s\\n\"\nt \"filter(nope > 1)\\naggregate count(*) as n\\n\"\nt \"aggregate sum(*) as n\\n\"\nt \"aggregate count(*) as n\\n\" --tz Mars/Base\nt \"aggregate count(*) as n\\n\" --timestamp-format '%%Y'\nprintf 'aggregate count(*) as n\\n' > a.mtl; $P $M --csv missing.csv --dsl a.mtl; echo \"-> $?\"\n$P $M --dsl a.mtl; echo \"-> $?\"\n$P $M --csv ev.csv --dsl a.mtl --out /nonexist/x.json; echo \"-> $?\"\n$P $M --csv ev.csv --dsl a.mtl --out o.json; echo \"-> $?\"; cat o.json\nt \"apply(round(2.5), a)\\napply(round(-2.5), b)\\napply(round(2.675, 2), c)\\napply(round(1234.5, -2), d)\\nfilter(item == 'kale')\\ngroup_by([a,b,c,d])\\naggregate count(*) as n\\n\"\nt \"filter(1 < 2 < 3)\\naggregate count(*) as n\\n\"\nt \"filter(price)\\naggregate count(*) as n\\n\"\nt \"filter(!price > 3)\\naggregate count(*) as n\\n\"\nt 'aggregate\\n  sum(price) as s\\n  , count(*) as n\\n'",
+  "id": 18
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "probe_run"
+  ],
+  "cmd": "cd /workspace; ls .venv/bin; .venv/bin/python --version; .venv/bin/python -m pip list 2>/dev/null; which python; python --version",
+  "id": 19
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "5",
+  "cls": [
+   "own_test_run"
+  ],
+  "cmd": "cd /workspace; .venv/bin/python -m unittest discover -s tests 2>&1 | tail -30",
+  "id": 20
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/t5 && cd /tmp/t5 && cat > s.py <<'EOF'\nfrom typing import overload\ndef f(a, b, *args, c=1, **kw): pass\ndef g(a, /, b, *, c): pass\n@overload\ndef h(x: int) -> int: ...\n@overload\ndef h(x: str) -> str: ...\ndef h(x):\n    return x\nclass K:\n    def m(self, p, q=None): pass\n    @classmethod\n    def cm(cls, z): pass\n    @staticmethod\n    def sm(y): pass\nf(1, 2, 3, x=4)\ng(1, b=2, c=3, d=4)\nf(\"a,(b\", [1, 2], {3: (4, 5)}, )\nf(1,\n  2,\n  )\nK.m(K(), 1)\nK().m(q=1)\nK.cm(1)\nK().sm(1)\nh(1)\ndef other(a): pass\npick = f if K else other\npick(1)\nx = (1, 2)\ndef wrap(a, b=g(1, 2)): pass\nf(g(1, 2), 5)\nlambda_f = lambda u, v=2: u\nlambda_f(1)\nEOF\ncd /workspace; S=\".venv/bin/python sith.py\"\nsig() { echo \"$1 $2: $($S signatures /tmp/t5/s.py $1 $2 | python3 -c 'import json,sys; print([(s[\"name\"], s[\"index\"], s[\"description\"]) for s in json.load(sys.stdin)[\"signatures\"]])')\"; }\nsig 16 2; sig 16 5; sig 16 8; sig 16 13; sig 16 14; sig 17 2; sig 17 7; sig 17 12; sig 17 17; sig 18 6; sig 18 18; sig 18 33; sig 20 3; sig 21 2; sig 22 4; sig 22 8; sig 23 6; sig 24 5; sig 25 7; sig 26 2; sig 29 5; sig 30 6; sig 31 17; sig 31 19; sig 32 4; sig 32 11; sig 32 13; sig 34 9; sig 16 15",
+  "id": 21
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "3",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/reg && cd /tmp/reg && cat > s.py <<'EOF'\nimport os\nimport collections.abc as cabc\nfrom typing import List, Optional\nfrom json import *\n\nclass Base:\n    \"\"\"Base doc.\"\"\"\n    attr = 1\n    def __init__(self, x):\n        self.x = x\n    def meth(self) -> str:\n        return 'a'\n\nclass Child(Base):\n    def other(self):\n        return self.meth().upper()\n\ndef fn(a, b=2, *args, **kw):\n    y = [a, b]\n    for i, v in enumerate(y):\n        print(i, v)\n    return Child(a)\n\nc = fn(1)\nc.other()\nc.x\nos.path.join('a', 'b')\ndumps\ncabc.Mapping\nz: Optional[List[int]] = None\nlam = lambda q: q + 1\nwith open('f') as fh:\n    fh.read()\nEOF\ncat > /tmp/reg/run.py <<'EOF'\nimport subprocess, sys, re\nf = sys.argv[1]\nlines = open(f).read().split('\\n')\ndiffs = 0; total = 0\nfor ln, t in enumerate(lines, 1):\n    for m in re.finditer(r'\\w+', t):\n        for col in (m.start(), m.end()):\n            for mode in ('infer', 'goto', 'complete'):\n                outs = []\n                for prog in ('/tmp/sith_orig.py', '/workspace/sith.py'):\n                    r = subprocess.run(['/workspace/venv/bin/python', prog, mode, f, str(ln), str(col)], capture_output=True, text=True)\n                    outs.append(r.stdout + r.stderr)\n                total += 1\n                if outs[0] != outs[1]:\n                    diffs += 1\n                    print('DIFF', mode, ln, col, t[:40]); print('  old', outs[0][:300]); print('  new', outs[1][:300])\nprint(total, diffs)\nEOF\n/workspace/venv/bin/python run.py s.py 2>&1 | tail -30",
+  "id": 22
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c1",
+  "ck": "5",
+  "cls": [
+   "edit_script",
+   "probe_run"
+  ],
+  "cmd": "cd /workspace; python3 - <<'EOF'\np='mtl.py'; s=open(p).read()\nold=s[s.index('def version_warning(declared, args):'):s.index('# --------------------------------------------------------------------------- input discovery & loading')]\nnew='''def version_warning(declared, args):\n    \"\"\"A single advisory line when the DSL declares an older minor than this runtime implements, else None.\"\"\"\n    if declared[1] >= SUPPORTED_MINOR:\n        return None\n    notes = [f\"constructs introduced after {version_text(declared)} are disabled\"]\n    if args.state_dir or args.meta_out:\n        notes.append(f\"resumable state and run metadata follow mtl_version {version_text(V_RESUME)} semantics\")\n    return (f\"WARNING:version:DSL declares mtl_version {version_text(declared)} but this runtime implements \"\n            f\"{SUPPORTED_MAJOR}.{SUPPORTED_MINOR}; \" + \"; \".join(notes))\n\n\n'''\ns=s.replace(old,new)\nopen(p,'w').write(s)\nEOF\nmkdir -p /tmp/t5/udf && cd /tmp/t5 && cat > udf/score.py <<'EOF'\n@udf(args=[\"float\", \"float\"], returns=\"float\")\ndef score(price, qty):\n    return price * qty * 2\n\ndef shout(s: str) -> str:\n    return s.upper()\n\nregister_udf(\"shout\", shout, args=[\"string\"], returns=\"string\")\n\n@udf(\"string\", returns=\"int\")\ndef boom(s):\n    if s == \"SF\":\n        raise ValueError(\"no SF\")\n    return 1\nEOF\ncat > udf.mtl <<'EOF'\nmtl_version 1.4\nschema Sales {\n  timestamp: timestamp\n  location: string\n  item: string\n  price: float\n  quantity: float\n  unit: string\n  category: string\n}\npipeline U using Sales {\n  calc s = score(price, quantity) : float\n  calc loc = shout(location) : string\n  calc b = boom(location) : int\n  group_by([loc])\n  aggregate sum(s) as ts, count(b) as nb\n}\nEOF\nP=/workspace/.venv/bin/python; M=/workspace/mtl.py\n$P $M --dsl udf.mtl --input data/web --udf udf/score.py --meta-out um.json --bad-records-out ub.jsonl; echo \"exit $?\"; $P -c \"import json; print(json.load(open('um.json'))['udfs'])\"; wc -l ub.jsonl\nsed 's/mtl_version 1.4/mtl_version 1.3/' udf.mtl > udf13.mtl; $P $M --dsl udf13.mtl --input data/web; echo \"exit $?\"\n$P $M --dsl udf.mtl --input data/web; echo \"exit $? (no --udf)\"\necho \"def f(:\" > udf/bad.py; $P $M --dsl udf.mtl --input data/web --udf udf/bad.py; echo \"exit $?\"\n$P $M --dsl udf.mtl --input data/web --udf udf/missing.py; echo \"exit $?\"\nprintf 'def len(s: str) -> int:\\n    return 1\\n' > udf/clash.py; $P $M --dsl udf.mtl --input data/web --udf udf/clash.py; echo \"exit $?\"\nsed 's/score(price, quantity)/score(location, quantity)/' udf.mtl > udfte.mtl; $P $M --dsl udfte.mtl --input data/web --udf udf/score.py; echo \"exit $?\"",
+  "id": 23
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "1",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/s && printf 'from collections import OrderedDict as OD\\nfrom os import getcwd, path, sep, nonexist\\nimport nothere\\nimport os.path\\nimport xml.etree as et\\n@@' > z.py && python3 /tmp/h/c.py z.py; printf 'import os.path\\nos.path.jo@@' > z.py && python3 /tmp/h/c.py z.py; printf 'from helper import *\\nhel@@' > z.py && python3 /tmp/h/c.py z.py; printf 'import helper\\nhelper.@@' > z.py && python3 /tmp/h/c.py z.py;  printf 'x = 1\\n\\n' > z.py; for a in \"3 0\" \"4 0\" \"1 5\" \"1 6\" \"0 0\" \"a 1\"; do /workspace/venv/bin/python /workspace/sith.py complete z.py $a | head -c 100; echo \" rc=$?\"; done; /workspace/venv/bin/python /workspace/sith.py complete nofile.py 1 0; echo rc=$?; printf '\\xff\\xfe' > bad.py; /workspace/venv/bin/python /workspace/sith.py complete bad.py 1 0; echo rc=$?",
+  "id": 24
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "5",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "cd /workspace; .venv/bin/python - <<'EOF'\np='sithlib/rename.py'\ns=open(p).read()\nold=s[s.index('    edits = {}\\n'):s.index('def _offset(')]\nnew='''    edits = {}\n    for match in search.matches:\n        context = match.navigator.context\n        start = match.occurrence.start\n        if context.lines[match.line - 1][start:start + len(old_name)] != old_name:\n            continue\n        files = edits.setdefault(match.path, (context.text, set()))\n        files[1].add(_offset(context.lines, match.line, start))\n    for file_path, (old_text, starts) in edits.items():\n        new_text = apply_edits(old_text, [(s, s + len(old_name), new_name) for s in starts])\n        refactoring.change(file_path, old_text, new_text)\n    return refactoring\n\n\n'''\ns=s.replace(old,new).replace(\"from .source import read_text\\n\",\"\")\nopen(p,'w').write(s)\nEOF",
+  "id": 25
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "5",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/p1; P=\"/workspace/.venv/bin/python /workspace/sith.py\"\n$P rename main.py 2 18 --new-name assist; echo \"rc=$?\"; $P rename main.py 2 18 --new-name assist --diff; echo \"rc=$?\"\n$P rename main.py 1 8 --new-name tools; echo \"rc=$?\"\n$P rename main.py 4 10 --new-name modx --diff; echo \"rc=$?\"\n$P rename main.py 3 6 --new-name pk --diff; echo \"rc=$?\"\n$P rename main.py 2 18 --new-name VALUE; echo \"rc=$?\"\n$P rename main.py 2 18 --new-name 1abc; echo \"rc=$?\"\n$P rename main.py 6 0 --new-name foo; echo \"rc=$?\"\n$P rename main.py 5 0 --new-name foo; echo \"rc=$?\"",
+  "id": 26
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "2",
+  "cls": [
+   "edit_script"
+  ],
+  "cmd": "python - <<'EOF'\np='sithlib/engine.py'\ns=open(p).read()\ns=s.replace('''def complete(path, line, col, fuzzy=False):\n    \"\"\"Return completions as a list of (name, complete, type, description).\"\"\"\n    source = SourceFile(path)\n    source.check_position(line, col)\n    context = cursor.analyze(source.text_before(line, col))\n    if context.kind == cursor.NONE:\n        return []\n\n    location = Project(source.path, source.text()).location(line, col)\n    keywords = []\n    if context.kind == cursor.NAME:\n        entities = location.visible_entities()\n        keywords = vocabulary.keywords()\n    else:\n        receiver = location.evaluate(context.receiver)\n        entities = receiver.members()\n        if receiver.kind == MODULE:\n            entities = {n: e for n, e in entities.items() if not n.startswith(\"_\")}\n''','''def complete(path, line, col, fuzzy=False, root=None):\n    \"\"\"Return completions as a list of (name, complete, type, description).\"\"\"\n    source = SourceFile(path)\n    source.check_position(line, col)\n    context = cursor.analyze(source.text_before(line, col))\n    if context.kind == cursor.NONE:\n        return []\n\n    text = source.lines()[line - 1]\n    indent = len(text) - len(text.lstrip()) if text[:col].strip() else col\n    location = Project(source.path, source.text(), root).location(line, col, indent)\n    keywords = []\n    if context.kind == cursor.NAME:\n        entities = location.visible_entities()\n        keywords = vocabulary.keywords()\n    else:\n        entities = {}\n        for receiver in location.evaluate(context.receiver):\n            for name, entity in receiver.members().items():\n                if receiver.kind == MODULE and name.startswith(\"_\"):\n                    continue\n                entities.setdefault(name, entity)\n''')\ns=s.replace('''(visible names plus keywords, or public module members, or receiver\nattributes)''','''(visible names plus keywords, or public module members, or the attributes\nof every possible receiver value)''')\nopen(p,'w').write(s)\n\np='sithlib/output.py'\ns=open(p).read()\ns=s.replace('''Secret: the wire format of the result (compact JSON with a ``completions``\narray of name/complete/type/description objects, newline-terminated).\n\"\"\"''','''Secret: the wire format of the result (compact JSON with a ``completions``\narray of name/complete/type/description objects, or a ``definitions`` array\nof definition objects, newline-terminated).\n\"\"\"''')\ns=s.replace('''def write_completions(completions, stream=None):\n    \"\"\"``completions``: iterable of (name, complete, type, description).\"\"\"\n    payload = {\"completions\": [\n        {\"name\": name, \"complete\": complete, \"type\": kind, \"description\": description}\n        for name, complete, kind, description in completions\n    ]}\n    text''','''_DEFINITION_FIELDS = (\"name\", \"type\", \"full_name\", \"module_path\", \"line\", \"column\",\n                      \"description\", \"docstring\")\n\n\ndef write_completions(completions, stream=None):\n    \"\"\"``completions``: iterable of (name, complete, type, description).\"\"\"\n    payload = {\"completions\": [\n        {\"name\": name, \"complete\": complete, \"type\": kind, \"description\": description}\n        for name, complete, kind, description in completions\n    ]}\n    _write(payload, stream)\n\n\ndef write_definitions(definitions, stream=None):\n    \"\"\"``definitions``: iterable of dicts with the definition fields.\"\"\"\n    payload = {\"definitions\": [{field: d[field] for field in _DEFINITION_FIELDS}\n                               for d in definitions]}\n    _write(payload, stream)\n\n\ndef _write(payload, stream):\n    text''')\nopen(p,'w').write(s)\nEOF\ncat > sith.py <<'EOF'\n\"\"\"sith - static Python code completion and navigation.\n\nUsage: python sith.py complete <file> <line> <col> [--fuzzy] [--project <dir>]\n       python sith.py infer <file> <line> <col> [--project <dir>]\n       python sith.py goto <file> <line> <col> [--project <dir>]\n\"\"\"\n\nimport os\nimport sys\n\nsys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n\nfrom sithlib import engine, navigation, output  # noqa: E402\nfrom sithlib.source import SourceError  # noqa: E402\n\nUSAGE = (\"usage: sith.py (complete|infer|goto) <file> <line> <col> [--fuzzy] \"\n         \"[--project <dir>]\")\nCOMMANDS = (\"complete\", navigation.INFER, navigation.GOTO)\n\n\ndef _fail(message):\n    sys.stderr.write(\"error: %s\\n\" % message)\n    return 1\n\n\ndef _parse(argv):\n    \"\"\"Return (positional args, fuzzy, project dir) or None if malformed.\"\"\"\n    fuzzy = False\n    project = None\n    args = []\n    index = 0\n    while index < len(argv):\n        arg = argv[index]\n        if arg == \"--fuzzy\":\n            fuzzy = True\n        elif arg == \"--project\":\n            if index + 1 >= len(argv):\n                return None\n            index += 1\n            project = argv[index]\n        elif arg.startswith(\"--project=\"):\n            project = arg[len(\"--project=\"):]\n        else:\n            args.append(arg)\n        index += 1\n    return args, fuzzy, project\n\n\ndef main(argv):\n    sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))\n    parsed = _parse(argv)\n    if parsed is None:\n        return _fail(USAGE)\n    args, fuzzy, project = parsed\n    if len(args) != 4 or args[0] not in COMMANDS:\n        return _fail(USAGE)\n    try:\n        line, col = int(args[2]), int(args[3])\n    except ValueError:\n        return _fail(\"line and column must be integers\")\n    if project is not None and not os.path.isdir(project):\n        project = None\n    command, path = args[0], args[1]\n    if command == \"complete\":\n        try:\n            completions = engine.complete(path, line, col, fuzzy, project)\n        except SourceError as exc:\n            return _fail(str(exc))\n        except Exception:  # analysis must never crash on odd input; degrade to nothing\n            completions = []\n        output.write_completions(completions)\n        return 0\n    try:\n        definitions = navigation.run(command, path, line, col, project)\n    except (SourceError, navigation.NotOnName) as exc:\n        return _fail(str(exc))\n    except Exception:  # analysis must never crash on odd input; degrade to nothing\n        definitions = []\n    output.write_definitions(definitions)\n    return 0\n\n\nif __name__ == \"__main__\":\n    sys.exit(main(sys.argv[1:]))\nEOF",
+  "id": 27
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "7",
+  "cls": [
+   "own_test_run"
+  ],
+  "cmd": ".venv/bin/python -m unittest 2>&1 | tail -5",
+  "id": 28
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "mkdir -p /tmp/t4/data/web/2024 /tmp/t4/data/pos && cd /tmp/t4 && /workspace/.venv/bin/python - <<'EOF'\nimport pyarrow as pa, pyarrow.parquet as pq, gzip\nfrom datetime import datetime, timezone\nt = pa.table({\n \"timestamp\": pa.array([datetime(2024,1,1,10,5,tzinfo=timezone.utc), datetime(2024,1,1,10,20,tzinfo=timezone.utc), datetime(2024,1,1,11,5,tzinfo=timezone.utc), datetime(2024,1,1,10,40,tzinfo=timezone.utc)], pa.timestamp(\"us\", tz=\"UTC\")),\n \"location\": [\"NYC\",\"NYC\",\"SF\",\"NYC\"],\n \"item\": [\"PROMO-A\",\"PROMO-A\",\"PROMO-B\",\"REG-C\"],\n \"price\": [10.0, 12.0, 5.0, 7.0],\n \"qty\": [1, 2, 3, 4],\n \"debug_col\": [\"x\",\"y\",\"z\",\"w\"],\n})\npq.write_table(t, \"data/web/2024/w1.parquet\")\ncsv = \"\"\"timestamp,location,item,price,quantity,unit,category\n2024-01-01T10:00:00Z,NYC,PROMO-A,9.5,3,ea,promo\n2024-01-01T10:12:00Z,NYC,PROMO-A,9.5,5,ea,promo\n2024-01-01T11:00:00Z,SF,PROMO-B,4.0,2,ea,promo\n2024-01-01T11:00:00Z,SF,PROMO-B,-1,2,ea,promo\n2024-01-01T10:30:00Z,LA,PROMO-Z,4.0,7,ea,promo\n\"\"\"\nopen(\"data/pos/p1.csv.gz\",\"wb\").write(gzip.compress(csv.encode()))\nEOF\ncat > /tmp/t4/cfg.yaml <<'EOF'\nsources:\n  - name: web\n    inputs: [\"data/web/**/*.parquet\"]\n    recursive: true\n    format: auto\n    schema: WebSale\n    precedence: 10\n    tz: \"UTC\"\n    nulls: [\"\", \"NULL\"]\n    mapping:\n      rename: { qty: quantity }\n      cast: { price: float, timestamp: timestamp }\n      defaults: { unit: \"ea\" }\n      drop: [\"debug_col\"]\n    required: [\"timestamp\",\"price\",\"quantity\"]\n  - name: pos\n    inputs: [\"data/pos/*.csv.gz\"]\n    format: auto\n    schema: BaseSale\n    precedence: 20\nEOF\ncat > /tmp/t4/p.mtl <<'EOF'\nschema BaseSale {\n  timestamp: timestamp\n  location: string\n  item: string\n  price: float\n  quantity: float\n  unit: string\n  category: string\n}\nschema WebSale extends BaseSale {\n  channel: string\n}\npipeline CrossStream using WebSale {\n  sources {                   # bind source names (from ingest-config) to aliases\n    web  as W,\n    pos  as P\n  }\n\n  # optional: per-source pre-stage calcs/filters scoped by alias\n  with W { calc w_is_promo = starts_with(item, 'PROMO') : bool @stage(pre)\n           filter(w_is_promo) }\n\n  with P { filter(price > 0) }\n\n  join W with P\n    on (W.item == P.item & W.location == P.location)\n    within 10m\n    type inner\n    project {\n      W.timestamp as timestamp,\n      W.location  as location,\n      W.item      as item,\n      P.quantity  as pos_qty,\n      W.price     as web_price\n    }\n\n  window(1h)\n  group_by(['location','item'])\n  aggregate sum(web_price) as web_rev,\n            sum(pos_qty)   as qty\n}\nEOF\ncd /tmp/t4 && /workspace/.venv/bin/python /workspace/mtl.py --dsl p.mtl --ingest-config cfg.yaml; echo \"exit=$?\"",
+  "id": 29
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "3",
+  "cls": [
+   "probe_tmp"
+  ],
+  "cmd": "cd /tmp/proj; S=\"/workspace/venv/bin/python /workspace/sith.py\"; echo 'X = 1' > outside.py; echo 'Y = 2' > /tmp/above.py\necho 'from ..above import Y' > pkg/up.py; echo 'from ...above import Y' > pkg/sub/up2.py\n$S infer pkg/core.py 1 22 --project /tmp/proj; $S infer pkg/up.py 1 20 --project /tmp/proj; $S infer pkg/up.py 1 20; $S infer pkg/sub/up2.py 1 22 --project /tmp/proj; $S infer pkg/sub/up2.py 1 22 --project /tmp\necho \"== circular\"; $S infer a.py 1 14; $S infer a.py 1 22; $S infer a.py 3 20; $S goto a.py 1 22 --follow-imports; $S infer b.py 2 10;  $S infer b.py 1 22",
+  "id": 30
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "7",
+  "cls": [
+   "locate"
+  ],
+  "cmd": "ls -la ~/.docker/cli-plugins/ /usr/libexec/docker/cli-plugins/ /usr/local/lib/docker/cli-plugins/ 2>&1 | grep -i \"compose\\|cannot\"",
+  "id": 31
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat sithlib/parsing.py sithlib/values.py sithlib/scopes.py",
+  "id": 32
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && cat requirements.txt 2>/dev/null; find . -path ./.venv -prune -o -type f -print | grep -v __pycache__ | head -100; ls /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null",
+  "id": 33
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c3",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cat planner.py industry.py plan_report.py build_string.py",
+  "id": 34
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat sithlib/values.py; sed -n 1,80p sithlib/members.py",
+  "id": 35
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "until grep -q \"^total\" /tmp/reg/big.log || ! pgrep -f \"cmp.py 250\" >/dev/null; do sleep 5; done; tail -5 /tmp/reg/big.log",
+  "id": 36
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "7",
+  "cls": [
+   "read"
+  ],
+  "cmd": "df -h / /tmp /dev/shm /workspace 2>&1; which docker docker-compose; sed -n 60,100p /workspace/appctl.py; sed -n 1515,1540p /workspace/appctl.py",
+  "id": 37
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "5",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cat mtl_core/joins.py mtl_core/quality.py mtl_core/output.py",
+  "id": 38
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; sed -n 1,400p sith.py",
+  "id": 39
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd mtl_engine && cat dtypes.py casts.py timeutil.py evaluator.py functions.py aggregates.py output.py params.py schema.py",
+  "id": 40
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c3",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && cat *.md 2>/dev/null | head -50; cat requirements.txt; ls -R | head -50",
+  "id": 41
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cp sith.py /tmp/ref/sith_orig.py; grep -n \"^# Scopes\" -B2 sith.py | head; grep -n \"^def complete\\|^def _parse_int\\|^# Cursor context\\|^def is_ident_char\" sith.py",
+  "id": 42
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "7",
+  "cls": [
+   "read"
+  ],
+  "cmd": "sed -n 78,100p appctl_core/upgrade.py; rm -rf tests/__pycache__ appctl_core/__pycache__; ls appctl_core/data -R",
+  "id": 43
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace/sithlib; cat cursor.py navigation.py",
+  "id": 44
+ },
+ {
+  "task": "metric_transform_lang",
+  "cond": "c1",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && cat requirements.txt 2>/dev/null; find . -path ./node_modules -prune -o -type f -not -path '*/.git/*' -not -path '*/venv/*' -not -path '*/.venv/*' -print | head -100",
+  "id": 45
+ },
+ {
+  "task": "sith",
+  "cond": "c3",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "sed -n 1,200p sithlib/navigation.py",
+  "id": 46
+ },
+ {
+  "task": "recli",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; for f in appctl_cli/*.py; do echo \"=== $f\"; cat -n $f; done",
+  "id": 47
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "6",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; sed -n 2855,3537p appctl.py",
+  "id": 48
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c3",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cat industry.py blueprints.py report.py catalog.py; ls sde",
+  "id": 49
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat sithlib/parsing.py sithlib/locate.py sithlib/values.py",
+  "id": 50
+ },
+ {
+  "task": "recli",
+  "cond": "c1",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; ls -la; find . -path ./.venv -prune -o -type f -print | grep -v '/\\.' | head -50; cat requirements.txt 2>/dev/null; which python; python --version; ls -a ~ ; echo $VIRTUAL_ENV",
+  "id": 51
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat appctl_core/dispatch.py appctl_core/catalog.py appctl_core/runtime_config.py appctl_core/logfile.py appctl_core/messages.py appctl_core/errors.py appctl_core/output.py appctl_core/remote.py",
+  "id": 52
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c3",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la && cat requirements.txt && wc -l *.py && ls -d */ ; ls /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null",
+  "id": 53
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "ls -la /workspace/__pycache__; ls / /tmp /tmp/agent_home 2>/dev/null; ls -la /tmp/agent_home/.claude/projects/-workspace/memory/ 2>/dev/null; cat /tmp/agent_home/.claude/projects/-workspace/memory/MEMORY.md 2>/dev/null",
+  "id": 54
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "3",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat sithlib/definitions.py sithlib/scopes.py",
+  "id": 55
+ },
+ {
+  "task": "sith",
+  "cond": "c2",
+  "ck": "4",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; cat tests/test_sith.py",
+  "id": 56
+ },
+ {
+  "task": "eve_industry",
+  "cond": "c2",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace/eve_industry; for f in *.py; do echo \"=== $f\"; cat $f; done",
+  "id": 57
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "grep -n \"_EMPTY\\|st\\[0\\]\\|st\\[1\\]\\|r\\[0\\]\\|r\\[1\\]\\|ents\\b\\|(tuple(ents), ())\\|((ent,), ())\" sith.py | grep -v \"^.*#\" | head -60",
+  "id": 58
+ },
+ {
+  "task": "sith",
+  "cond": "c1",
+  "ck": "2",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; ls -la; cat requirements.txt; wc -l *.py; ls tests 2>/dev/null | head; cat /tmp/agent_home/.claude/projects/-workspace/memory/MEMORY.md 2>/dev/null",
+  "id": 59
+ },
+ {
+  "task": "recli",
+  "cond": "c3",
+  "ck": "8",
+  "cls": [
+   "read"
+  ],
+  "cmd": "cd /workspace; grep -n '\"cli\"' tests/*.py | head -80; grep -n \"def test_packages_dir\" -A25 tests/test_config.py",
+  "id": 60
+ }
+]

@@ -1,0 +1,250 @@
+### appctl.py (modified)
+--- appctl.py
++++ appctl.py
+@@ -2464,6 +2464,225 @@
+         Runtime.cache = FileCache(cache_dir(), _env_int("APPCTL_CACHE_EXPIRY", CACHE_TTL),
+                                   _env_int("APPCTL_CACHE_MAX_SIZE", CACHE_MAX_SIZE))
+     return Runtime.cache
++
++
++# ---------------------------------------------------------------------------
++# Persistent state database
++# ---------------------------------------------------------------------------
++
++DB_FILENAME = "%s.sqlite" % PROG
++DB_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
++DB_SCHEMA = (
++    """CREATE TABLE IF NOT EXISTS options (
++        key VARCHAR NOT NULL,
++        value VARCHAR NOT NULL,
++        modified_on VARCHAR NOT NULL,
++        PRIMARY KEY (key)
++    )""",
++    """CREATE TABLE IF NOT EXISTS migrations (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        migration VARCHAR NOT NULL,
++        type VARCHAR NOT NULL,
++        timestamp VARCHAR NOT NULL,
++        UNIQUE (migration, type)
++    )""",
++)
++
++
++def db_dir():
++    return os.path.join(root_dir(), "db")
++
++
++def db_path():
++    return os.path.join(db_dir(), DB_FILENAME)
++
++
++def db_timestamp(moment=None):
++    """Return ``moment`` (default: now) as an ISO 8601 UTC timestamp."""
++    if moment is None:
++        moment = datetime.datetime.now(datetime.timezone.utc)
++    elif moment.tzinfo is not None:
++        moment = moment.astimezone(datetime.timezone.utc)
++    return moment.strftime(DB_TIMESTAMP_FORMAT)
++
++
++def db_string(value):
++    """Convert ``value`` to the string form every stored value takes."""
++    if value is None:
++        return ""
++    if value is True:
++        return "1"
++    if value is False:
++        return ""
++    if isinstance(value, bytes):
++        return value.decode("utf-8", "replace")
++    return str(value)
++
++
++class Database:
++    """The SQLite store kept under ``<APPCTL_ROOT_DIR>/db/``."""
++
++    connection = None
++    path = None
++
++    @classmethod
++    def get(cls):
++        """Return the open connection, creating the store on first access."""
++        path = db_path()
++        if cls.connection is not None and cls.path == path:
++            return cls.connection
++        cls.close()
++        import sqlite3
++        try:
++            os.makedirs(os.path.dirname(path), exist_ok=True)
++            connection = sqlite3.connect(path, timeout=30, isolation_level=None)
++        except (OSError, sqlite3.Error) as exc:
++            error("Unable to initialize connection to %s sqlite database: %s"
++                  % (PROG, getattr(exc, "strerror", None) or exc))
++        try:
++            for statement in DB_SCHEMA:
++                connection.execute(statement)
++        except sqlite3.Error as exc:
++            connection.close()
++            error("Encountered Error while creating table: %s" % exc)
++        cls.connection, cls.path = connection, path
++        return connection
++
++    @classmethod
++    def close(cls):
++        if cls.connection is not None:
++            try:
++                cls.connection.close()
++            except Exception:
++                pass
++        cls.connection = cls.path = None
++
++    @classmethod
++    def query(cls, sql, params=()):
++        """Run a parameterized statement and return all resulting rows."""
++        return cls.get().execute(sql, tuple(params)).fetchall()
++
++
++class Option:
++    """String key-value settings that persist across invocations."""
++
++    @staticmethod
++    def get(key):
++        """Return the stored string for ``key``, or False when it is missing."""
++        rows = Database.query("SELECT value FROM options WHERE key = ?", (db_string(key),))
++        return rows[0][0] if rows else False
++
++    @staticmethod
++    def set(key, value):
++        """Insert or update ``key`` (upsert)."""
++        Database.query(
++            "INSERT INTO options (key, value, modified_on) VALUES (?, ?, ?) "
++            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
++            "modified_on = excluded.modified_on",
++            (db_string(key), db_string(value), db_timestamp()))
++        return True
++
++    @staticmethod
++    def delete(key):
++        Database.query("DELETE FROM options WHERE key = ?", (db_string(key),))
++        return True
++
++    @staticmethod
++    def all():
++        """Return every option, ordered by key."""
++        rows = Database.query("SELECT key, value, modified_on FROM options ORDER BY key")
++        return [{"key": k, "value": v, "modified_on": m} for k, v, m in rows]
++
++
++class Migration:
++    """History of the schema migrations that have been applied."""
++
++    @staticmethod
++    def get_migrations(migration_type=None):
++        """Return applied migration names (optionally of one type), in a stable order."""
++        if migration_type is None:
++            rows = Database.query("SELECT migration FROM migrations ORDER BY migration, type, id")
++        else:
++            rows = Database.query("SELECT migration FROM migrations WHERE type = ? "
++                                  "ORDER BY migration, id", (db_string(migration_type),))
++        return [row[0] for row in rows]
++
++    @staticmethod
++    def all():
++        rows = Database.query("SELECT migration, type, timestamp FROM migrations "
++                              "ORDER BY migration, type, id")
++        return [{"migration": m, "type": t, "timestamp": s} for m, t, s in rows]
++
++    @staticmethod
++    def is_applied(migration, migration_type):
++        rows = Database.query("SELECT 1 FROM migrations WHERE migration = ? AND type = ?",
++                              (db_string(migration), db_string(migration_type)))
++        return bool(rows)
++
++    @staticmethod
++    def create(migration, migration_type, timestamp=None):
++        """Record ``migration`` as applied."""
++        Database.query(
++            "INSERT OR REPLACE INTO migrations (migration, type, timestamp) VALUES (?, ?, ?)",
++            (db_string(migration), db_string(migration_type), db_timestamp(timestamp)))
++        return True
++
++    @staticmethod
++    def delete(migration, migration_type):
++        """Forget ``migration`` (after it has been rolled back)."""
++        Database.query("DELETE FROM migrations WHERE migration = ? AND type = ?",
++                       (db_string(migration), db_string(migration_type)))
++        return True
++
++
++class MigrationError(Exception):
++    """Raised by a migration that cannot be applied."""
++
++
++# Registered migrations: name -> {"type": ..., "up": callable, "down": callable or None}.
++MIGRATIONS = {}
++
++
++def register_migration(name, up, down=None, migration_type="db"):
++    MIGRATIONS[name] = {"type": migration_type, "up": up, "down": down}
++
++
++def run_migrations(migrations=None):
++    """Apply pending migrations in name order, skipping those already applied.
++
++    A migration is recorded only after it completes; when one fails it is rolled
++    back (its ``down`` callable runs) and its record is removed. Returns the names
++    of the migrations that were applied.
++    """
++    migrations = MIGRATIONS if migrations is None else migrations
++    applied = []
++    for name in sorted(migrations):
++        spec = migrations[name]
++        migration_type = spec.get("type", "db")
++        if Migration.is_applied(name, migration_type):
++            continue
++        debug("Running migration: %s" % name, "migrations")
++        try:
++            spec["up"]()
++        except Exception as exc:
++            rollback_migration(name, spec)
++            raise MigrationError("Migration '%s' failed: %s" % (name, exc))
++        Migration.create(name, migration_type)
++        applied.append(name)
++    return applied
++
++
++def rollback_migration(name, spec=None):
++    """Undo ``name`` and remove its record from the migration history."""
++    spec = spec or MIGRATIONS[name]
++    migration_type = spec.get("type", "db")
++    if spec.get("down"):
++        try:
++            spec["down"]()
++        finally:
++            Migration.delete(name, migration_type)
++    else:
++        Migration.delete(name, migration_type)
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -3283,6 +3502,11 @@
+     loader = load_config()
+     if not is_completion(positionals):
+         get_cache()
++        Database.get()
++        try:
++            run_migrations()
++        except MigrationError as exc:
++            error(str(exc))
+     invocation = Invocation(argv, positionals, assoc_list, runtime, loader)
+     return dispatch(alias, invocation)
+ 
+@@ -3304,6 +3528,7 @@
+                 Runtime.cache.clean()
+             except OSError:
+                 pass
++        Database.close()
+     sys.stdout.flush()
+     return code
+ 
+

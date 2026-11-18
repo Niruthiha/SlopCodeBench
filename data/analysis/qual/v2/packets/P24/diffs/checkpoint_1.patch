@@ -1,0 +1,1893 @@
+### DESIGN.md (created)
+--- DESIGN.md
++++ DESIGN.md
+@@ -0,0 +1,31 @@
++# appctl — design by [redacted]
++
++Each entry below is a design decision that is hard to make or likely to
++change. Each one lives in exactly one module (under `appctl_core/`), and that
++module's *secret* is the decision. Other modules depend only on the module's
++interface, which stays valid if the secret changes. No module hands its
++internal data structures to another: interfaces exchange strings, numbers,
++plain lists/dicts built fresh for the caller, or opaque objects with methods.
++
++| # | Decision (likely to change) | Module | Secret (one sentence) | Interface |
++|---|-----------------------------|--------|-----------------------|-----------|
++| 1 | Lexical syntax of a command line | `tokens.py` | How raw argv strings are split into option tokens (`--k=v`, `--flag`) and positional words, including the `--` terminator. | `lex(argv)`, `positional(text)`, `Token.is_option() / .name / .value / .text` |
++| 2 | Convenience argv rewrites | `rewrites.py` | Which shortcut spellings (`<cmd> --help`, `--version`) are rewritten into canonical commands, and how. | `apply(tokens) -> tokens` |
++| 3 | Global runtime parameters and strict mode | `runtime_config.py` | Which global parameters exist, which env var turns on strict mode, and which argv positions may supply globals. | `extract(tokens, env) -> (RuntimeConfig, tokens)`; `RuntimeConfig` getters |
++| 4 | Synopsis grammar | `synopsis.py` | The textual grammar of synopsis strings and how each part is classified (positional, keyed, flag, negatable flag, generic, malformed, optional, repeating). | `Synopsis(text)` query methods + `interpret(name, value)` |
++| 5 | Validation policy and default application | `binding.py` | The order in which argument checks run, which conditions are errors, how errors are batched, and when defaults are filled in. | `bind(path, synopsis, defaults, words, options) -> BoundArguments`; raises `MissingPositional` / `CliError` |
++| 6 | Similarity algorithm for suggestions | `suggest.py` | The distance metric, threshold and tie-breaking that pick a single deterministic "Did you mean" candidate. | `suggest(target, candidates) -> str or None` |
++| 7 | Curated synonym table | `synonyms.py` | Which common command-name variants map to which canonical names. | `synonym_for(word) -> str or None` |
++| 8 | Command storage, alias lookup and ordering | `command_tree.py` | How commands are stored as a tree, how names and aliases are matched, and how children are ordered. | `CommandTree.register/find/root`, `CommandNode` query methods |
++| 9 | Command resolution algorithm | `dispatch.py` | How positional words are walked down the tree and when leftover words become arguments rather than unknown subcommands. | `resolve(tree, words) -> (node, remaining_words)` |
++| 10 | User-facing message wording | `messages.py` | The exact text of every error/notice and the program's display name. | One function per message |
++| 11 | Help and usage layout | `help_text.py` | How help listings, command help pages and usage lines are laid out (ordering, column alignment, sections). | `top_level_help`, `command_help`, `usage_line`, `composite_usage` |
++| 12 | Output streams and prefixes | `output.py` | Which stream each kind of output goes to, its prefix, and how `--quiet` / `--debug` affect it. | `Output.error/warning/success/log/line/usage/debug` |
++| 13 | Record rendering formats | `formatter.py` | How lists of records are rendered as table/json/csv/yaml/ids/count. | `render(records, fields, fmt) -> str`, `supported_formats()` |
++| 14 | Which commands exist and what they do | `catalog.py` | The set of built-in commands, their synopses, aliases, defaults, descriptions and handler behavior. | `register_all(tree)` |
++| 15 | Wiring of the pipeline | `app.py` | The order the stages run in (lex → rewrite → globals → resolve → bind → run) and how failures map to exit codes. | `run(argv, env, stdout, stderr) -> int` |
++
++`errors.py` holds the shared exception types (`CliError`, `MissingPositional`)
++that make up part of several interfaces. It has no secret of its own.
++
++`appctl.py` is the executable entry point and just calls `app.run`.
+
+### appctl.py (created)
+--- appctl.py
++++ appctl.py
+@@ -0,0 +1,15 @@
++#!/usr/bin/env python3
++"""appctl: hierarchical command-line dispatcher."""
++
++import os
++import sys
++
++from appctl_core.app import run
++
++
++def main():
++    return run(sys.argv[1:], os.environ, sys.stdout, sys.stderr)
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+
+### appctl_core/__init__.py (created)
+--- appctl_core/__init__.py
++++ appctl_core/__init__.py
+@@ -0,0 +1 @@
++"""Core modules for the appctl command-line tool. See DESIGN.md."""
+
+### appctl_core/app.py (created)
+--- appctl_core/app.py
++++ appctl_core/app.py
+@@ -0,0 +1,60 @@
++"""Pipeline wiring.
++
++Secret: the order in which the stages run (lex, rewrite, extract globals,
++resolve, bind, run) and how failures map to output and exit codes.
++"""
++
++from . import binding, catalog, dispatch, help_text, rewrites, runtime_config, tokens
++from .command_tree import CommandTree
++from .errors import CliError, MissingPositional
++from .output import Output
++
++
++class CommandContext:
++    """Everything a command handler may use."""
++
++    def __init__(self, command, args, out, config, tree):
++        self.command = command
++        self.args = args
++        self.out = out
++        self.config = config
++        self.tree = tree
++
++
++def build_tree():
++    tree = CommandTree()
++    catalog.register_all(tree)
++    return tree
++
++
++def run(argv, env, stdout, stderr, tree=None):
++    """Run one invocation and return its exit code."""
++    out = Output(stdout, stderr)
++    try:
++        items = rewrites.apply(tokens.lex(argv))
++        config, items = runtime_config.extract(items, env)
++    except CliError as exc:
++        out.error(exc.message)
++        return exc.exit_code
++    out = Output(stdout, stderr, quiet=config.quiet(), debug=config.debug())
++    tree = tree if tree is not None else build_tree()
++
++    words = [t.text for t in items if not t.is_option()] or ["help"]
++    options = [(t.name, t.value) for t in items if t.is_option()]
++    node = None
++    try:
++        node, remaining = dispatch.resolve(tree, words)
++        out.debug(f"Resolved command '{node.path}' with arguments {remaining}")
++        if not node.is_runnable():
++            out.usage(help_text.composite_usage(node))
++            return 0
++        bound = binding.bind(node.path, node.synopsis, node.defaults(),
++                             remaining, options)
++        result = node.run(CommandContext(node, bound, out, config, tree))
++        return int(result or 0)
++    except MissingPositional:
++        out.usage(help_text.usage_line(node))
++        return 1
++    except CliError as exc:
++        out.error(exc.message)
++        return exc.exit_code
+
+### appctl_core/binding.py (created)
+--- appctl_core/binding.py
++++ appctl_core/binding.py
+@@ -0,0 +1,108 @@
++"""Argument validation and binding.
++
++Secret: the order in which argument checks run, which conditions count as
++errors, how associative-argument errors are batched, and when defaults are
++filled in.
++"""
++
++from . import messages as _messages
++from .errors import CliError, MissingPositional
++from .suggest import suggest
++from .synopsis import Synopsis
++
++
++class BoundArguments:
++    """Validated arguments with defaults applied."""
++
++    def __init__(self, positionals, options):
++        self._positionals = list(positionals)
++        self._options = dict(options)
++
++    @property
++    def positionals(self):
++        return list(self._positionals)
++
++    def positional(self, index, default=None):
++        if index < len(self._positionals):
++            return self._positionals[index]
++        return default
++
++    def option(self, name, default=None):
++        return self._options.get(name, default)
++
++    def has_option(self, name):
++        return name in self._options
++
++    def options(self):
++        return dict(self._options)
++
++
++def _check_positionals(synopsis, words):
++    if len(words) < synopsis.required_positional_count():
++        raise MissingPositional()
++    limit = synopsis.positional_limit()
++    if limit is not None and len(words) > limit:
++        raise CliError(_messages.too_many_positionals(words[limit:]))
++
++
++def _bind_options(synopsis, options):
++    bound = {}
++    needs_value, takes_no_value, unknown = [], [], []
++    for name, value in options:
++        key, interpreted, status = synopsis.interpret(name, value)
++        if status == Synopsis.OK:
++            bound[key] = interpreted
++        elif status == Synopsis.NEEDS_VALUE:
++            bound.pop(key, None)
++            needs_value.append(key)
++        elif status == Synopsis.TAKES_NO_VALUE:
++            takes_no_value.append(key)
++        elif name not in unknown:
++            unknown.append(name)
++
++    required = synopsis.required_option_names()
++    errors = [_messages.missing_parameter(key)
++              for key in required if key not in bound]
++    errors += [_messages.parameter_needs_value(key)
++               for key in dict.fromkeys(needs_value)
++               if key not in required and key not in bound]
++    errors += [_messages.parameter_takes_no_value(key)
++               for key in dict.fromkeys(takes_no_value)]
++    generic = synopsis.requires_generic_option()
++    if generic and not any(k not in synopsis.option_names() for k in bound):
++        errors.append(_messages.missing_parameter(generic))
++    known = synopsis.option_names()
++    errors += [_messages.unknown_parameter(key, suggest(key, known))
++               for key in unknown]
++    if errors:
++        raise CliError(_messages.parameter_errors(errors))
++    return bound
++
++
++def _apply_defaults(synopsis, words, options, defaults):
++    words = list(words)
++    names = synopsis.positional_names()
++    for name in names[len(words):]:
++        if name not in defaults:
++            break
++        words.append(defaults[name])
++    for name in synopsis.option_names():
++        if name not in options and name in defaults:
++            options[name] = defaults[name]
++    return words, options
++
++
++def bind(path, synopsis, defaults, words, options):
++    """Validate ``words`` and ``options`` against ``synopsis``.
++
++    ``options`` is a sequence of ``(name, value)`` pairs where ``value`` is a
++    string or ``None`` (no ``=`` given). Raises ``MissingPositional`` when
++    required positionals are absent and ``CliError`` for other problems.
++    """
++    malformed = synopsis.malformed_parts()
++    if malformed:
++        raise CliError(_messages.invalid_synopsis(path, malformed))
++    _check_positionals(synopsis, list(words))
++    bound = _bind_options(synopsis, options)
++    words, bound = _apply_defaults(synopsis, words, bound, dict(defaults))
++    return BoundArguments(words, bound)
+
+### appctl_core/catalog.py (created)
+--- appctl_core/catalog.py
++++ appctl_core/catalog.py
+@@ -0,0 +1,487 @@
++"""Built-in command catalog.
++
++Secret: which commands exist, together with their synopses, aliases,
++defaults, descriptions and what each handler does.
++"""
++
++from . import dispatch, formatter, help_text
++from .errors import CliError
++
++VERSION = "1.0.0"
++
++_SITES = [
++    {"name": "main", "type": "standard", "title": "Main Site", "status": "active"},
++    {"name": "blog", "type": "blog", "title": "Company Blog", "status": "active"},
++    {"name": "shop", "type": "store", "title": "Shop", "status": "archived"},
++]
++_PLUGINS = [
++    {"name": "akismet", "status": "active", "version": "5.3"},
++    {"name": "hello-dolly", "status": "inactive", "version": "1.7.2"},
++]
++_USERS = [
++    {"ID": 1, "user_login": "admin", "user_email": "admin@example.com", "roles": "administrator"},
++    {"ID": 2, "user_login": "editor", "user_email": "editor@example.com", "roles": "editor"},
++]
++_POSTS = [
++    {"ID": 1, "post_title": "Hello world!", "post_status": "publish", "post_type": "post"},
++    {"ID": 2, "post_title": "Sample Page", "post_status": "publish", "post_type": "page"},
++]
++_OPTIONS = {"blogname": "My Site", "siteurl": "https://example.com", "admin_email": "admin@example.com"}
++_CONFIG = {"DB_NAME": "app", "DB_HOST": "localhost", "DEBUG": "false"}
++
++
++# --- shared helpers -------------------------------------------------------
++
++def _render(ctx, records, default_fields):
++    args = ctx.args
++    field = args.option("field")
++    fields = [field] if field else (
++        args.option("fields").split(",") if args.option("fields") else default_fields)
++    fmt = args.option("format", "table")
++    if field and fmt == "table":
++        for record in records:
++            ctx.out.line(str(record.get(field, "")))
++        return 0
++    try:
++        ctx.out.line(formatter.render(records, fields, fmt))
++    except ValueError:
++        raise CliError(f"Invalid format: {fmt}. Supported formats: "
++                       + ", ".join(formatter.supported_formats()))
++    return 0
++
++
++def _each(ctx, verb, noun):
++    items = ctx.args.positionals
++    for item in items:
++        ctx.out.log(f"{verb} {noun} '{item}'.")
++    ctx.out.success(f"{verb} {len(items)} of {len(items)} {noun}s.")
++    return 0
++
++
++def _filtered(records, key, value):
++    return [r for r in records if value is None or str(r.get(key)) == str(value)]
++
++
++def _require_targets_or_all(ctx, noun):
++    if not ctx.args.positionals and not ctx.args.option("all"):
++        raise CliError(f"Please specify one or more {noun}s, or use --all.")
++    if ctx.args.option("all"):
++        return [p["name"] for p in _PLUGINS]
++    return ctx.args.positionals
++
++
++# --- cache ----------------------------------------------------------------
++
++def _cache_set(verb):
++    def handler(ctx):
++        key, value, group, expiration = ctx.args.positionals[:4]
++        ctx.out.success(f"{verb} object '{key}' in group '{group}' "
++                        f"(expires: {expiration}): {value}")
++        return 0
++    return handler
++
++
++def _cache_step(sign):
++    def handler(ctx):
++        key, offset, group = ctx.args.positionals[:3]
++        try:
++            amount = int(offset)
++        except ValueError:
++            raise CliError(f"Offset must be an integer, got '{offset}'.")
++        ctx.out.line(str(sign * amount))
++        ctx.out.log(f"Adjusted '{key}' in group '{group}' by {sign * amount}.")
++        return 0
++    return handler
++
++
++def _cache_get(ctx):
++    key, group = ctx.args.positionals[:2]
++    raise CliError(f"Object with key '{key}' and group '{group}' not found.")
++
++
++def _cache_delete(ctx):
++    key, group = ctx.args.positionals[:2]
++    ctx.out.success(f"Object '{key}' deleted from group '{group}'.")
++    return 0
++
++
++def _cache_flush(ctx):
++    ctx.out.success("The cache was flushed.")
++    return 0
++
++
++# --- cli ------------------------------------------------------------------
++
++def _cli_version(ctx):
++    ctx.out.line(f"appctl {VERSION}")
++    return 0
++
++
++def _cli_info(ctx):
++    info = dict(ctx.config.as_dict(), version=VERSION)
++    fmt = ctx.args.option("format")
++    try:
++        ctx.out.line(formatter.render_mapping(info, fmt))
++    except ValueError:
++        raise CliError(f"Invalid format: {fmt}. Supported formats: "
++                       + ", ".join(formatter.supported_mapping_formats()))
++    return 0
++
++
++def _cli_has_command(ctx):
++    words = " ".join(ctx.args.positionals).split()
++    return 0 if ctx.tree.find(words) is not None else 1
++
++
++# --- config ---------------------------------------------------------------
++
++def _config_get(ctx):
++    name = ctx.args.positional(0)
++    if name not in _CONFIG:
++        raise CliError(f"The constant or variable '{name}' is not defined in the config file.")
++    ctx.out.line(_CONFIG[name])
++    return 0
++
++
++def _config_set(ctx):
++    name, value = ctx.args.positionals[:2]
++    kind = ctx.args.option("type")
++    raw = " (raw)" if ctx.args.option("raw") else ""
++    ctx.out.success(f"Updated the {kind} '{name}' in the config file "
++                    f"with the value '{value}'{raw}.")
++    return 0
++
++
++def _config_delete(ctx):
++    name = ctx.args.positional(0)
++    if name not in _CONFIG:
++        raise CliError(f"The {ctx.args.option('type')} '{name}' is not defined in the config file.")
++    ctx.out.success(f"Deleted '{name}' from the config file.")
++    return 0
++
++
++def _config_list(ctx):
++    filters = ctx.args.positionals
++    strict = ctx.args.option("strict")
++    records = [{"name": k, "value": v} for k, v in _CONFIG.items()
++               if not filters or any((f == k) if strict else (f in k) for f in filters)]
++    return _render(ctx, records, ["name", "value"])
++
++
++# --- help -----------------------------------------------------------------
++
++def _help(ctx):
++    words = ctx.args.positionals
++    if not words:
++        ctx.out.usage(help_text.top_level_help(ctx.tree))
++        return 0
++    node, _ = dispatch.resolve(ctx.tree, words)
++    ctx.out.usage(help_text.command_help(node))
++    return 0
++
++
++# --- option ---------------------------------------------------------------
++
++def _option_get(ctx):
++    key = ctx.args.positional(0)
++    if key not in _OPTIONS:
++        raise CliError(f"Could not get '{key}' option. Does it exist?")
++    ctx.out.line(_OPTIONS[key])
++    return 0
++
++
++def _option_write(verb):
++    def handler(ctx):
++        key = ctx.args.positional(0)
++        value = ctx.args.positional(1)
++        if value is None:
++            raise CliError("Please provide a value for the option.")
++        ctx.out.success(f"{verb} '{key}' option (autoload: {ctx.args.option('autoload')}).")
++        return 0
++    return handler
++
++
++def _option_list(ctx):
++    search = ctx.args.option("search")
++    exclude = ctx.args.option("exclude")
++    records = [{"option_name": k, "option_value": v} for k, v in _OPTIONS.items()
++               if (search is None or search in k) and (exclude is None or exclude not in k)]
++    return _render(ctx, records, ["option_name", "option_value"])
++
++
++# --- plugin ---------------------------------------------------------------
++
++def _plugin_bulk(verb):
++    def handler(ctx):
++        names = _require_targets_or_all(ctx, "plugin")
++        for name in names:
++            ctx.out.log(f"Plugin '{name}' {verb}.")
++        ctx.out.success(f"{verb.capitalize()} {len(names)} of {len(names)} plugins.")
++        return 0
++    return handler
++
++
++def _plugin_install(ctx):
++    version = ctx.args.option("version")
++    for name in ctx.args.positionals:
++        suffix = f" (version {version})" if version else ""
++        ctx.out.log(f"Installing {name}{suffix}...")
++        if ctx.args.option("activate"):
++            ctx.out.log(f"Plugin '{name}' activated.")
++    count = len(ctx.args.positionals)
++    ctx.out.success(f"Installed {count} of {count} plugins.")
++    return 0
++
++
++def _plugin_list(ctx):
++    records = _filtered(_PLUGINS, "status", ctx.args.option("status"))
++    return _render(ctx, records, ["name", "status", "version"])
++
++
++# --- post -----------------------------------------------------------------
++
++def _post_create(ctx):
++    args = ctx.args
++    if args.option("porcelain"):
++        ctx.out.line("3")
++    else:
++        ctx.out.success(f"Created {args.option('type')} 3 "
++                        f"'{args.option('title', '')}' with status {args.option('status')}.")
++    return 0
++
++
++def _post_get(ctx):
++    post_id = ctx.args.positional(0)
++    records = _filtered(_POSTS, "ID", post_id)
++    if not records:
++        raise CliError(f"Could not find the post with ID {post_id}.")
++    return _render(ctx, records, list(records[0]))
++
++
++def _post_list(ctx):
++    records = list(_POSTS)
++    for key, value in ctx.args.options().items():
++        if key not in ("format", "field", "fields"):
++            records = _filtered(records, key, value)
++    return _render(ctx, records, ["ID", "post_title", "post_status", "post_type"])
++
++
++def _update_fields(noun):
++    def handler(ctx):
++        fields = {k: v for k, v in ctx.args.options().items()
++                  if k not in ("skip-email",)}
++        if not fields:
++            raise CliError("Need some fields to update.")
++        changes = ", ".join(f"{k}={v}" for k, v in sorted(fields.items()))
++        for target in ctx.args.positionals:
++            ctx.out.success(f"Updated {noun} '{target}': {changes}.")
++        return 0
++    return handler
++
++
++# --- site -----------------------------------------------------------------
++
++def _site_create(ctx):
++    args = ctx.args
++    name = args.positional(0)
++    if args.option("porcelain"):
++        ctx.out.line(name)
++        return 0
++    visibility = "private" if args.option("private") else "public"
++    title = args.option("title", name)
++    ctx.out.success(f"Site '{name}' created (type: {args.option('type')}, "
++                    f"title: {title}, visibility: {visibility}).")
++    return 0
++
++
++def _site_delete(ctx):
++    name = ctx.args.positional(0)
++    if not ctx.args.option("yes"):
++        raise CliError(f"Refusing to delete site '{name}' without --yes.")
++    tables = " Tables were kept." if ctx.args.option("keep-tables") else ""
++    ctx.out.success(f"Site '{name}' deleted.{tables}")
++    return 0
++
++
++def _site_empty(ctx):
++    name = ctx.args.positional(0)
++    if not ctx.args.option("yes"):
++        raise CliError(f"Refusing to empty site '{name}' without --yes.")
++    ctx.out.success(f"Site '{name}' emptied.")
++    return 0
++
++
++def _site_list(ctx):
++    return _render(ctx, list(_SITES), ["name", "type", "title", "status"])
++
++
++# --- user -----------------------------------------------------------------
++
++def _user_create(ctx):
++    args = ctx.args
++    if args.option("porcelain"):
++        ctx.out.line("3")
++        return 0
++    ctx.out.success(f"Created user 3 '{args.positional(0)}' <{args.option('email')}> "
++                    f"with role {args.option('role')}.")
++    return 0
++
++
++def _user_delete(ctx):
++    if not ctx.args.option("yes"):
++        raise CliError("Refusing to delete users without --yes.")
++    reassign = ctx.args.option("reassign")
++    for user in ctx.args.positionals:
++        note = f" Posts reassigned to {reassign}." if reassign else ""
++        ctx.out.success(f"Removed user '{user}'.{note}")
++    return 0
++
++
++def _user_get(ctx):
++    user = ctx.args.positional(0)
++    records = [u for u in _USERS if user in (str(u["ID"]), u["user_login"])]
++    if not records:
++        raise CliError(f"Invalid user ID, email or login: '{user}'")
++    return _render(ctx, records, list(records[0]))
++
++
++def _user_list(ctx):
++    records = _filtered(_USERS, "roles", ctx.args.option("role"))
++    return _render(ctx, records, ["ID", "user_login", "user_email", "roles"])
++
++
++# --- registration ---------------------------------------------------------
++
++_LIST_FORMAT = "[--field=<field>] [--fields=<fields>] [--format=<format>]"
++
++
++def register_all(tree):
++    """Register every built-in command on ``tree``."""
++    r = tree.register
++
++    r("cache", description="Adds, removes, fetches, and flushes the object cache.")
++    r("cache add", _cache_set("Added"), synopsis="<key> <value> [<group>] [<expiration>]",
++      description="Adds a value to the object cache.",
++      defaults={"group": "default", "expiration": "0"})
++    r("cache decr", _cache_step(-1), synopsis="<key> [<offset>] [<group>]",
++      description="Decrements a value in the object cache.",
++      defaults={"offset": "1", "group": "default"})
++    r("cache delete", _cache_delete, synopsis="<key> [<group>]",
++      description="Removes a value from the object cache.", defaults={"group": "default"})
++    r("cache flush", _cache_flush, description="Flushes the object cache.")
++    r("cache get", _cache_get, synopsis="<key> [<group>]",
++      description="Gets a value from the object cache.", defaults={"group": "default"})
++    r("cache incr", _cache_step(1), synopsis="<key> [<offset>] [<group>]",
++      description="Increments a value in the object cache.",
++      defaults={"offset": "1", "group": "default"})
++    r("cache set", _cache_set("Set"), synopsis="<key> <value> [<group>] [<expiration>]",
++      description="Sets a value to the object cache, regardless of whether it already exists.",
++      defaults={"group": "default", "expiration": "0"})
++
++    r("cli", description="Reviews current appctl info and checks registered commands.")
++    r("cli has-command", _cli_has_command, synopsis="<command-name>...",
++      description="Detects if a command exists.")
++    r("cli info", _cli_info, synopsis="[--format=<format>]",
++      description="Prints various details about the appctl environment.",
++      defaults={"format": "list"})
++    r("cli version", _cli_version, description="Prints appctl version.")
++
++    r("config", alias="cfg", description="Generates and reads the configuration file.")
++    r("config delete", _config_delete, synopsis="<name> [--type=<type>]",
++      description="Deletes a specific constant or variable from the config file.",
++      defaults={"type": "all"})
++    r("config get", _config_get, synopsis="<name> [--type=<type>]",
++      description="Gets the value of a specific constant or variable defined in the config file.",
++      defaults={"type": "all"})
++    r("config list", _config_list, synopsis=f"[<filter>...] {_LIST_FORMAT} [--strict]",
++      description="Lists variables, constants, and file includes defined in the config file.",
++      defaults={"format": "table"})
++    r("config set", _config_set,
++      synopsis="<name> <value> [--add] [--[no-]raw] [--anchor=<anchor>] [--type=<type>]",
++      description="Sets the value of a specific constant or variable defined in the config file.",
++      defaults={"type": "constant"})
++
++    r("help", _help, synopsis="[<command>...] [--<field>=<value>]",
++      description="Gets help for appctl commands.")
++
++    r("option", description="Retrieves and sets site options.")
++    r("option add", _option_write("Added"),
++      synopsis="<key> [<value>] [--format=<format>] [--autoload=<autoload>]",
++      description="Adds a new option value.", defaults={"autoload": "yes", "format": "plaintext"})
++    r("option delete", _each_factory("Deleted", "option"), synopsis="<key>...",
++      description="Deletes an option.")
++    r("option get", _option_get, synopsis="<key> [--format=<format>]",
++      description="Gets the value for an option.", defaults={"format": "var_export"})
++    r("option list", _option_list,
++      synopsis=f"[--search=<pattern>] [--exclude=<pattern>] [--autoload=<value>] {_LIST_FORMAT}",
++      description="Lists options and their values.", defaults={"format": "table"})
++    r("option update", _option_write("Updated"),
++      synopsis="<key> [<value>] [--autoload=<autoload>] [--format=<format>]",
++      description="Updates an option value.", defaults={"autoload": "yes", "format": "plaintext"})
++
++    r("plugin", description="Manages plugins, including installs, activations, and updates.")
++    r("plugin activate", _plugin_bulk("activated"), synopsis="[<plugin>...] [--all] [--network]",
++      description="Activates one or more plugins.")
++    r("plugin deactivate", _plugin_bulk("deactivated"),
++      synopsis="[<plugin>...] [--uninstall] [--all] [--network]",
++      description="Deactivates one or more plugins.")
++    r("plugin delete", _plugin_bulk("deleted"), synopsis="[<plugin>...] [--all]",
++      description="Deletes plugin files without deactivating or uninstalling.")
++    r("plugin install", _plugin_install,
++      synopsis="<plugin|zip|url>... [--version=<version>] [--force] [--activate]",
++      description="Installs one or more plugins.")
++    r("plugin list", _plugin_list, synopsis=f"[--status=<status>] {_LIST_FORMAT}",
++      description="Gets a list of plugins.", defaults={"format": "table"})
++    r("plugin uninstall", _plugin_bulk("uninstalled"),
++      synopsis="[<plugin>...] [--deactivate] [--skip-delete] [--all]",
++      description="Uninstalls one or more plugins.")
++
++    r("post", description="Manages posts, content, and meta.")
++    r("post create", _post_create,
++      synopsis="[--title=<title>] [--content=<content>] [--status=<status>] "
++               "[--type=<type>] [--porcelain]",
++      description="Creates a new post.", defaults={"status": "draft", "type": "post"})
++    r("post delete", _each_factory("Deleted", "post"), synopsis="<id>... [--force]",
++      description="Deletes an existing post.")
++    r("post get", _post_get, synopsis=f"<id> {_LIST_FORMAT}",
++      description="Gets details about a post.", defaults={"format": "table"})
++    r("post list", _post_list, synopsis=f"[--<field>=<value>] {_LIST_FORMAT}",
++      description="Gets a list of posts.", defaults={"format": "table"})
++    r("post update", _update_fields("post"), synopsis="<id>... [--<field>=<value>]",
++      description="Updates one or more existing posts.")
++
++    r("site", description="Creates, deletes, empties, archives, and lists sites.")
++    r("site archive", _each_factory("Archived", "site"), synopsis="<site-name>...",
++      description="Archives one or more sites.")
++    r("site create", _site_create, alias="new",
++      synopsis="<site-name> [--type=<type>] [--title=<title>] [--email=<email>] "
++               "[--private] [--porcelain]",
++      description="Creates a site.", defaults={"type": "standard"})
++    r("site delete", _site_delete, alias="rm",
++      synopsis="<site-name> [--yes] [--keep-tables]",
++      description="Deletes a site.")
++    r("site empty", _site_empty, synopsis="<site-name> [--uploads] [--yes]",
++      description="Empties a site of its content.")
++    r("site list", _site_list, alias="ls", synopsis=_LIST_FORMAT,
++      description="Lists all sites.", defaults={"format": "table"})
++    r("site update", _update_fields("site"), synopsis="<site-name> [--<field>=<value>]",
++      description="Updates fields of a site.")
++
++    r("user", description="Manages users, along with their roles and meta.")
++    r("user create", _user_create,
++      synopsis="<user-login> --email=<email> [--role=<role>] "
++               "[--display-name=<name>] [--send-email] [--porcelain]",
++      description="Creates a new user.", defaults={"role": "subscriber"})
++    r("user delete", _user_delete, synopsis="<user>... [--reassign=<user-id>] [--yes]",
++      description="Deletes one or more users.")
++    r("user get", _user_get, synopsis=f"<user> {_LIST_FORMAT}",
++      description="Gets details about a user.", defaults={"format": "table"})
++    r("user list", _user_list, synopsis=f"[--role=<role>] {_LIST_FORMAT}",
++      description="Lists users.", defaults={"format": "table"})
++    r("user update", _update_fields("user"),
++      synopsis="<user>... [--<field>=<value>] [--skip-email]",
++      description="Updates an existing user.")
++
++
++def _each_factory(verb, noun):
++    return lambda ctx: _each(ctx, verb, noun)
+
+### appctl_core/command_tree.py (created)
+--- appctl_core/command_tree.py
++++ appctl_core/command_tree.py
+@@ -0,0 +1,142 @@
++"""Command storage.
++
++Secret: how commands are stored as a tree, how names and aliases are
++matched, and how children are ordered for display.
++"""
++
++from .synopsis import Synopsis
++
++
++def _sort_key(name):
++    return (name.casefold(), name)
++
++
++class CommandNode:
++    """One command (or the root) in the command tree."""
++
++    def __init__(self, name, parent=None):
++        self._name = name
++        self._parent = parent
++        self._children = {}
++        self._aliases = {}
++        self._handler = None
++        self._synopsis_text = ""
++        self._synopsis = Synopsis("")
++        self._description = ""
++        self._alias = None
++        self._defaults = {}
++
++    def _configure(self, handler, synopsis, description, alias, defaults):
++        self._handler = handler
++        self._synopsis_text = synopsis or ""
++        self._synopsis = Synopsis(self._synopsis_text)
++        self._description = description or ""
++        self._alias = alias
++        self._defaults = dict(defaults or {})
++
++    @property
++    def name(self):
++        return self._name
++
++    @property
++    def path(self):
++        """Full space-separated command path ('' for the root)."""
++        words = []
++        node = self
++        while node._parent is not None:
++            words.append(node._name)
++            node = node._parent
++        return " ".join(reversed(words))
++
++    @property
++    def parent(self):
++        return self._parent
++
++    @property
++    def description(self):
++        return self._description
++
++    @property
++    def alias(self):
++        return self._alias
++
++    @property
++    def synopsis(self):
++        return self._synopsis
++
++    def defaults(self):
++        return dict(self._defaults)
++
++    def is_root(self):
++        return self._parent is None
++
++    def is_runnable(self):
++        return self._handler is not None
++
++    def has_children(self):
++        return bool(self._children)
++
++    def children(self):
++        return [self._children[n] for n in sorted(self._children, key=_sort_key)]
++
++    def child_names(self):
++        return sorted(self._children, key=_sort_key)
++
++    def find_child(self, word):
++        """Match ``word`` against child names, then child aliases."""
++        if word in self._children:
++            return self._children[word]
++        canonical = self._aliases.get(word)
++        return self._children.get(canonical) if canonical else None
++
++    def run(self, context):
++        return self._handler(context)
++
++    def _child(self, name, create):
++        if name not in self._children and create:
++            if name in self._aliases:
++                raise ValueError(f"'{name}' is already an alias under '{self.path}'")
++            self._children[name] = CommandNode(name, self)
++        return self._children.get(name)
++
++    def _add_alias(self, alias, canonical):
++        if alias in self._children or self._aliases.get(alias, canonical) != canonical:
++            raise ValueError(f"alias '{alias}' conflicts under '{self.path}'")
++        self._aliases[alias] = canonical
++
++
++class CommandTree:
++    """Registry of all commands."""
++
++    def __init__(self):
++        self._root = CommandNode("")
++
++    @property
++    def root(self):
++        return self._root
++
++    def register(self, path, handler=None, *, synopsis="", description="",
++                 alias=None, defaults=None):
++        """Register (or update) the command at space-separated ``path``.
++
++        Missing parent commands are created as non-runnable groups.
++        """
++        words = path.split()
++        if not words:
++            raise ValueError("command path must not be empty")
++        node = self._root
++        for word in words:
++            node = node._child(word, create=True)
++        node._configure(handler, synopsis, description, alias, defaults)
++        if alias:
++            node.parent._add_alias(alias, node.name)
++        return node
++
++    def find(self, words):
++        """Return the node at exactly ``words`` (aliases allowed) or ``None``."""
++        node = self._root
++        for word in words:
++            node = node.find_child(word)
++            if node is None:
++                return None
++        return None if node is self._root else node
+
+### appctl_core/dispatch.py (created)
+--- appctl_core/dispatch.py
++++ appctl_core/dispatch.py
+@@ -0,0 +1,37 @@
++"""Command resolution.
++
++Secret: how positional words are walked down the command tree, and when
++leftover words become arguments of the matched command rather than unknown
++subcommands.
++"""
++
++from . import messages as _messages
++from .errors import CliError
++from .suggest import suggest
++
++
++def resolve(tree, words):
++    """Find the deepest command matching the leading ``words``.
++
++    Returns ``(node, remaining_words)``. Raises ``CliError`` for an unknown
++    top-level command, or an unknown subcommand under a group that cannot
++    itself run.
++    """
++    node = tree.root
++    words = list(words)
++    consumed = 0
++    for word in words:
++        if not node.has_children():
++            break
++        child = node.find_child(word)
++        if child is None:
++            if node.is_runnable() and not node.is_root():
++                break
++            suggestion = suggest(word, node.child_names())
++            if node.is_root():
++                raise CliError(_messages.unregistered_command(word, suggestion))
++            raise CliError(_messages.unregistered_subcommand(
++                word, node.path, suggestion))
++        node = child
++        consumed += 1
++    return node, words[consumed:]
+
+### appctl_core/errors.py (created)
+--- appctl_core/errors.py
++++ appctl_core/errors.py
+@@ -0,0 +1,16 @@
++"""Exception types shared by several module interfaces."""
++
++
++class CliError(Exception):
++    """A user-facing failure: the message is reported as an error and the
++    process exits with ``exit_code``."""
++
++    def __init__(self, message, exit_code=1):
++        super().__init__(message)
++        self.message = message
++        self.exit_code = exit_code
++
++
++class MissingPositional(Exception):
++    """Raised when a command did not receive all of its required positional
++    arguments; the caller is expected to show that command's usage."""
+
+### appctl_core/formatter.py (created)
+--- appctl_core/formatter.py
++++ appctl_core/formatter.py
+@@ -0,0 +1,83 @@
++"""Record rendering.
++
++Secret: how a list of records is rendered in each supported output format.
++"""
++
++import csv
++import io
++import json
++
++_FORMATS = ("table", "json", "csv", "yaml", "ids", "count")
++
++
++def supported_formats():
++    return list(_FORMATS)
++
++
++def _table(records, fields):
++    rows = [[str(r.get(f, "")) for f in fields] for r in records]
++    widths = [max([len(f)] + [len(row[i]) for row in rows])
++              for i, f in enumerate(fields)]
++    lines = ["  ".join(c.ljust(w) for c, w in zip(fields, widths)).rstrip()]
++    lines += ["  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip()
++              for row in rows]
++    return "\n".join(lines)
++
++
++def _csv(records, fields):
++    buffer = io.StringIO()
++    writer = csv.writer(buffer, lineterminator="\n")
++    writer.writerow(fields)
++    for record in records:
++        writer.writerow([record.get(f, "") for f in fields])
++    return buffer.getvalue().rstrip("\n")
++
++
++def _yaml(records, fields):
++    lines = ["---"]
++    for record in records:
++        for index, field in enumerate(fields):
++            lead = "- " if index == 0 else "  "
++            lines.append(f"{lead}{field}: {json.dumps(record.get(field, ''))}")
++    return "\n".join(lines)
++
++
++def render(records, fields, fmt):
++    """Render ``records`` (dicts) restricted to ``fields`` in format ``fmt``.
++
++    Raises ``ValueError`` for an unsupported format.
++    """
++    fields = list(fields)
++    if fmt == "table":
++        return _table(records, fields)
++    if fmt == "json":
++        return json.dumps([{f: r.get(f) for f in fields} for r in records])
++    if fmt == "csv":
++        return _csv(records, fields)
++    if fmt == "yaml":
++        return _yaml(records, fields)
++    if fmt == "ids":
++        return " ".join(str(r.get(fields[0], "")) for r in records)
++    if fmt == "count":
++        return str(len(records))
++    raise ValueError(fmt)
++
++
++_MAPPING_FORMATS = ("list", "json", "yaml")
++
++
++def supported_mapping_formats():
++    return list(_MAPPING_FORMATS)
++
++
++def render_mapping(mapping, fmt):
++    """Render a single key/value mapping. Raises ``ValueError`` for an
++    unsupported format."""
++    if fmt == "list":
++        width = max((len(k) for k in mapping), default=0)
++        return "\n".join(f"{k.ljust(width)}  {v}" for k, v in mapping.items())
++    if fmt == "json":
++        return json.dumps(mapping)
++    if fmt == "yaml":
++        return "\n".join(["---"] + [f"{k}: {json.dumps(v)}" for k, v in mapping.items()])
++    raise ValueError(fmt)
+
+### appctl_core/help_text.py (created)
+--- appctl_core/help_text.py
++++ appctl_core/help_text.py
+@@ -0,0 +1,75 @@
++"""Help and usage layout.
++
++Secret: how help listings, command help pages and usage lines are laid out:
++section order, column alignment and wording of the surrounding text.
++"""
++
++from .messages import program_name
++
++
++def _columns(nodes):
++    width = max((len(n.name) for n in nodes), default=0)
++    return "\n".join(f"  {n.name.ljust(width)}  {n.description}".rstrip()
++                     for n in nodes)
++
++
++def _invocation(node):
++    """``appctl <path> <synopsis>`` for one command."""
++    words = [program_name(), node.path]
++    if node.has_children() and not node.is_runnable():
++        words.append("<command>")
++    else:
++        words.append(node.synopsis.text())
++    return " ".join(w for w in words if w)
++
++
++def top_level_help(tree):
++    prog = program_name()
++    return (
++        f"usage: {prog} <command> [<subcommand>] [<args>] [--<flags>]\n"
++        "\n"
++        "Available commands:\n"
++        "\n"
++        f"{_columns(tree.root.children())}\n"
++        "\n"
++        f"See '{prog} help <command>' for more information on a specific command."
++    )
++
++
++def usage_line(node):
++    return f"usage: {_invocation(node)}"
++
++
++def composite_usage(node):
++    lines = []
++    for index, child in enumerate(node.children()):
++        lead = "usage:" if index == 0 else "   or:"
++        lines.append(f"{lead} {_invocation(child)}")
++    lines.append("")
++    lines.append(f"See '{program_name()} help {node.path} <command>' "
++                 "for more information on a specific command.")
++    return "\n".join(lines)
++
++
++def command_help(node):
++    sections = [("NAME", f"  {program_name()} {node.path}")]
++    if node.description:
++        sections.append(("DESCRIPTION", f"  {node.description}"))
++    synopses = []
++    if node.is_runnable():
++        synopses.append(" ".join(
++            w for w in (program_name(), node.path, node.synopsis.text()) if w))
++    if node.has_children():
++        synopses.append(f"{program_name()} {node.path} <command>")
++    sections.append(("SYNOPSIS", "\n".join(f"  {s}" for s in synopses)))
++    if node.alias:
++        sections.append(("ALIAS", f"  {node.alias}"))
++    defaults = node.defaults()
++    if defaults:
++        positional = set(node.synopsis.positional_names())
++        sections.append(("DEFAULTS", "\n".join(
++            f"  <{key}>: {value}" if key in positional else f"  --{key}: {value}"
++            for key, value in defaults.items())))
++    if node.has_children():
++        sections.append(("SUBCOMMANDS", _columns(node.children())))
++    return "\n\n".join(f"{title}\n\n{body}" for title, body in sections)
+
+### appctl_core/messages.py (created)
+--- appctl_core/messages.py
++++ appctl_core/messages.py
+@@ -0,0 +1,71 @@
++"""User-facing message wording.
++
++Secret: the exact text of every error and notice, and the program's display
++name.
++"""
++
++_PROGRAM = "appctl"
++
++
++def program_name():
++    return _PROGRAM
++
++
++def _with_suggestion(message, suggestion):
++    if suggestion:
++        return f"{message}\nDid you mean '{suggestion}'?"
++    return message
++
++
++def unregistered_command(name, suggestion=None):
++    return _with_suggestion(
++        f"'{name}' is not a registered {_PROGRAM} command. "
++        f"See '{_PROGRAM} help' for available commands.",
++        suggestion,
++    )
++
++
++def unregistered_subcommand(name, parent, suggestion=None):
++    return _with_suggestion(
++        f"'{name}' is not a registered subcommand of '{parent}'. "
++        f"See '{_PROGRAM} help {parent}' for available subcommands.",
++        suggestion,
++    )
++
++
++def too_many_positionals(words):
++    return "Too many positional arguments: " + " ".join(words)
++
++
++def parameter_errors(lines):
++    return "Parameter errors:" + "".join(f"\n {line}" for line in lines)
++
++
++def missing_parameter(key):
++    return f"missing --{key} parameter"
++
++
++def parameter_needs_value(key):
++    return f"--{key} parameter needs a value"
++
++
++def parameter_takes_no_value(key):
++    return f"--{key} parameter does not accept a value"
++
++
++def unknown_parameter(key, suggestion=None):
++    message = f"unknown --{key} parameter"
++    if suggestion:
++        message += f"\nDid you mean '--{suggestion}'?"
++    return message
++
++
++def invalid_synopsis(path, parts):
++    return (f"The '{path}' command has an invalid synopsis: "
++            + ", ".join(parts))
++
++
++def global_parameter_error(key, needs_value):
++    if needs_value:
++        return f"The --{key} global parameter needs a value."
++    return f"The --{key} global parameter does not accept a value."
+
+### appctl_core/output.py (created)
+--- appctl_core/output.py
++++ appctl_core/output.py
+@@ -0,0 +1,43 @@
++"""Output streams.
++
++Secret: which stream each kind of output goes to, the prefix it carries,
++and how quiet and debug modes affect it.
++"""
++
++
++class Output:
++    def __init__(self, stdout, stderr, quiet=False, debug=False):
++        self._stdout = stdout
++        self._stderr = stderr
++        self._quiet = quiet
++        self._debug = debug
++
++    def _write(self, stream, text):
++        stream.write(text if text.endswith("\n") else text + "\n")
++
++    def line(self, text=""):
++        """Command result data; always shown."""
++        self._write(self._stdout, text)
++
++    def usage(self, text):
++        """Help and usage text; always shown."""
++        self._write(self._stdout, text)
++
++    def log(self, text):
++        if not self._quiet:
++            self._write(self._stdout, text)
++
++    def success(self, text):
++        if not self._quiet:
++            self._write(self._stdout, f"Success: {text}")
++
++    def warning(self, text):
++        if not self._quiet:
++            self._write(self._stderr, f"Warning: {text}")
++
++    def error(self, text):
++        self._write(self._stderr, f"Error: {text}")
++
++    def debug(self, text):
++        if self._debug:
++            self._write(self._stderr, f"Debug: {text}")
+
+### appctl_core/rewrites.py (created)
+--- appctl_core/rewrites.py
++++ appctl_core/rewrites.py
+@@ -0,0 +1,37 @@
++"""Convenience rewrites applied before dispatch.
++
++Secret: which shortcut spellings are rewritten into canonical commands and
++how — currently ``<command> --help`` becomes ``help <command>`` and a bare
++``--version`` becomes ``cli version``.
++"""
++
++from . import tokens as _tokens
++
++
++def _is_bare_flag(token, name):
++    return token.is_option() and token.name == name and token.value is None
++
++
++def _rewrite_version(items):
++    if any(not t.is_option() for t in items):
++        return items
++    if not any(_is_bare_flag(t, "version") for t in items):
++        return items
++    kept = [t for t in items if not _is_bare_flag(t, "version")]
++    return kept + [_tokens.positional("cli"), _tokens.positional("version")]
++
++
++def _rewrite_help(items):
++    if not any(_is_bare_flag(t, "help") for t in items):
++        return items
++    kept = [t for t in items if not _is_bare_flag(t, "help")]
++    help_word = _tokens.positional("help")
++    for index, token in enumerate(kept):
++        if not token.is_option():
++            return kept[:index] + [help_word] + kept[index:]
++    return kept + [help_word]
++
++
++def apply(items):
++    """Return a new token list with all rewrites applied."""
++    return _rewrite_help(_rewrite_version(list(items)))
+
+### appctl_core/runtime_config.py (created)
+--- appctl_core/runtime_config.py
++++ appctl_core/runtime_config.py
+@@ -0,0 +1,85 @@
++"""Global runtime parameters.
++
++Secret: which global parameters exist, which environment variable enables
++strict arguments mode, and which argv positions may supply global
++parameters in each mode.
++"""
++
++from . import messages as _messages
++from .errors import CliError
++from .synopsis import Synopsis
++
++_STRICT_ENV = "APPCTL_STRICT_ARGS_MODE"
++_GLOBALS = Synopsis(
++    "[--path=<path>] [--url=<url>] [--user=<id>] [--[no-]color] "
++    "[--debug[=<group>]] [--quiet]"
++)
++
++
++class RuntimeConfig:
++    """Read-only view of the global runtime configuration."""
++
++    def __init__(self, values, strict):
++        self._values = dict(values)
++        self._strict = strict
++
++    def path(self):
++        return self._values.get("path")
++
++    def url(self):
++        return self._values.get("url")
++
++    def user(self):
++        return self._values.get("user")
++
++    def color(self):
++        return self._values.get("color", True)
++
++    def debug(self):
++        return bool(self._values.get("debug", False))
++
++    def quiet(self):
++        return bool(self._values.get("quiet", False))
++
++    def strict(self):
++        return self._strict
++
++    def as_dict(self):
++        return {
++            "path": self.path(),
++            "url": self.url(),
++            "user": self.user(),
++            "color": self.color(),
++            "debug": self.debug(),
++            "quiet": self.quiet(),
++            "strict_args_mode": self.strict(),
++        }
++
++
++def extract(items, env):
++    """Split global parameters out of ``items``.
++
++    Returns ``(RuntimeConfig, remaining_tokens)``. In strict mode only tokens
++    before the first positional word are considered global.
++    """
++    strict = bool(env.get(_STRICT_ENV, ""))
++    values = {}
++    remaining = []
++    seen_positional = False
++    for token in items:
++        if not token.is_option():
++            seen_positional = True
++            remaining.append(token)
++            continue
++        if strict and seen_positional:
++            remaining.append(token)
++            continue
++        key, value, status = _GLOBALS.interpret(token.name, token.value)
++        if status == Synopsis.UNKNOWN:
++            remaining.append(token)
++        elif status == Synopsis.OK:
++            values[key] = value
++        else:
++            raise CliError(_messages.global_parameter_error(
++                key, needs_value=(status == Synopsis.NEEDS_VALUE)))
++    return RuntimeConfig(values, strict), remaining
+
+### appctl_core/suggest.py (created)
+--- appctl_core/suggest.py
++++ appctl_core/suggest.py
+@@ -0,0 +1,39 @@
++"""Similarity-based suggestions.
++
++Secret: the distance metric (case-insensitive Levenshtein), the acceptance threshold, the
++tie-breaking order and the precedence of curated synonyms used to pick a
++single deterministic "Did you mean" candidate.
++"""
++
++from . import synonyms as _synonyms
++
++_THRESHOLD = 2
++
++
++def _distance(a, b):
++    previous = list(range(len(b) + 1))
++    for i, char_a in enumerate(a, 1):
++        current = [i]
++        for j, char_b in enumerate(b, 1):
++            current.append(min(
++                previous[j] + 1,
++                current[j - 1] + 1,
++                previous[j - 1] + (char_a != char_b),
++            ))
++        previous = current
++    return previous[-1]
++
++
++def suggest(target, candidates):
++    """Return the best candidate for a mistyped ``target``, or ``None``."""
++    pool = sorted(set(candidates), key=lambda c: (c.casefold(), c))
++    if not pool:
++        return None
++    synonym = _synonyms.synonym_for(target)
++    if synonym is not None and synonym in pool:
++        return synonym
++    folded = target.casefold()
++    best = min(pool, key=lambda c: _distance(folded, c.casefold()))
++    if best != target and _distance(folded, best.casefold()) <= _THRESHOLD:
++        return best
++    return None
+
+### appctl_core/synonyms.py (created)
+--- appctl_core/synonyms.py
++++ appctl_core/synonyms.py
+@@ -0,0 +1,31 @@
++"""Curated synonym table.
++
++Secret: which common command-name variants map to which canonical names.
++"""
++
++_SYNONYMS = {
++    "add": "create",
++    "new": "create",
++    "make": "create",
++    "check": "check-update",
++    "clear": "flush",
++    "purge": "flush",
++    "decrement": "decr",
++    "increment": "incr",
++    "del": "delete",
++    "remove": "delete",
++    "rm": "delete",
++    "trash": "delete",
++    "ls": "list",
++    "show": "get",
++    "fetch": "get",
++    "edit": "update",
++    "modify": "update",
++    "ver": "version",
++    "v": "version",
++}
++
++
++def synonym_for(word):
++    """Return the canonical name commonly meant by ``word``, or ``None``."""
++    return _SYNONYMS.get(word)
+
+### appctl_core/synopsis.py (created)
+--- appctl_core/synopsis.py
++++ appctl_core/synopsis.py
+@@ -0,0 +1,166 @@
++"""Synopsis grammar.
++
++Secret: the textual grammar of synopsis strings and how each part is
++classified (positional, keyed parameter, flag, negatable flag, generic keyed
++field, malformed; optional and repeating modifiers).
++"""
++
++import re
++
++_NAME = r"[A-Za-z0-9][\w-]*"
++_PLACEHOLDER = r"[\w|.-]+"
++
++_POSITIONAL = re.compile(rf"^<({_PLACEHOLDER})>$")
++_GENERIC = re.compile(rf"^--<({_PLACEHOLDER})>=<({_PLACEHOLDER})>$")
++_KEYED = re.compile(rf"^--({_NAME})=<({_PLACEHOLDER})>$")
++_KEYED_OPTIONAL_VALUE = re.compile(rf"^--({_NAME})\[=<({_PLACEHOLDER})>\]$")
++_FLAG = re.compile(rf"^--({_NAME})$")
++_NEGATABLE_FLAG = re.compile(rf"^--\[no-\]({_NAME})$")
++
++_POSITIONAL_KIND = "positional"
++_KEYED_KIND = "keyed"
++_FLAG_KIND = "flag"
++_GENERIC_KIND = "generic"
++_MALFORMED_KIND = "malformed"
++
++_REPEAT = "..."
++
++
++class _Part:
++    __slots__ = ("text", "kind", "name", "optional", "repeating", "value_optional")
++
++    def __init__(self, text, kind, name=None, optional=False, repeating=False,
++                 value_optional=False):
++        self.text = text
++        self.kind = kind
++        self.name = name
++        self.optional = optional
++        self.repeating = repeating
++        self.value_optional = value_optional
++
++
++def _outer_brackets(text):
++    """True when the leading '[' is closed by the trailing ']'."""
++    if not (text.startswith("[") and text.endswith("]")):
++        return False
++    depth = 0
++    for index, char in enumerate(text):
++        if char == "[":
++            depth += 1
++        elif char == "]":
++            depth -= 1
++            if depth == 0 and index != len(text) - 1:
++                return False
++    return depth == 0
++
++
++def _parse_part(text):
++    core = text
++    optional = repeating = False
++    if core.endswith(_REPEAT):
++        repeating, core = True, core[: -len(_REPEAT)]
++    if _outer_brackets(core):
++        optional, core = True, core[1:-1]
++        if core.endswith(_REPEAT):
++            repeating, core = True, core[: -len(_REPEAT)]
++
++    def part(kind, name=None, value_optional=False):
++        return _Part(text, kind, name, optional, repeating, value_optional)
++
++    match = _POSITIONAL.match(core)
++    if match:
++        return part(_POSITIONAL_KIND, match.group(1))
++    match = _GENERIC.match(core)
++    if match:
++        return part(_GENERIC_KIND, match.group(1))
++    match = _KEYED.match(core)
++    if match:
++        return part(_KEYED_KIND, match.group(1))
++    match = _KEYED_OPTIONAL_VALUE.match(core)
++    if match:
++        return part(_KEYED_KIND, match.group(1), value_optional=True)
++    match = _FLAG.match(core) or _NEGATABLE_FLAG.match(core)
++    if match:
++        return part(_FLAG_KIND, match.group(1))
++    return _Part(text, _MALFORMED_KIND)
++
++
++class Synopsis:
++    """A parsed synopsis that answers questions about accepted arguments."""
++
++    OK = "ok"
++    UNKNOWN = "unknown"
++    NEEDS_VALUE = "needs-value"
++    TAKES_NO_VALUE = "takes-no-value"
++
++    def __init__(self, text=""):
++        self._parts = [_parse_part(p) for p in (text or "").split()]
++        self._options = {}
++        for part in self._parts:
++            if part.kind in (_KEYED_KIND, _FLAG_KIND):
++                self._options[part.name] = part
++
++    def text(self):
++        return " ".join(part.text for part in self._parts)
++
++    def malformed_parts(self):
++        return [p.text for p in self._parts if p.kind == _MALFORMED_KIND]
++
++    def _positionals(self):
++        return [p for p in self._parts if p.kind == _POSITIONAL_KIND]
++
++    def required_positional_count(self):
++        return sum(1 for p in self._positionals() if not p.optional)
++
++    def positional_limit(self):
++        """Maximum number of positional words, or ``None`` if unbounded."""
++        positionals = self._positionals()
++        if any(p.repeating for p in positionals):
++            return None
++        return len(positionals)
++
++    def positional_names(self):
++        return [p.name for p in self._positionals()]
++
++    def option_names(self):
++        """Declared keyed-parameter and flag names, in declaration order."""
++        return list(self._options)
++
++    def required_option_names(self):
++        return [name for name, p in self._options.items() if not p.optional]
++
++    def accepts_any_option(self):
++        return any(p.kind == _GENERIC_KIND for p in self._parts)
++
++    def requires_generic_option(self):
++        """Name of a mandatory generic field placeholder, or ``None``."""
++        for p in self._parts:
++            if p.kind == _GENERIC_KIND and not p.optional:
++                return p.name
++        return None
++
++    def interpret(self, name, value):
++        """Interpret a supplied option.
++
++        ``value`` is the supplied string or ``None`` when no ``=`` was given.
++        Returns ``(key, value, status)`` where status is one of the class
++        constants. Flags yield booleans; keyed parameters yield strings.
++        """
++        part = self._options.get(name)
++        if part is not None:
++            if part.kind == _FLAG_KIND:
++                if value is None:
++                    return name, True, self.OK
++                return name, None, self.TAKES_NO_VALUE
++            if value is None and part.value_optional:
++                return name, True, self.OK
++            if value is None or value == "":
++                return name, None, self.NEEDS_VALUE
++            return name, value, self.OK
++        if name.startswith("no-") and value is None:
++            negated = self._options.get(name[3:])
++            if negated is not None and negated.kind == _FLAG_KIND:
++                return negated.name, False, self.OK
++        if self.accepts_any_option():
++            return name, (True if value is None else value), self.OK
++        return name, None, self.UNKNOWN
+
+### appctl_core/tokens.py (created)
+--- appctl_core/tokens.py
++++ appctl_core/tokens.py
+@@ -0,0 +1,64 @@
++"""Lexical syntax of the command line.
++
++Secret: how raw argv strings are split into option tokens (``--key=value``,
++``--flag``) and positional words, including the ``--`` terminator.
++"""
++
++
++class Token:
++    """One lexical unit of the command line."""
++
++    __slots__ = ("_text", "_name", "_value", "_option")
++
++    def __init__(self, text, name=None, value=None, option=False):
++        self._text = text
++        self._name = name
++        self._value = value
++        self._option = option
++
++    def is_option(self):
++        return self._option
++
++    @property
++    def text(self):
++        """The token exactly as the user typed it."""
++        return self._text
++
++    @property
++    def name(self):
++        """Option name without leading dashes (``None`` for positionals)."""
++        return self._name
++
++    @property
++    def value(self):
++        """Option value as a string, or ``None`` when no ``=`` was given."""
++        return self._value
++
++    def __repr__(self):
++        return f"Token({self._text!r})"
++
++
++def positional(text):
++    """Build a positional word token."""
++    return Token(text)
++
++
++def lex(argv):
++    """Split raw argv strings into tokens."""
++    result = []
++    options_ended = False
++    for raw in argv:
++        if options_ended:
++            result.append(positional(raw))
++        elif raw == "--":
++            options_ended = True
++        elif raw.startswith("--") and len(raw) > 2:
++            body = raw[2:]
++            if "=" in body:
++                name, value = body.split("=", 1)
++            else:
++                name, value = body, None
++            result.append(Token(raw, name, value, option=True))
++        else:
++            result.append(positional(raw))
++    return result
+
+### pytest.ini (created)
+--- pytest.ini
++++ pytest.ini
+@@ -0,0 +1,3 @@
++[pytest]
++pythonpath = .
++testpaths = tests
+
+### requirements.txt (created)
+--- requirements.txt
++++ requirements.txt
+@@ -0,0 +1 @@
++pytest>=8.0
+
+### tests/test_appctl.py (created)
+--- tests/test_appctl.py
++++ tests/test_appctl.py
+@@ -0,0 +1,188 @@
++import io
++import os
++import subprocess
++import sys
++
++import pytest
++
++from appctl_core.app import run
++from appctl_core.command_tree import CommandTree
++from appctl_core.suggest import suggest
++from appctl_core.synopsis import Synopsis
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++
++
++def call(*argv, env=None, tree=None):
++    out, err = io.StringIO(), io.StringIO()
++    code = run(list(argv), env or {}, out, err, tree=tree)
++    return code, out.getvalue(), err.getvalue()
++
++
++# --- entry point ---------------------------------------------------------
++
++def test_script_runs_as_subprocess():
++    proc = subprocess.run([sys.executable, os.path.join(ROOT, "appctl.py"), "sit"],
++                          capture_output=True, text=True)
++    assert proc.returncode == 1
++    assert proc.stderr == ("Error: 'sit' is not a registered appctl command. "
++                           "See 'appctl help' for available commands.\n"
++                           "Did you mean 'site'?\n")
++
++
++def test_no_arguments_lists_sorted_aligned_commands():
++    code, out, err = call()
++    assert code == 0 and err == ""
++    lines = [l for l in out.splitlines() if l.startswith("  ")]
++    names = [l.split()[0] for l in lines]
++    assert names == sorted(names, key=str.casefold)
++    assert {"site", "cli", "help"} <= set(names)
++    desc_cols = {len(l) - len(l[2:].split(None, 1)[1]) for l in lines}
++    assert len(desc_cols) == 1
++
++
++def test_help_command_matches_no_args():
++    assert call("help")[1] == call()[1]
++
++
++# --- rewrites ----------------------------------------------------------------
++
++def test_version_rewrite():
++    assert call("--version") == call("cli", "version")
++    assert call("--version")[1].startswith("appctl ")
++
++
++def test_help_flag_rewrite():
++    assert call("site", "create", "--help") == call("help", "site", "create")
++    code, out, _ = call("site", "--help")
++    assert code == 0 and "SUBCOMMANDS" in out and "create" in out
++
++
++def test_help_flag_on_unknown_command():
++    code, _, err = call("sitez", "--help")
++    assert code == 1 and "'sitez' is not a registered appctl command" in err
++
++
++# --- dispatch ----------------------------------------------------------------
++
++def test_group_without_handler_prints_usage_with_subcommands():
++    code, out, _ = call("site")
++    assert code == 0
++    assert out.startswith("usage: appctl site archive")
++    assert "   or: appctl site create <site-name>" in out
++
++
++def test_unknown_subcommand_with_suggestion():
++    code, out, err = call("site", "creat", "foo")
++    assert code == 1 and out == ""
++    assert err == ("Error: 'creat' is not a registered subcommand of 'site'. "
++                   "See 'appctl help site' for available subcommands.\n"
++                   "Did you mean 'create'?\n")
++
++
++def test_unknown_command_without_suggestion():
++    code, _, err = call("zzzzzz")
++    assert code == 1 and "Did you mean" not in err
++
++
++def test_alias_dispatches_without_synonym_suggestion():
++    code, out, err = call("site", "new", "foo")
++    assert code == 0 and err == "" and "Site 'foo' created" in out
++    assert call("cfg", "get", "DB_NAME")[1] == "app\n"
++
++
++def test_synonym_suggestion_only_when_registered():
++    assert "Did you mean 'delete'?" in call("post", "trash", "1")[2]
++    assert "Did you mean" not in call("plugin", "add", "x")[2]
++
++
++# --- validation ---------------------------------------------------------------
++
++def test_missing_positional_prints_usage():
++    code, out, err = call("site", "create")
++    assert code == 1 and err == ""
++    assert out.startswith("usage: appctl site create <site-name> [--type=<type>]")
++
++
++def test_too_many_positionals():
++    code, _, err = call("site", "create", "a", "b", "c")
++    assert code == 1 and err == "Error: Too many positional arguments: b c\n"
++
++
++def test_repeating_positional_accepts_many():
++    assert call("site", "archive", "a", "b", "c")[0] == 0
++
++
++def test_missing_and_unknown_associative_errors_are_collected():
++    code, _, err = call("user", "create", "bob", "--email=", "--rol=x", "--zzz")
++    assert code == 1
++    assert err == ("Error: Parameter errors:\n"
++                   " missing --email parameter\n"
++                   " unknown --rol parameter\n"
++                   "Did you mean '--role'?\n"
++                   " unknown --zzz parameter\n")
++
++
++def test_unknown_flag_rejected():
++    code, _, err = call("site", "create", "foo", "--forse")
++    assert code == 1 and "unknown --forse parameter" in err
++
++
++def test_defaults_applied():
++    assert "type: standard" in call("site", "create", "foo")[1]
++    assert "type: blog" in call("site", "create", "foo", "--type=blog")[1]
++    assert call("cache", "incr", "k")[1].splitlines()[0] == "1"
++
++
++def test_negated_flag():
++    assert call("config", "set", "A", "1", "--no-raw")[0] == 0
++    assert "(raw)" in call("config", "set", "A", "1", "--raw")[1]
++
++
++def test_generic_field_accepts_any_key():
++    code, out, _ = call("site", "update", "foo", "--anything=1")
++    assert code == 0 and "anything=1" in out
++
++
++def test_malformed_synopsis_rejected():
++    tree = CommandTree()
++    tree.register("bad", lambda ctx: 0, synopsis="<ok> --=oops")
++    code, _, err = call("bad", "x", tree=tree)
++    assert code == 1 and "--=oops" in err
++
++
++# --- strict mode ------------------------------------------------------------
++
++def test_global_flag_anywhere_without_strict_mode():
++    assert call("site", "create", "foo", "--url=x")[0] == 0
++
++
++def test_strict_mode_treats_later_args_as_command_specific():
++    env = {"APPCTL_STRICT_ARGS_MODE": "1"}
++    code, _, err = call("site", "create", "foo", "--url=x", env=env)
++    assert code == 1 and "unknown --url parameter" in err
++    assert call("--url=x", "site", "create", "foo", env=env)[0] == 0
++    assert call("site", "create", "foo", "--url=x", env={"APPCTL_STRICT_ARGS_MODE": ""})[0] == 0
++
++
++# --- units ------------------------------------------------------------------
++
++def test_synopsis_classification():
++    s = Synopsis("<a> [<b>...] --k=<v> [--f] [--[no-]c] [--<field>=<value>] bogus")
++    assert s.required_positional_count() == 1
++    assert s.positional_limit() is None
++    assert s.option_names() == ["k", "f", "c"]
++    assert s.required_option_names() == ["k"]
++    assert s.accepts_any_option()
++    assert s.malformed_parts() == ["bogus"]
++    assert s.interpret("no-c", None) == ("c", False, Synopsis.OK)
++
++
++def test_suggest_is_deterministic():
++    assert suggest("cat", ["car", "bat"]) == "bat"
++    assert suggest("cat", ["bat", "car"]) == "bat"
++    assert suggest("xyzzy", ["create"]) is None
++
++
++def test_case_insensitive_suggestion():
++    assert "Did you mean 'site'?" in call("SITE")[2]
+

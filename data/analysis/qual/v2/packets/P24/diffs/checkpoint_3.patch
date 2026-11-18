@@ -1,0 +1,1178 @@
+### appctl_core/app.py (modified)
+--- appctl_core/app.py
++++ appctl_core/app.py
+@@ -6,12 +6,15 @@
+ """
+ 
+ import os
++import time
+ 
+ from . import (aliases, binding, catalog, config_files, dispatch, help_text,
+-               remote, rewrites, runtime_config, tokens)
++               logfile, remote, rewrites, runtime_config, tokens, values)
+ from .command_tree import CommandTree
+ from .errors import CliError, MissingPositional
+-from .output import Output
++from .output import Output, color_enabled
++
++_COMPLETION = ["cli", "completion"]
+ 
+ 
+ class CommandContext:
+@@ -23,6 +26,16 @@
+         self.out = out
+         self.config = config
+         self.tree = tree
++
++    def read_value(self, index):
++        """Positional ``index``, or STDIN when it was not given, decoded
++        according to ``--format``; ``None`` when neither is available."""
++        raw = self.args.positional(index)
++        if raw is None:
++            raw = self.out.read_stdin()
++            if raw is None:
++                return None
++        return values.read_value(raw, self.args.option("format"))
+ 
+ 
+ def build_tree():
+@@ -44,37 +57,69 @@
+     return None, argv
+ 
+ 
++def _is_completion(argv):
++    """Tab-completion invocations are never written to the log file."""
++    words = []
++    for raw in argv:
++        if raw == "--":
++            break
++        if not raw.startswith("--"):
++            words.append(raw)
++    return words[:len(_COMPLETION)] == _COMPLETION
++
++
++def _last_option(options, name):
++    found = None
++    for key, value in options:
++        if key == name:
++            found = value
++    return found
++
++
+ class _Invocation:
+-    def __init__(self, argv, env, stdout, stderr, tree, cwd):
++    def __init__(self, argv, env, stdout, stderr, tree, cwd, stdin, started):
+         self.argv = argv
+         self.env = env
+         self.stdout = stdout
+         self.stderr = stderr
+         self.tree = tree
+         self.cwd = cwd
++        self.stdin = stdin
++        self.started = started
++
++    def _color(self, setting):
++        return color_enabled(setting, self.stdout)
+ 
+     def start(self, alias):
+-        out = Output(self.stdout, self.stderr)
++        self.locations = config_files.Locations(self.env)
++        log = logfile.LogFile(logfile.log_path(self.locations.root_dir),
++                              enabled=not _is_completion(self.argv))
++        log.start_invocation()
++        self.out = out = Output(self.stdout, self.stderr, stdin=self.stdin, log=log,
++                                start=self.started, color=self._color("auto"))
+         try:
+             items = rewrites.apply(tokens.lex(self.argv))
+             self.runtime, self.items = runtime_config.extract(items, self.env)
+         except CliError as exc:
+-            out.error(exc.message)
++            out.report(exc)
+             return exc.exit_code
+-        self.out = out = Output(self.stdout, self.stderr,
+-                                quiet=self.runtime.quiet(), debug=self.runtime.debug())
++        runtime_values = self.runtime.values
++        out.configure(quiet=self.runtime.quiet(),
++                      debug=runtime_values.get("debug", False),
++                      color=self._color(runtime_values.get("color", "auto")))
+         for warning in self.runtime.warnings:
+             out.warning(warning)
+         try:
+-            self.locations = config_files.Locations(self.env)
+             self.loaded = config_files.load(self.locations, self.cwd)
++            if "color" not in runtime_values:
++                out.configure(color=self._color(self.loaded.values.get("color", "auto")))
+             self.registry = aliases.AliasRegistry(
+                 self.loaded.aliases, aliases.runtime_aliases(self.env))
+             for path in self.loaded.files:
+-                out.debug(f"Loaded config file: {path}")
++                out.debug(f"Loaded config file: {path}", group="bootstrap")
+             return self.execute(alias, ())
+         except CliError as exc:
+-            out.error(exc.message)
++            out.report(exc)
+             return exc.exit_code
+ 
+     def execute(self, alias, stack):
+@@ -91,7 +136,7 @@
+             try:
+                 result = self.execute(member, stack + (alias,))
+             except CliError as exc:
+-                self.out.error(exc.message)
++                self.out.report(exc)
+                 result = exc.exit_code
+             code = result or code
+         return code
+@@ -100,6 +145,7 @@
+         config = runtime_config.layer(
+             self.runtime, self.loaded.values, connection,
+             locations=self.locations, loaded=self.loaded, aliases=self.registry)
++        self.out.configure(color=self._color(config.color()))
+         if config.ssh():
+             return remote.run(config.ssh(), self.argv, connection,
+                               self.runtime.values, config, self.env, self.out,
+@@ -117,10 +163,13 @@
+         node = None
+         try:
+             node, remaining = dispatch.resolve(tree, words, config.disabled_commands())
+-            out.debug(f"Resolved command '{node.path}' with arguments {remaining}")
++            out.debug(f"Resolved command '{node.path}' with arguments {remaining}",
++                      group="bootstrap")
++            out.log_only(f"Command: {node.path}")
+             if not node.is_runnable():
+                 out.usage(help_text.composite_usage(node))
+                 return 0
++            remaining = self.stdin_fallback(node.synopsis, remaining, options)
+             bound = binding.bind(node.path, node.synopsis, node.defaults(),
+                                  remaining, options)
+             result = node.run(CommandContext(node, bound, out, config, tree))
+@@ -129,10 +178,25 @@
+             out.usage(help_text.usage_line(node))
+             return 1
+ 
+-
+-def run(argv, env, stdout, stderr, tree=None, cwd=None):
+-    """Run one invocation and return its exit code."""
++    def stdin_fallback(self, synopsis, words, options):
++        """Read a missing required positional from STDIN, if any is piped."""
++        if len(words) >= synopsis.required_positional_count():
++            return words
++        raw = self.out.read_stdin()
++        if raw is None:
++            return words
++        fmt = (_last_option(options, "format")
++               if "format" in synopsis.option_names() else None)
++        return list(words) + [values.read_value(raw, fmt)]
++
++
++def run(argv, env, stdout, stderr, tree=None, cwd=None, stdin=None):
++    """Run one invocation and return its exit code.
++
++    ``stdin`` defaults to ``sys.stdin`` at the time input is needed.
++    """
++    started = time.monotonic()
+     alias, argv = _split_alias(list(argv))
+     invocation = _Invocation(argv, env, stdout, stderr, tree,
+-                             cwd if cwd is not None else os.getcwd())
++                             cwd if cwd is not None else os.getcwd(), stdin, started)
+     return invocation.start(alias)
+
+### appctl_core/catalog.py (modified)
+--- appctl_core/catalog.py
++++ appctl_core/catalog.py
+@@ -5,6 +5,8 @@
+ """
+ 
+ import json
++import secrets
++import shlex
+ 
+ from . import config_spec, dispatch, formatter, help_text, messages, yaml_lite
+ from .errors import CliError
+@@ -35,21 +37,13 @@
+ 
+ # --- shared helpers -------------------------------------------------------
+ 
+-def _render(ctx, records, default_fields):
++def _render(ctx, records, default_fields, prefix=None):
+     args = ctx.args
+-    field = args.option("field")
+-    fields = [field] if field else (
+-        args.option("fields").split(",") if args.option("fields") else default_fields)
+-    fmt = args.option("format", "table")
+-    if field and fmt == "table":
+-        for record in records:
+-            ctx.out.line(str(record.get(field, "")))
+-        return 0
+-    try:
+-        ctx.out.line(formatter.render(records, fields, fmt))
+-    except ValueError:
+-        raise CliError(f"Invalid format: {fmt}. Supported formats: "
+-                       + ", ".join(formatter.supported_formats()))
++    display = formatter.Formatter(args.option("format", "table"),
++                                  field=args.option("field"),
++                                  fields=args.option("fields"),
++                                  prefix=prefix, default_fields=default_fields)
++    ctx.out.line(display.display(records))
+     return 0
+ 
+ 
+@@ -134,6 +128,46 @@
+ def _cli_has_command(ctx):
+     words = " ".join(ctx.args.positionals).split()
+     return 0 if ctx.tree.find(words) is not None else 1
++
++
++def _completions(tree, line):
++    """Candidate words completing the last word of ``line``."""
++    try:
++        words = shlex.split(line)
++    except ValueError:
++        words = line.split()
++    prefix = words.pop() if words and line and not line[-1].isspace() else ""
++    node = tree.root
++    for word in words[1:]:
++        if word.startswith("-"):
++            continue
++        child = node.find_child(word)
++        if child is None:
++            if node.is_runnable() and not node.is_root():
++                continue
++            return []
++        node = child
++    if node.has_children() and not prefix.startswith("-"):
++        candidates = node.child_names()
++    elif node.is_root():
++        candidates = []
++    else:
++        candidates = [f"--{name}" for name in node.synopsis.option_names()]
++        candidates += [f"--{p.name}" for p in config_spec.params() if p.runtime]
++    return [c for c in dict.fromkeys(candidates) if c.startswith(prefix)]
++
++
++def _cli_completion(ctx):
++    line = ctx.args.option("line")
++    point = ctx.args.option("point")
++    if point is not None:
++        try:
++            line = line[:int(point)]
++        except ValueError:
++            raise CliError(f"Point must be an integer, got '{point}'.")
++    for candidate in _completions(ctx.tree, line):
++        ctx.out.line(candidate)
++    return 0
+ 
+ 
+ def _cli_param_dump(ctx):
+@@ -246,14 +280,15 @@
+     key = ctx.args.positional(0)
+     if key not in _OPTIONS:
+         raise CliError(f"Could not get '{key}' option. Does it exist?")
+-    ctx.out.line(_OPTIONS[key])
++    value = _OPTIONS[key]
++    ctx.out.line(json.dumps(value, indent=4) if ctx.args.option("format") == "json" else value)
+     return 0
+ 
+ 
+ def _option_write(verb):
+     def handler(ctx):
+         key = ctx.args.positional(0)
+-        value = ctx.args.positional(1)
++        value = ctx.read_value(1)
+         if value is None:
+             raise CliError("Please provide a value for the option.")
+         ctx.out.success(f"{verb} '{key}' option (autoload: {ctx.args.option('autoload')}).")
+@@ -266,7 +301,7 @@
+     exclude = ctx.args.option("exclude")
+     records = [{"option_name": k, "option_value": v} for k, v in _OPTIONS.items()
+                if (search is None or search in k) and (exclude is None or exclude not in k)]
+-    return _render(ctx, records, ["option_name", "option_value"])
++    return _render(ctx, records, ["option_name", "option_value"], prefix="option")
+ 
+ 
+ # --- plugin ---------------------------------------------------------------
+@@ -315,7 +350,7 @@
+     records = _filtered(_POSTS, "ID", post_id)
+     if not records:
+         raise CliError(f"Could not find the post with ID {post_id}.")
+-    return _render(ctx, records, list(records[0]))
++    return _render(ctx, records, list(records[0]), prefix="post")
+ 
+ 
+ def _post_list(ctx):
+@@ -323,7 +358,8 @@
+     for key, value in ctx.args.options().items():
+         if key not in ("format", "field", "fields"):
+             records = _filtered(records, key, value)
+-    return _render(ctx, records, ["ID", "post_title", "post_status", "post_type"])
++    return _render(ctx, records, ["ID", "post_title", "post_status", "post_type"],
++                   prefix="post")
+ 
+ 
+ def _update_fields(noun):
+@@ -356,8 +392,9 @@
+ 
+ def _site_delete(ctx):
+     name = ctx.args.positional(0)
+-    if not ctx.args.option("yes"):
+-        raise CliError(f"Refusing to delete site '{name}' without --yes.")
++    if not ctx.out.confirm(f"Are you sure you want to delete the site '{name}'?",
++                           ctx.args.option("yes")):
++        return 0
+     tables = " Tables were kept." if ctx.args.option("keep-tables") else ""
+     ctx.out.success(f"Site '{name}' deleted.{tables}")
+     return 0
+@@ -365,8 +402,9 @@
+ 
+ def _site_empty(ctx):
+     name = ctx.args.positional(0)
+-    if not ctx.args.option("yes"):
+-        raise CliError(f"Refusing to empty site '{name}' without --yes.")
++    if not ctx.out.confirm(f"Are you sure you want to empty the site '{name}'?",
++                           ctx.args.option("yes")):
++        return 0
+     ctx.out.success(f"Site '{name}' emptied.")
+     return 0
+ 
+@@ -388,8 +426,10 @@
+ 
+ 
+ def _user_delete(ctx):
+-    if not ctx.args.option("yes"):
+-        raise CliError("Refusing to delete users without --yes.")
++    users = ", ".join(f"'{u}'" for u in ctx.args.positionals)
++    if not ctx.out.confirm(f"Are you sure you want to delete {users}?",
++                           ctx.args.option("yes")):
++        return 0
+     reassign = ctx.args.option("reassign")
+     for user in ctx.args.positionals:
+         note = f" Posts reassigned to {reassign}." if reassign else ""
+@@ -397,17 +437,36 @@
+     return 0
+ 
+ 
+-def _user_get(ctx):
+-    user = ctx.args.positional(0)
+-    records = [u for u in _USERS if user in (str(u["ID"]), u["user_login"])]
++def _find_user(user):
++    records = [u for u in _USERS
++               if str(user) in (str(u["ID"]), u["user_login"], u["user_email"])]
+     if not records:
+         raise CliError(f"Invalid user ID, email or login: '{user}'")
+-    return _render(ctx, records, list(records[0]))
++    return records
++
++
++def _user_get(ctx):
++    records = _find_user(ctx.args.positional(0))
++    return _render(ctx, records, list(records[0]), prefix="user")
+ 
+ 
+ def _user_list(ctx):
+     records = _filtered(_USERS, "roles", ctx.args.option("role"))
+-    return _render(ctx, records, ["ID", "user_login", "user_email", "roles"])
++    return _render(ctx, records, ["ID", "user_login", "user_email", "roles"],
++                   prefix="user")
++
++
++def _user_reset_password(ctx):
++    users = [_find_user(u)[0]["user_login"] for u in ctx.args.positionals]
++    password = ctx.args.option("password") or secrets.token_urlsafe(18)
++    for user in users:
++        if ctx.args.option("porcelain"):
++            ctx.out.line(password)
++            continue
++        ctx.out.success(f"Reset password for {user}.")
++        if ctx.args.option("show-password"):
++            ctx.out.log(f"Password: {password}", sensitive=True)
++    return 0
+ 
+ 
+ # --- registration ---------------------------------------------------------
+@@ -444,6 +503,8 @@
+       description="Gets the value for an alias.")
+     r("cli alias list", _cli_alias_list, synopsis="[--format=<format>]",
+       description="Lists available aliases.", defaults={"format": "yaml"})
++    r("cli completion", _cli_completion, synopsis="--line=<line> [--point=<point>]",
++      description="Generates tab completion strings.")
+     r("cli has-command", _cli_has_command, synopsis="<command-name>...",
+       description="Detects if a command exists.")
+     r("cli info", _cli_info, synopsis="[--format=<format>]",
+@@ -545,6 +606,10 @@
+       description="Gets details about a user.", defaults={"format": "table"})
+     r("user list", _user_list, synopsis=f"[--role=<role>] {_LIST_FORMAT}",
+       description="Lists users.", defaults={"format": "table"})
++    r("user reset-password", _user_reset_password,
++      synopsis="<user>... [--password=<password>] [--show-password] [--porcelain] "
++               "[--skip-email]",
++      description="Resets the password for one or more users.")
+     r("user update", _update_fields("user"),
+       synopsis="<user>... [--<field>=<value>] [--skip-email]",
+       description="Updates an existing user.")
+
+### appctl_core/errors.py (modified)
+--- appctl_core/errors.py
++++ appctl_core/errors.py
+@@ -3,12 +3,25 @@
+ 
+ class CliError(Exception):
+     """A user-facing failure: the message is reported as an error and the
+-    process exits with ``exit_code``."""
++    process exits with ``exit_code``.
+ 
+-    def __init__(self, message, exit_code=1):
++    ``message`` may be a list of lines, which is reported as a multi-line
++    error. A ``sensitive`` error contains user-supplied material that must
++    never reach the log file; ``log_message`` is an optional redacted form
++    that may be logged instead.
++    """
++
++    def __init__(self, message, exit_code=1, sensitive=False, log_message=None):
++        lines = None
++        if isinstance(message, (list, tuple)):
++            lines = [str(line) for line in message]
++            message = "\n".join(lines)
+         super().__init__(message)
+         self.message = message
++        self.lines = lines
+         self.exit_code = exit_code
++        self.sensitive = sensitive
++        self.log_message = log_message
+ 
+ 
+ class MissingPositional(Exception):
+
+### appctl_core/formatter.py (modified)
+--- appctl_core/formatter.py
++++ appctl_core/formatter.py
+@@ -1,11 +1,17 @@
+ """Record rendering.
+ 
+-Secret: how a list of records is rendered in each supported output format.
++Secret: how a list of records is rendered in each supported output format,
++how requested field names are matched against record keys (case-insensitive,
++with an optional prefix), and when a single record is shown vertically.
+ """
+ 
+ import csv
+ import io
+ import json
++
++from . import messages as _messages
++from . import yaml_lite
++from .errors import CliError
+ 
+ _FORMATS = ("table", "json", "csv", "yaml", "ids", "count")
+ 
+@@ -14,14 +20,30 @@
+     return list(_FORMATS)
+ 
+ 
++def _cell(value):
++    """Scalar text for table and CSV cells; arrays and objects become JSON."""
++    if value is None:
++        return ""
++    if isinstance(value, (list, tuple, dict)):
++        return json.dumps(value)
++    return str(value)
++
++
++def _table_rows(header, rows):
++    widths = [max([len(h)] + [len(row[i]) for row in rows])
++              for i, h in enumerate(header)]
++    return "\n".join("  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip()
++                     for row in [header] + rows)
++
++
+ def _table(records, fields):
+-    rows = [[str(r.get(f, "")) for f in fields] for r in records]
+-    widths = [max([len(f)] + [len(row[i]) for row in rows])
+-              for i, f in enumerate(fields)]
+-    lines = ["  ".join(c.ljust(w) for c, w in zip(fields, widths)).rstrip()]
+-    lines += ["  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip()
+-              for row in rows]
+-    return "\n".join(lines)
++    return _table_rows(list(fields),
++                       [[_cell(r.get(f)) for f in fields] for r in records])
++
++
++def _vertical(record, fields):
++    """One record laid out as Field/Value pairs."""
++    return _table_rows(["Field", "Value"], [[f, _cell(record.get(f))] for f in fields])
+ 
+ 
+ def _csv(records, fields):
+@@ -29,38 +51,103 @@
+     writer = csv.writer(buffer, lineterminator="\n")
+     writer.writerow(fields)
+     for record in records:
+-        writer.writerow([record.get(f, "") for f in fields])
++        writer.writerow([_cell(record.get(f)) for f in fields])
+     return buffer.getvalue().rstrip("\n")
+ 
+ 
+-def _yaml(records, fields):
+-    lines = ["---"]
+-    for record in records:
+-        for index, field in enumerate(fields):
+-            lead = "- " if index == 0 else "  "
+-            lines.append(f"{lead}{field}: {json.dumps(record.get(field, ''))}")
+-    return "\n".join(lines)
++def _restrict(records, fields):
++    return [{f: r.get(f) for f in fields} for r in records]
+ 
+ 
+-def render(records, fields, fmt):
++def _id_field(fields, available, prefix):
++    for name in list(fields) + list(available):
++        if name.casefold() == "id" or (prefix and name.casefold() == f"{prefix}_id".casefold()):
++            return name
++    return fields[0] if fields else None
++
++
++def render(records, fields, fmt, prefix=None):
+     """Render ``records`` (dicts) restricted to ``fields`` in format ``fmt``.
+ 
+     Raises ``ValueError`` for an unsupported format.
+     """
+     fields = list(fields)
++    records = list(records)
+     if fmt == "table":
++        if len(records) == 1:
++            return _vertical(records[0], fields)
+         return _table(records, fields)
+     if fmt == "json":
+-        return json.dumps([{f: r.get(f) for f in fields} for r in records])
++        return json.dumps(_restrict(records, fields), indent=4)
+     if fmt == "csv":
+         return _csv(records, fields)
+     if fmt == "yaml":
+-        return _yaml(records, fields)
++        return yaml_lite.dump_records(_restrict(records, fields))
+     if fmt == "ids":
+-        return " ".join(str(r.get(fields[0], "")) for r in records)
++        key = _id_field(fields, [k for r in records for k in r], prefix)
++        return " ".join(_cell(r.get(key)) for r in records)
+     if fmt == "count":
+         return str(len(records))
+     raise ValueError(fmt)
++
++
++def render_field(records, field, fmt):
++    """Only the values of ``field``, one per line."""
++    if fmt == "json":
++        return "\n".join(json.dumps(r.get(field)) for r in records)
++    if fmt == "count":
++        return str(len(records))
++    return "\n".join(_cell(r.get(field)) for r in records)
++
++
++class Formatter:
++    """Resolves ``--format``, ``--field`` and ``--fields`` for a command."""
++
++    def __init__(self, fmt="table", field=None, fields=None, prefix=None,
++                 default_fields=()):
++        self.format = fmt or "table"
++        self.field = field
++        self.fields = fields
++        self.prefix = prefix
++        self.default_fields = list(default_fields)
++
++    def _available(self, records):
++        names = list(self.default_fields)
++        for record in records:
++            names.extend(record)
++        return list(dict.fromkeys(names))
++
++    def find_field(self, name, available):
++        """Match ``name`` exactly, then case-insensitively, then with the
++        prefix prepended. Raises ``CliError`` when nothing matches."""
++        candidates = [name]
++        if self.prefix and not name.casefold().startswith(f"{self.prefix}_".casefold()):
++            candidates.append(f"{self.prefix}_{name}")
++        for candidate in candidates:
++            if candidate in available:
++                return candidate
++            folded = candidate.casefold()
++            for key in available:
++                if key.casefold() == folded:
++                    return key
++        raise CliError(_messages.invalid_field(name))
++
++    def display(self, records):
++        """Return the rendered text for ``records``."""
++        records = list(records)
++        available = self._available(records)
++        if self.field:
++            field = self.find_field(str(self.field), available)
++            return render_field(records, field, self.format)
++        if self.fields:
++            requested = [f.strip() for f in str(self.fields).split(",") if f.strip()]
++            fields = list(dict.fromkeys(self.find_field(f, available) for f in requested))
++        else:
++            fields = self.default_fields or available
++        try:
++            return render(records, fields, self.format, self.prefix)
++        except ValueError:
++            raise CliError(_messages.invalid_format(self.format, supported_formats()))
+ 
+ 
+ _MAPPING_FORMATS = ("list", "json", "yaml")
+
+### appctl_core/logfile.py (created)
+--- appctl_core/logfile.py
++++ appctl_core/logfile.py
+@@ -0,0 +1,57 @@
++"""Invocation log file.
++
++Secret: where the log file lives, the timestamp format of each entry, the
++delimiter line written at the start of every invocation, and that write
++failures never interrupt the command.
++"""
++
++import os
++from datetime import datetime, timezone
++
++_RELATIVE_PATH = os.path.join("logs", "appctl.log")
++_TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
++_DELIMITER = "========== appctl invocation (pid {pid}) =========="
++
++
++def log_path(root_dir):
++    return os.path.join(root_dir, _RELATIVE_PATH)
++
++
++def timestamp(now=None):
++    """UTC timestamp in ISO 8601 form, e.g. ``2026-01-02T03:04:05Z``."""
++    now = now or datetime.now(timezone.utc)
++    return now.astimezone(timezone.utc).strftime(_TIMESTAMP)
++
++
++class LogFile:
++    """Appends timestamped entries to the log file (or does nothing when
++    disabled)."""
++
++    def __init__(self, path, enabled=True):
++        self.path = path
++        self.enabled = bool(enabled and path)
++
++    def _append(self, lines):
++        if not self.enabled:
++            return
++        try:
++            directory = os.path.dirname(self.path)
++            if directory:
++                os.makedirs(directory, exist_ok=True)
++            with open(self.path, "a", encoding="utf-8") as handle:
++                handle.write("".join(line + "\n" for line in lines))
++        except OSError:
++            pass
++
++    def start_invocation(self):
++        self.write(_DELIMITER.format(pid=os.getpid()))
++
++    def write(self, text):
++        """Append ``text``; every line carries the same timestamp."""
++        stamp = timestamp()
++        self._append(f"[{stamp}] {line}" for line in str(text).split("\n"))
++
++
++class NullLog(LogFile):
++    def __init__(self):
++        super().__init__(None, enabled=False)
+
+### appctl_core/messages.py (modified)
+--- appctl_core/messages.py
++++ appctl_core/messages.py
+@@ -110,3 +110,23 @@
+ 
+ def config_unparsable(path, exc):
+     return f"Unable to parse the config file '{path}': {exc}"
++
++
++def invalid_field(name):
++    return f"Invalid field: {name}."
++
++
++def invalid_json(raw):
++    return f"Invalid JSON: {raw}"
++
++
++def redacted():
++    return "[redacted]"
++
++
++def operation_cancelled():
++    return "Operation cancelled."
++
++
++def invalid_format(fmt, supported):
++    return f"Invalid format: {fmt}. Supported formats: " + ", ".join(supported)
+
+### appctl_core/output.py (modified)
+--- appctl_core/output.py
++++ appctl_core/output.py
+@@ -1,43 +1,227 @@
+ """Output streams.
+ 
+-Secret: which stream each kind of output goes to, the prefix it carries,
+-and how quiet and debug modes affect it.
++Secret: which stream each kind of output goes to, the prefix it carries and
++its color, which kinds are copied to the log file, how quiet and debug modes
++affect it, and how questions are asked and answered on STDIN.
+ """
+ 
++import os
++import select
++import stat
++import sys
++import time
++
++from . import messages as _messages
++from .logfile import NullLog
++
++_RESET = "\x1b[0m"
++_PREFIX_COLORS = {
++    "Error": "\x1b[1;31m",    # bold red
++    "Warning": "\x1b[1;33m",  # bold yellow
++    "Success": "\x1b[1;32m",  # bold green
++    "Debug": "\x1b[1;34m",    # bold blue
++}
++_BOX_COLOR = "\x1b[1;37;41m"  # bold white on red
++_STDIN_WAIT = 1.0
++_TRUE = {"true", "yes", "on", "1", "always", "force"}
++_FALSE = {"false", "no", "off", "0", "never", "none"}
++
++
++def _isatty(stream):
++    try:
++        return bool(stream.isatty())
++    except (AttributeError, ValueError, OSError):
++        return False
++
++
++def color_enabled(setting, stream, os_name=None):
++    """Decide whether to colorize: ``setting`` is True, False or ``"auto"``."""
++    if isinstance(setting, bool):
++        return setting
++    text = str(setting).strip().lower() if setting is not None else "auto"
++    if text in _TRUE:
++        return True
++    if text in _FALSE:
++        return False
++    return _isatty(stream) and (os_name or os.name) != "nt"
++
++
++def _pipe_has_data(stream):
++    """False when ``stream`` is a pipe/socket that stays silent for a while."""
++    try:
++        fd = stream.fileno()
++        mode = os.fstat(fd).st_mode
++    except (AttributeError, OSError, ValueError):
++        return True
++    if not (stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)):
++        return True
++    try:
++        ready, _, _ = select.select([fd], [], [], _STDIN_WAIT)
++    except (OSError, ValueError):
++        return True
++    return bool(ready)
++
+ 
+ class Output:
+-    def __init__(self, stdout, stderr, quiet=False, debug=False):
++    def __init__(self, stdout, stderr, quiet=False, debug=False, *, stdin=None,
++                 color=False, log=None, start=None):
+         self._stdout = stdout
+         self._stderr = stderr
+-        self._quiet = quiet
++        self._stdin = stdin
++        self._quiet = bool(quiet)
+         self._debug = debug
++        self._color = bool(color)
++        self._log = log or NullLog()
++        self._start = time.monotonic() if start is None else start
++        self._stdin_data = None
++        self._stdin_read = False
++
++    def configure(self, quiet=None, debug=None, color=None):
++        if quiet is not None:
++            self._quiet = bool(quiet)
++        if debug is not None:
++            self._debug = debug
++        if color is not None:
++            self._color = bool(color)
++
++    @property
++    def color(self):
++        return self._color
++
++    # --- writing ----------------------------------------------------------
+ 
+     def _write(self, stream, text):
+         stream.write(text if text.endswith("\n") else text + "\n")
+ 
++    def _prefix(self, label):
++        text = f"{label}:"
++        if self._color:
++            return f"{_PREFIX_COLORS[label.split()[0]]}{text}{_RESET}"
++        return text
++
+     def line(self, text=""):
+-        """Command result data; always shown."""
++        """Command result data; always shown, never logged."""
+         self._write(self._stdout, text)
+ 
+     def usage(self, text):
+         """Help and usage text; always shown."""
+         self._write(self._stdout, text)
+ 
+-    def log(self, text):
+-        if not self._quiet:
+-            self._write(self._stdout, text)
++    def log(self, text, sensitive=False):
++        """Informational message: STDOUT and the log file, unless quiet.
++
++        Sensitive messages are shown but never written to the log file.
++        """
++        if self._quiet:
++            return
++        self._write(self._stdout, text)
++        if not sensitive:
++            self._log.write(text)
++
++    info = log
++
++    def log_only(self, text):
++        """A note that goes to the log file only."""
++        self._log.write(text)
+ 
+     def success(self, text):
+         if not self._quiet:
+-            self._write(self._stdout, f"Success: {text}")
++            self._write(self._stdout, f"{self._prefix('Success')} {text}")
+ 
+     def warning(self, text):
+-        if not self._quiet:
+-            self._write(self._stderr, f"Warning: {text}")
+-
+-    def error(self, text):
+-        self._write(self._stderr, f"Error: {text}")
+-
+-    def debug(self, text):
+-        if self._debug:
+-            self._write(self._stderr, f"Debug: {text}")
++        self._write(self._stderr, f"{self._prefix('Warning')} {text}")
++        self._log.write(f"Warning: {text}")
++
++    def error(self, text, sensitive=False, log_text=None):
++        """Report an error on STDERR; log it unless it is sensitive (in which
++        case only ``log_text``, a redacted form, is logged if given)."""
++        self._write(self._stderr, f"{self._prefix('Error')} {text}")
++        if not sensitive:
++            self._log.write(f"Error: {text}")
++        elif log_text:
++            self._log.write(f"Error: {log_text}")
++
++    def error_multi_line(self, lines, sensitive=False, log_text=None):
++        """Report a multi-line error inside a highlighted box on STDERR."""
++        lines = [str(l) for l in lines] or [""]
++        lines[0] = f"Error: {lines[0]}"
++        width = max(len(l) for l in lines)
++        border = "+" + "-" * (width + 2) + "+"
++        body = [border] + [f"| {l.ljust(width)} |" for l in lines] + [border]
++        if self._color:
++            body = [f"{_BOX_COLOR}{row}{_RESET}" for row in body]
++        self._write(self._stderr, "\n".join(body))
++        if not sensitive:
++            self._log.write("\n".join(lines))
++        elif log_text:
++            self._log.write(f"Error: {log_text}")
++
++    def report(self, exc):
++        """Report a ``CliError``."""
++        if exc.lines is not None:
++            self.error_multi_line(exc.lines, exc.sensitive, exc.log_message)
++        else:
++            self.error(exc.message, exc.sensitive, exc.log_message)
++
++    def debug(self, text, group=None):
++        """Debug message, shown when debug mode is on. With ``--debug=<group>``
++        only messages of that group are shown."""
++        active = self._debug
++        if not active:
++            return
++        if isinstance(active, str) and group != active:
++            return
++        label = f"Debug ({group})" if group else "Debug"
++        elapsed = f"({time.monotonic() - self._start:.3f}s)"
++        self._write(self._stderr, f"{self._prefix(label)} {text} {elapsed}")
++        self._log.write(f"{label}: {text} {elapsed}")
++
++    # --- reading ----------------------------------------------------------
++
++    def _input(self):
++        return self._stdin if self._stdin is not None else sys.stdin
++
++    def _flush(self):
++        for stream in (self._stdout, self._stderr):
++            try:
++                stream.flush()
++            except (AttributeError, OSError, ValueError):
++                pass
++
++    def prompt(self, question):
++        """Show ``question``, read one line from STDIN and return it trimmed
++        and lowercased ("" when nothing could be read)."""
++        self._stdout.write(question)
++        self._flush()
++        try:
++            answer = self._input().readline()
++        except (AttributeError, OSError, ValueError):
++            answer = ""
++        return (answer or "").strip().lower()
++
++    def confirm(self, question, assume_yes=False):
++        """Ask a ``[y/n]`` question; anything but ``y`` cancels."""
++        if assume_yes:
++            return True
++        if self.prompt(f"{question} [y/n] ") == "y":
++            return True
++        self.warning(_messages.operation_cancelled())
++        return False
++
++    def read_stdin(self):
++        """All of STDIN without the trailing newline, or ``None`` when STDIN
++        is interactive, unavailable or empty. Read at most once."""
++        if not self._stdin_read:
++            self._stdin_read = True
++            stream = self._input()
++            data = None
++            if stream is not None and not _isatty(stream) and _pipe_has_data(stream):
++                try:
++                    data = stream.read()
++                except (AttributeError, OSError, ValueError):
++                    data = None
++            if isinstance(data, bytes):
++                data = data.decode(errors="replace")
++            data = data.rstrip("\r\n") if data else ""
++            self._stdin_data = data or None
++        return self._stdin_data
+
+### appctl_core/remote.py (modified)
+--- appctl_core/remote.py
++++ appctl_core/remote.py
+@@ -126,7 +126,7 @@
+     tty = not config.get("skip-tty") and _isatty(stdout)
+     command = remote_command(args, bits, env)
+     argv = transport_argv(bits, command, args, tty, config.debug())
+-    out.debug(f"Running remote command: {shlex.join(argv)}")
++    out.debug(f"Running remote command: {shlex.join(argv)}", group="ssh")
+     for stream in (stdout, stderr):
+         if hasattr(stream, "flush"):
+             stream.flush()
+
+### appctl_core/values.py (created)
+--- appctl_core/values.py
++++ appctl_core/values.py
+@@ -0,0 +1,21 @@
++"""Interpretation of argument values.
++
++Secret: how a raw value is decoded according to ``--format`` and how a
++decoding failure is reported without leaking the raw value to the log file.
++"""
++
++import json
++
++from . import messages as _messages
++from .errors import CliError
++
++
++def read_value(raw, fmt=None):
++    """Decode ``raw`` as JSON when ``fmt`` is ``json``; otherwise return it."""
++    if fmt != "json" or not isinstance(raw, str):
++        return raw
++    try:
++        return json.loads(raw)
++    except ValueError:
++        raise CliError(_messages.invalid_json(raw), sensitive=True,
++                       log_message=_messages.invalid_json(_messages.redacted())) from None
+
+### appctl_core/yaml_lite.py (modified)
+--- appctl_core/yaml_lite.py
++++ appctl_core/yaml_lite.py
+@@ -33,6 +33,20 @@
+     if _yaml is not None:
+         return _yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
+     return json.dumps(data, indent=2) + "\n"
++
++
++def dump_records(records):
++    """Serialise a list of flat mappings as a block-style YAML document."""
++    if _yaml is not None:
++        return _yaml.safe_dump(list(records), default_flow_style=False,
++                               sort_keys=False, explicit_start=True,
++                               allow_unicode=True).rstrip("\n")
++    lines = ["---"]
++    for record in records:
++        for index, (key, value) in enumerate(record.items()):
++            lead = "- " if index == 0 else "  "
++            lines.append(f"{lead}{key}: {json.dumps(value)}")
++    return "\n".join(lines) if records else "--- []"
+ 
+ 
+ def scalar_line(key, value):
+
+### tests/test_output.py (created)
+--- tests/test_output.py
++++ tests/test_output.py
+@@ -0,0 +1,148 @@
++import io
++import json
++import os
++import re
++import subprocess
++import sys
++
++import pytest
++
++from appctl_core import catalog
++from appctl_core.app import run
++from appctl_core.command_tree import CommandTree
++from appctl_core.errors import CliError
++from appctl_core.output import color_enabled
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++STAMP = re.compile(r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] ")
++
++
++class Tty(io.StringIO):
++    def isatty(self):
++        return True
++
++
++@pytest.fixture
++def root(tmp_path):
++    return tmp_path / "root"
++
++
++def call(root, *argv, stdin="", stdout=None, tree=None):
++    out, err = stdout or io.StringIO(), io.StringIO()
++    code = run(list(argv), {"APPCTL_ROOT_DIR": str(root)}, out, err,
++               tree=tree, cwd=str(root.parent), stdin=io.StringIO(stdin))
++    return code, out.getvalue(), err.getvalue()
++
++
++def log_text(root):
++    return (root / "logs" / "appctl.log").read_text()
++
++
++# --- formats ------------------------------------------------------------------
++
++def test_formats(root):
++    code, out, _ = call(root, "post", "list", "--format=json")
++    assert code == 0 and out.startswith("[\n    {\n        \"ID\": 1,")
++    assert list(json.loads(out)[0]) == ["ID", "post_title", "post_status", "post_type"]
++    assert call(root, "post", "list", "--format=count")[1] == "2\n"
++    assert call(root, "post", "list", "--format=ids")[1] == "1 2\n"
++    assert call(root, "post", "list", "--format=csv", "--fields=title,ID")[1] == (
++        "post_title,ID\nHello world!,1\nSample Page,2\n")
++    assert call(root, "post", "list", "--format=yaml")[1].startswith("---\n- ID: 1\n")
++
++
++def test_table_columns_follow_fields_and_align(root):
++    out = call(root, "post", "list", "--fields=post_type,ID")[1]
++    lines = out.splitlines()
++    assert lines[0].split() == ["post_type", "ID"]
++    assert {l.index(l.split()[1]) for l in lines} == {len("post_type") + 2}
++
++
++def test_single_item_is_vertical(root):
++    out = call(root, "user", "get", "admin", "--fields=EMAIL,login")[1]
++    assert out.splitlines() == ["Field       Value",
++                                "user_email  admin@example.com",
++                                "user_login  admin"]
++
++
++def test_field_and_invalid_field(root):
++    assert call(root, "user", "list", "--field=login") == (0, "admin\neditor\n", "")
++    assert call(root, "post", "list", "--fields=ID,bogus") == (
++        1, "", "Error: Invalid field: bogus.\n")
++    assert call(root, "post", "list", "--field=nope")[2] == "Error: Invalid field: nope.\n"
++
++
++# --- message categories ----------------------------------------------------------
++
++def test_colors(root):
++    assert color_enabled("auto", Tty()) and not color_enabled("auto", io.StringIO())
++    assert not color_enabled("auto", Tty(), os_name="nt")
++    assert "\x1b[" in call(root, "nosuch", stdout=Tty())[2]
++    assert call(root, "nosuch", "--no-color", stdout=Tty())[2].startswith("Error:")
++    assert call(root, "nosuch", "--color")[2].startswith("\x1b[1;31mError:\x1b[0m")
++
++
++def test_quiet_and_logging(root):
++    assert call(root, "plugin", "activate", "akismet", "--quiet") == (0, "", "")
++    code, out, _ = call(root, "plugin", "activate", "akismet")
++    assert "Plugin 'akismet' activated." in out and "Success:" in out
++    log = log_text(root)
++    assert "Plugin 'akismet' activated." in log and "Success" not in log
++    assert all(STAMP.match(line) for line in log.splitlines())
++    assert log.count("appctl invocation") == 2
++
++
++def test_debug_groups(root):
++    err = call(root, "--debug", "site", "list")[2]
++    assert re.search(r"^Debug \(bootstrap\): .* \(\d+\.\d{3}s\)$", err, re.M)
++    assert "Debug (bootstrap)" in call(root, "--debug=bootstrap", "site", "list")[2]
++    assert call(root, "--debug=other", "site", "list")[2] == ""
++    assert "Debug (bootstrap)" in log_text(root)
++
++
++def test_multi_line_error_box(root):
++    tree = CommandTree()
++    catalog.register_all(tree)
++    tree.register("boom", lambda ctx: (_ for _ in ()).throw(CliError(["a", "bb"], 3)))
++    code, _, err = call(root, "boom", tree=tree)
++    assert code == 3
++    assert err == "+----------+\n| Error: a |\n| bb       |\n+----------+\n"
++
++
++def test_completion_not_logged(root):
++    assert call(root, "cli", "completion", "--line=appctl si")[1] == "site\n"
++    assert not (root / "logs" / "appctl.log").exists()
++
++
++def test_sensitive_info_not_logged(root):
++    code, out, _ = call(root, "user", "reset-password", "admin",
++                        "--password=hunter2", "--show-password")
++    assert "Password: hunter2" in out and "hunter2" not in log_text(root)
++    assert call(root, "user", "reset-password", "admin", "--password=x",
++                "--show-password", "--quiet")[1] == ""
++
++
++# --- input ---------------------------------------------------------------------
++
++def test_confirmation(root):
++    code, out, err = call(root, "site", "delete", "foo", stdin=" Y \n")
++    assert code == 0 and "[y/n]" in out and "Success" in out
++    code, out, err = call(root, "site", "delete", "foo", stdin="yes\n")
++    assert "Success" not in out and err == "Warning: Operation cancelled.\n"
++    assert "Success" in call(root, "site", "delete", "foo", "--yes")[1]
++
++
++def test_stdin_fallback(root):
++    assert call(root, "config", "get", stdin="DB_NAME\n")[1] == "app\n"
++    assert call(root, "option", "add", "k", "--format=json", stdin='{"a": 1}')[0] == 0
++    assert call(root, "option", "add", "k", "--format=json", stdin="{oops") == (
++        1, "", "Error: Invalid JSON: {oops\n")
++    assert "{oops" not in log_text(root)
++
++
++def test_subprocess_stdin_json_error(tmp_path):
++    proc = subprocess.run(
++        [sys.executable, os.path.join(ROOT, "appctl.py"), "option", "update", "k",
++         "--format=json"], input="not json", capture_output=True, text=True,
++        env=dict(os.environ, APPCTL_ROOT_DIR=str(tmp_path)))
++    assert proc.returncode == 1 and proc.stderr == "Error: Invalid JSON: not json\n"
+

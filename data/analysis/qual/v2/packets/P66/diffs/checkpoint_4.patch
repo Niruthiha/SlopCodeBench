@@ -1,0 +1,1657 @@
+### sith.py (modified)
+--- sith.py
++++ sith.py
+@@ -5,6 +5,10 @@
+     python sith.py complete <file> <line> <col> [--fuzzy] [--project <dir>]
+     python sith.py infer <file> <line> <col> [--project <dir>]
+     python sith.py goto <file> <line> <col> [--follow-imports] [--project <dir>]
++    python sith.py signatures <file> <line> <col> [--project <dir>]
++    python sith.py references <file> <line> <col> [--scope file|project] [--project <dir>]
++    python sith.py search <query> [--project <dir>]
++    python sith.py names <file> [--all-scopes] [--project <dir>]
+ """
+ import ast
+ import builtins
+@@ -383,7 +387,10 @@
+         self.tree = tree
+         self.text = text
+         self.lines = text.split('\n')
+-        self.is_package = os.path.basename(path) == '__init__.py'
++        self.is_package = os.path.basename(path) in ('__init__.py', '__init__.pyi')
++        self.is_stub = path.endswith('.pyi')
++        self.stub_src = None
++        self.stub = False
+         self.cursor_scope = None
+         self.node_scopes = {}
+         self.scope = Scope('module', tree, None, self)
+@@ -1391,6 +1398,12 @@
+             f = os.path.join(d, p + '.py')
+             if os.path.isfile(f):
+                 return ('file', f)
++            f = os.path.join(d, p, '__init__.pyi')
++            if os.path.isfile(f):
++                return ('file', f)
++            f = os.path.join(d, p + '.pyi')
++            if os.path.isfile(f):
++                return ('file', f)
+             nd = os.path.join(d, p)
+             if os.path.isdir(nd):
+                 return ('dir', nd)
+@@ -1400,7 +1413,8 @@
+         kind, p = found
+         if kind == 'file':
+             info = self.load_static(p, name)
+-            pkgdir = os.path.dirname(p) if os.path.basename(p) == '__init__.py' else None
++            pkgdir = os.path.dirname(p) if os.path.basename(p) in ('__init__.py', '__init__.pyi') \
++                else None
+             return StMod(info, pkgdir, name)
+         return StMod(None, p, name)
+ 
+@@ -1443,6 +1457,11 @@
+         for r in roots:
+             found = self.find_local(dotted, r)
+             if found:
++                return self.static_module(found, dotted)
++        sd = self.stubs_dir()
++        if sd:
++            found = self.find_local(dotted, sd)
++            if found and found[0] == 'file':
+                 return self.static_module(found, dotted)
+         mod = self.rt_import(dotted)
+         if mod is not None:
+@@ -1517,6 +1536,7 @@
+             names = self.module_all(mv.info)
+             if names is None:
+                 out = self.module_entries(mv.info, seen)
++                self._merge_stub(out, self.stub_entries(mv))
+             else:
+                 ents = self.module_entries(mv.info, seen, private=True)
+                 for n in names:
+@@ -1587,6 +1607,214 @@
+             return self.scope_end_entries(info.scope, name)
+         r = self.reach(info.scope, name, (lim, 0))
+         return list(r) if r else []
++
++    # ----- stubs -----
++
++    def stubs_dir(self):
++        if self.root:
++            d = os.path.join(self.root, 'stubs')
++            if os.path.isdir(d):
++                return d
++        return None
++
++    def stub_for(self, info):
++        """The ``.pyi`` stub module providing type information for ``info``."""
++        if info is None or info.is_stub:
++            return None
++        if info.stub is not False:
++            return info.stub
++        info.stub = None
++        path = info.path
++        cands = [os.path.splitext(path)[0] + '.pyi']
++        sd = self.stubs_dir()
++        if sd and _inside(path, self.root):
++            rp = os.path.relpath(os.path.realpath(path), os.path.realpath(self.root))
++            parts = os.path.splitext(rp)[0].split(os.sep)
++            if parts[-1] == '__init__':
++                parts.pop()
++            if parts and parts[0] != 'stubs':
++                base = os.path.join(sd, *parts)
++                cands += [base + '.pyi', os.path.join(base, '__init__.pyi')]
++        for c in cands:
++            if os.path.isfile(c):
++                st = self.load_static(c, info.name)
++                if st is not None and st is not info:
++                    st.stub_src = info
++                    info.stub = st
++                    break
++        return info.stub
++
++    @staticmethod
++    def scope_path(sc):
++        """Names of the classes/functions leading from the module to ``sc``."""
++        path = []
++        s = sc
++        while s is not None and s.kind != 'module':
++            if s.kind not in ('class', 'function'):
++                return None
++            path.append(s.node.name)
++            s = s.parent
++        if s is None:
++            return None
++        return s.module, path[::-1]
++
++    @staticmethod
++    def scope_at(info, path):
++        cur = info.scope
++        for name in path:
++            nxt = None
++            for b in cur.bindings.get(name, ()):
++                if b.kind in ('class', 'def'):
++                    nxt = b.extra
++            if nxt is None:
++                return None
++            cur = nxt
++        return cur
++
++    def stub_scope(self, sc):
++        """The scope of the stub corresponding to source scope ``sc``."""
++        r = self.scope_path(sc)
++        if r is None:
++            return None
++        stub = self.stub_for(r[0])
++        if stub is None:
++            return None
++        return self.scope_at(stub, r[1])
++
++    def from_stub(self, v):
++        """Map a class (instance) defined in a stub back to its source class."""
++        if isinstance(v, StInst):
++            c = self.from_stub(v.cls)
++            return v if c is v.cls else StInst(c, v.args)
++        if isinstance(v, StClass):
++            info = v.scope.module
++            if info.is_stub and info.stub_src is not None:
++                r = self.scope_path(v.scope)
++                if r is not None:
++                    sc = self.scope_at(info.stub_src, r[1])
++                    if sc is not None and sc.kind == 'class':
++                        return class_value(sc)
++        return v
++
++    def stub_ann(self, node, sc, depth):
++        return uniq(self.from_stub(v) for v in self.infer_annotation(node, sc, depth))
++
++    def stub_defs(self, fnode, fs):
++        """Stub variants ([(node, scope)]) of the source function ``fnode``."""
++        if fs.module.is_stub or fs.parent is None:
++            return []
++        ssc = self.stub_scope(fs.parent)
++        if ssc is None:
++            return []
++        defs = [(b.node, b.extra) for b in ssc.bindings.get(fnode.name, ()) if b.kind == 'def']
++        if not defs:
++            return []
++        ovs = [d for d in defs if 'overload' in _decorator_names(d[0])]
++        return ovs or [defs[-1]]
++
++    @staticmethod
++    def overloads(psc, name):
++        if psc is None:
++            return []
++        return [(b.node, b.extra) for b in psc.bindings.get(name, ())
++                if b.kind == 'def' and 'overload' in _decorator_names(b.node)]
++
++    def sig_variants(self, f):
++        """The declarations ([(node, scope)]) describing the signature of ``f``."""
++        fnode, fs = f.node, f.scope
++        if isinstance(fnode, ast.Lambda):
++            return [(fnode, fs)]
++        sd = self.stub_defs(fnode, fs)
++        if sd:
++            return sd
++        return self.overloads(fs.parent, fnode.name) or [(fnode, fs)]
++
++    def stub_param_values(self, b, depth):
++        a = b.node
++        fnode = b.extra[0]
++        fs = b.scope
++        if not isinstance(fnode, (ast.FunctionDef, ast.AsyncFunctionDef)):
++            return []
++        out = []
++        for node, vsc in self.stub_defs(fnode, fs):
++            for p in _all_args(node.args):
++                if p.arg != a.arg or p.annotation is None:
++                    continue
++                if p is node.args.vararg:
++                    out.append(RtV(()))
++                elif p is node.args.kwarg:
++                    out.append(RtV({}))
++                else:
++                    out += self.stub_ann(p.annotation, vsc.parent, depth + 1)
++        return uniq(out)
++
++    def stub_module_attr(self, info, name, depth):
++        """Values of module attribute ``name`` according to the stub, or None."""
++        stub = self.stub_for(info)
++        if stub is None:
++            return None
++        bl = stub.scope.bindings.get(name)
++        if not bl:
++            return None
++        b = bl[-1]
++        if b.kind == 'ann':
++            return self.stub_ann(b.extra[0], stub.scope, depth + 1) or None
++        if self.module_attr_entries(info, name):
++            return None
++        vals = self.entries_values(self.scope_end_entries(stub.scope, name), depth + 1)
++        return uniq(self.from_stub(v) for v in vals) or None
++
++    def stub_class_attr(self, classes, name, owner, depth):
++        """Values of class attribute ``name`` according to stubs, or None."""
++        for c in classes:
++            ssc = self.stub_scope(c.scope)
++            if ssc is None:
++                continue
++            bl = ssc.bindings.get(name)
++            if not bl:
++                continue
++            b = bl[-1]
++            in_src = name in c.scope.bindings or name in self.self_attr_map(c)
++            if b.kind == 'ann':
++                return self.stub_ann(b.extra[0], ssc, depth + 1) or None
++            if b.kind == 'def':
++                decos = _decorator_names(b.node)
++                if decos & {'property', 'cached_property'} and isinstance(owner, (StInst, SuperInst)):
++                    if b.node.returns is not None:
++                        vals = self.stub_ann(b.node.returns, ssc, depth + 1)
++                        if vals:
++                            return vals
++                    return None if in_src else []
++                if in_src:
++                    return None
++                return uniq(self.bind_member(StFunc(b.node, b.extra), owner, c, depth))
++            if in_src:
++                return None
++            vals = self.entries_values(self.scope_end_entries(ssc, name), depth + 1)
++            return uniq(self.from_stub(v) for v in vals) or None
++        return None
++
++    def stub_entries(self, v, classes=None):
++        """Completion entries contributed by stubs for value ``v``."""
++        out = {}
++        scopes = []
++        if isinstance(v, StMod) and v.info is not None:
++            stub = self.stub_for(v.info)
++            if stub is not None:
++                scopes.append(stub.scope)
++        for c in reversed(classes or []):
++            ssc = self.stub_scope(c.scope)
++            if ssc is not None:
++                scopes.append(ssc)
++        for ssc in scopes:
++            for n, lst in ssc.bindings.items():
++                b = lst[-1]
++                if MARK in n or b.kind in ('import', 'from'):
++                    continue
++                if ssc.kind == 'module' and n.startswith('_'):
++                    continue
++                out[n] = (b.kind, ('v', lambda n=n: (self.get_attr(v, n) or [None])[0]))
++        return out
+ 
+     def _rt_attr_entry(self, o, n):
+         def thunk():
+@@ -2151,6 +2379,9 @@
+             vals = self.arg_values(fr[a.arg], depth)
+             if vals:
+                 return vals
++        vals = self.stub_param_values(b, depth)
++        if vals:
++            return vals
+         if a.annotation is not None:
+             vals = self.infer_annotation(a.annotation, outer, depth + 1)
+             if a is fnode.args.vararg:
+@@ -2322,6 +2553,96 @@
+             return []
+         return []
+ 
++    def pick_overload(self, variants, f, args, depth):
++        """The first overload accepting the call ``args`` (all if undecidable)."""
++        if args is None:
++            return variants
++        for node, vsc in variants:
++            try:
++                ok = self._overload_matches(node, vsc, f, args, depth)
++            except RecursionError:
++                ok = False
++            if ok:
++                return [(node, vsc)]
++        return variants
++
++    def _overload_matches(self, node, vsc, f, args, depth):
++        cnode, csc, cframes = args
++        a = node.args
++        params = list(getattr(a, 'posonlyargs', [])) + list(a.args)
++        ndef = len(a.defaults)
++        required = params[:len(params) - ndef]
++        if f.skip and params:
++            required = [p for p in required if p is not params[0]]
++            params = params[1:]
++        posonly = set(id(p) for p in getattr(a, 'posonlyargs', []))
++        bound = {}
++        unknown = any(isinstance(x, ast.Starred) for x in cnode.args) or \
++            any(kw.arg is None for kw in cnode.keywords)
++        pos = [x for x in cnode.args if not isinstance(x, ast.Starred)]
++        if len(pos) > len(params) and a.vararg is None:
++            return False
++        for p, x in zip(params, pos):
++            bound[p.arg] = (p, x)
++        names = {p.arg: p for p in params + list(a.kwonlyargs) if id(p) not in posonly}
++        for kw in cnode.keywords:
++            if kw.arg is None:
++                continue
++            if kw.arg in names:
++                if kw.arg in bound:
++                    return False
++                bound[kw.arg] = (names[kw.arg], kw.value)
++            elif a.kwarg is None:
++                return False
++        if not unknown:
++            for p in required:
++                if p.arg not in bound:
++                    return False
++            for p, d in zip(a.kwonlyargs, a.kw_defaults):
++                if d is None and p.arg not in bound:
++                    return False
++        for p, x in bound.values():
++            if p.annotation is None:
++                continue
++            anns = self.infer_annotation(p.annotation, vsc.parent, depth + 1)
++            saved = self.frames
++            self.frames = cframes
++            try:
++                vals = self.infer(x, csc, None, depth + 1)
++            finally:
++                self.frames = saved
++            if anns and vals and not any(self._compatible(v, anns) for v in vals):
++                return False
++        return True
++
++    def _val_cls(self, v):
++        if isinstance(v, StInst):
++            return v.cls
++        if isinstance(v, RtInst):
++            return v.cls
++        if isinstance(v, RtV) and kind_of(v) == 'instance':
++            return type(v.obj)
++        return None
++
++    def _compatible(self, v, anns):
++        vc = self._val_cls(v)
++        if vc is None:
++            return True
++        for a in anns:
++            ac = self._val_cls(a)
++            if ac is None or ac is object:
++                return True
++            if isinstance(vc, StClass) and isinstance(ac, StClass):
++                if ac in self.mro(vc):
++                    return True
++            elif inspect.isclass(vc) and inspect.isclass(ac):
++                try:
++                    if issubclass(vc, ac):
++                        return True
++                except Exception:
++                    pass
++        return False
++
+     def func_returns(self, f, args, depth):
+         fnode, fs = f.node, f.scope
+         key = id(fnode)
+@@ -2338,10 +2659,22 @@
+             finally:
+                 self.calling.discard(key)
+                 self.frames = saved
++        variants = self.sig_variants(f)
++        if len(variants) > 1 or variants[0][0] is not fnode:
++            if len(variants) > 1:
++                variants = self.pick_overload(variants, f, args, depth)
++            vals = []
++            for node, vsc in variants:
++                if node.returns is not None:
++                    vals += self.stub_ann(node.returns, vsc.parent, depth + 1)
++            if vals:
++                return uniq(vals)
+         if fnode.returns is not None:
+             vals = self.infer_annotation(fnode.returns, fs.parent, depth + 1)
+             if vals:
+                 return vals
++        if fs.module.is_stub:
++            return []
+         if _has_yield(fnode):
+             return [RtV(_sample_generator())]
+         mapping = self.bind_args(fnode, args, f.bound, f.skip)
+@@ -2637,6 +2970,9 @@
+                 return []
+         if isinstance(v, StMod):
+             if v.info is not None:
++                sv = self.stub_module_attr(v.info, name, depth)
++                if sv is not None:
++                    return sv
+                 ents = self.module_attr_entries(v.info, name)
+                 if ents:
+                     vals = self.entries_values(ents, depth + 1)
+@@ -2654,6 +2990,9 @@
+                 inst = StInst(v.cls)
+             else:
+                 inst = v
++            sv = self.stub_class_attr(classes, name, v, depth)
++            if sv is not None:
++                return sv
+             for c in classes:
+                 bl = self.self_attr_map(c).get(name)
+                 if bl:
+@@ -2672,7 +3011,11 @@
+                     return uniq(out)
+             return []
+         if isinstance(v, StClass):
+-            for c in self.mro(v):
++            classes = self.mro(v)
++            sv = self.stub_class_attr(classes, name, v, depth)
++            if sv is not None:
++                return sv
++            for c in classes:
+                 if name in c.scope.bindings:
+                     out = []
+                     for val in self.entries_values(self.scope_end_entries(c.scope, name), depth + 1):
+@@ -2720,6 +3063,10 @@
+                 bl = self.self_aug_map(c).get(name)
+                 if bl:
+                     return list(bl)
++        for c in classes:
++            ssc = self.stub_scope(c.scope)
++            if ssc is not None and name in ssc.bindings:
++                return list(ssc.bindings[name])
+         return []
+ 
+     def mro(self, cls, visiting=None):
+@@ -2835,6 +3182,12 @@
+                 if not isinstance(e, ast.Starred):
+                     self._collect_self(e, selfname, value, path + (i,), fs, res, stmt, info)
+ 
++    @staticmethod
++    def _merge_stub(out, stub):
++        for n, (kind, ent) in stub.items():
++            if kind == 'ann' or n not in out:
++                out[n] = ent
++
+     def attributes(self, v):
+         """Return dict name -> entry for attribute completion on value v."""
+         out = {}
+@@ -2879,9 +3232,13 @@
+                     if sub.startswith('_') or not sub.isidentifier() or sub in out:
+                         continue
+                     out[sub] = ('v', lambda s=sub: (self.get_attr(v, s) or [None])[0])
++            self._merge_stub(out, self.stub_entries(v))
+             return out
+         if isinstance(v, StClass):
+-            return self.class_attrs(self.mro(v))
++            classes = self.mro(v)
++            out = self.class_attrs(classes)
++            self._merge_stub(out, self.stub_entries(v, classes))
++            return out
+         if isinstance(v, (StInst, SuperInst)):
+             classes = self.mro(v.cls)
+             if isinstance(v, SuperInst):
+@@ -2892,6 +3249,7 @@
+                     out.setdefault(n, ('v', lambda n=n: (self.get_attr(v, n) or [None])[0]))
+                 for n in self.self_attr_map(c):
+                     out[n] = ('v', lambda n=n: (self.get_attr(v, n) or [None])[0])
++            self._merge_stub(out, self.stub_entries(v, classes))
+             return out
+         if isinstance(v, StFunc):
+             for n in dir(_sample_function):
+@@ -3453,12 +3811,14 @@
+         rp = self.rel(path)
+         if os.path.isabs(rp) or rp.startswith('/'):
+             base = os.path.basename(path)
+-            if base == '__init__.py':
++            if base in ('__init__.py', '__init__.pyi'):
+                 return os.path.basename(os.path.dirname(path))
+-            return base[:-3] if base.endswith('.py') else base
+-        if rp.endswith('.py'):
+-            rp = rp[:-3]
++            return os.path.splitext(base)[0] if base.endswith(('.py', '.pyi')) else base
++        if rp.endswith(('.py', '.pyi')):
++            rp = os.path.splitext(rp)[0]
+         parts = rp.split('/')
++        if info.is_stub and len(parts) > 1 and parts[0] == 'stubs':
++            parts = parts[1:]
+         if parts[-1] == '__init__' and len(parts) > 1:
+             parts.pop()
+         return '.'.join(parts)
+@@ -3740,6 +4100,10 @@
+         try:
+             out = []
+             ents = e.module_attr_entries(mv.info, attr) if mv.info is not None else []
++            if not ents and mv.info is not None:
++                stub = e.stub_for(mv.info)
++                if stub is not None:
++                    ents = e.module_attr_entries(stub, attr)
+             for ent in ents:
+                 if ent[0] == 'b':
+                     if ent[1].kind in ('import', 'from'):
+@@ -3918,100 +4282,125 @@
+ _FROM_RE = re.compile(r'from\s+')
+ 
+ 
++class _LocIndex:
++    """Positions of the name-like tokens of a module, for ``locate``."""
++
++    def __init__(self, info):
++        lines = info.lines
++        self.binds = {}
++        for sc in _all_scopes(info.scope):
++            for name, bl in sc.bindings.items():
++                for b in bl:
++                    self.binds.setdefault((b.pos, name), b)
++        self.names = {}
++        self.others = {}
++        self.globals = []
++        nodes = list(ast.walk(info.tree))
++        parents = {}
++        for node in nodes:
++            for ch in ast.iter_child_nodes(node):
++                parents[id(ch)] = node
++        others = self.others
++        for order, node in enumerate(nodes):
++            t = type(node)
++            if t is ast.Name:
++                self.names.setdefault((node.lineno, node.col_offset, node.id), node)
++            elif t is ast.Attribute:
++                others.setdefault(('a', node.end_lineno, node.end_col_offset, node.attr),
++                                  (order, ('attr', node)))
++            elif t is ast.keyword:
++                if node.arg is not None and getattr(node, 'lineno', None) is not None:
++                    others.setdefault(('k', node.lineno, node.col_offset, node.arg),
++                                      (order, ('kwarg', node, parents.get(id(node)))))
++            elif t is ast.Import:
++                for a in node.names:
++                    parts, asp = _alias_parts(lines, a)
++                    for k, (p, pp) in enumerate(parts):
++                        others.setdefault(('p', pp[0], pp[1], p),
++                                          (order, ('module', '.'.join(x for x, _ in parts[:k + 1]), 0)))
++            elif t is ast.ImportFrom:
++                for p, pp, k, mparts in _from_module_parts(lines, node):
++                    others.setdefault(('p', pp[0], pp[1], p),
++                                      (order, ('module', '.'.join(mparts[:k + 1]), node.level or 0)))
++                for a in node.names:
++                    if a.asname:
++                        parts, asp = _alias_parts(lines, a)
++                        if parts:
++                            pp = parts[0][1]
++                            others.setdefault(('p', pp[0], pp[1], a.name),
++                                              (order, ('fromattr', node.module or '', node.level or 0,
++                                                       a.name)))
++            elif t in (ast.Global, ast.Nonlocal):
++                self.globals.append((node.lineno, node.end_lineno or node.lineno, set(node.names),
++                                     order))
++
++
++def _from_module_parts(lines, node):
++    """[(part, pos, index, parts)] for the module name of an ImportFrom."""
++    out = []
++    if not node.module:
++        return out
++    st = _line_text(lines, node.lineno)
++    c = _char_col(lines, node.lineno, node.col_offset)
++    m = _FROM_RE.match(st, c)
++    if not m:
++        return out
++    i = m.end()
++    while i < len(st) and st[i] in '. \t':
++        i += 1
++    mparts = node.module.split('.')
++    for k, p in enumerate(mparts):
++        j = st.find(p, i)
++        if j < 0:
++            break
++        out.append((p, (node.lineno, j), k, mparts))
++        i = j + len(p)
++    return out
++
++
++def _loc_index(info):
++    idx = getattr(info, '_loc_idx', None)
++    if idx is None:
++        idx = info._loc_idx = _LocIndex(info)
++    return idx
++
++
+ def locate(info, line, s, e, ident):
+     """Find what the identifier spanning [s, e) on `line` refers to."""
+-    lines = info.lines
+-    for sc in _all_scopes(info.scope):
+-        for b in sc.bindings.get(ident, ()):
+-            if b.pos == (line, s):
+-                return ('binding', b)
+-    cl = _line_text(lines, line)
++    idx = _loc_index(info)
++    b = idx.binds.get(((line, s), ident))
++    if b is not None:
++        return ('binding', b)
++    cl = _line_text(info.lines, line)
+     bs = len(cl[:s].encode('utf-8'))
+     be = len(cl[:e].encode('utf-8'))
+-    parents = {}
+-    for node in ast.walk(info.tree):
+-        for ch in ast.iter_child_nodes(node):
+-            parents[id(ch)] = node
+-    found = None
+-    for node in ast.walk(info.tree):
+-        t = type(node)
+-        if t is ast.Name:
+-            if node.id == ident and node.lineno == line and node.col_offset == bs:
+-                return ('name', node)
+-        elif t is ast.Attribute:
+-            if node.attr == ident and node.end_lineno == line and node.end_col_offset == be:
+-                found = found or ('attr', node)
+-        elif t is ast.keyword:
+-            if node.arg == ident and getattr(node, 'lineno', None) == line and \
+-                    node.col_offset == bs:
+-                found = found or ('kwarg', node, parents.get(id(node)))
+-        elif t is ast.Import:
+-            for a in node.names:
+-                parts, asp = _alias_parts(lines, a)
+-                for k, (p, pp) in enumerate(parts):
+-                    if p == ident and pp == (line, s):
+-                        found = found or ('module', '.'.join(x for x, _ in parts[:k + 1]), 0)
+-        elif t is ast.ImportFrom:
+-            if node.module and node.lineno <= line:
+-                st = _line_text(lines, node.lineno)
+-                c = _char_col(lines, node.lineno, node.col_offset)
+-                m = _FROM_RE.match(st, c)
+-                if m:
+-                    i = m.end()
+-                    while i < len(st) and st[i] in '. \t':
+-                        i += 1
+-                    mparts = node.module.split('.')
+-                    for k, p in enumerate(mparts):
+-                        j = st.find(p, i)
+-                        if j < 0:
+-                            break
+-                        if p == ident and (node.lineno, j) == (line, s):
+-                            found = found or ('module', '.'.join(mparts[:k + 1]), node.level or 0)
+-                        i = j + len(p)
+-            for a in node.names:
+-                if a.asname and a.name == ident:
+-                    parts, asp = _alias_parts(lines, a)
+-                    if parts and parts[0][1] == (line, s):
+-                        found = found or ('fromattr', node.module or '', node.level or 0, a.name)
+-        elif t in (ast.Global, ast.Nonlocal):
+-            if ident in node.names and node.lineno <= line <= (node.end_lineno or node.lineno):
+-                found = found or ('global', ident)
+-    return found
++    node = idx.names.get((line, bs, ident))
++    if node is not None:
++        return ('name', node)
++    cands = [idx.others.get(('a', line, be, ident)), idx.others.get(('k', line, bs, ident)),
++             idx.others.get(('p', line, s, ident))]
++    for ln, end, names, order in idx.globals:
++        if ident in names and ln <= line <= end:
++            cands.append((order, ('global', ident)))
++    cands = [c for c in cands if c is not None]
++    if not cands:
++        return None
++    return min(cands, key=lambda c: c[0])[1]
+ 
+ 
+ def navigate(path, line, col, mode, project=None, follow_imports=False):
+     text = read_source(path)
+     lines = text.split('\n')
+-    if line < 1 or line > len(lines):
+-        raise SithError('line out of range')
++    _check_pos(lines, line, col)
+     cl = lines[line - 1]
+-    if col < 0 or col > len(cl):
+-        raise SithError('column out of range')
+-    if col < len(cl) and is_ident_char(cl[col]):
+-        s = col
+-    elif col > 0 and is_ident_char(cl[col - 1]):
+-        s = col - 1
+-    else:
+-        raise NotAName('cursor is not on a name')
+-    while s > 0 and is_ident_char(cl[s - 1]):
+-        s -= 1
+-    e = s
+-    while e < len(cl) and is_ident_char(cl[e]):
+-        e += 1
++    s, e = _cursor_ident(cl, col)
+     ident = cl[s:e]
+-    if not ident or ident[0].isdigit() or keyword.iskeyword(ident) or \
+-            (s > 0 and cl[s - 1].isdigit() and not is_ident_char(cl[s - 1])):
+-        raise NotAName('cursor is not on a name')
+     offset = sum(len(lines[k]) + 1 for k in range(line - 1)) + s
+     in_str = in_comment_or_string(text, offset)
+ 
+     root = project_root(path, project)
+     engine = Engine(root, path)
+-    tree, fixed = parse_source(text, with_text=True)
+-    base = os.path.basename(path)
+-    info = ModuleInfo(os.path.abspath(path), tree, base[:-3] if base.endswith('.py') else base,
+-                      fixed)
+-    engine.static_cache[os.path.realpath(path)] = info
++    info = _load_target(engine, path, text)
+     tgt = locate(info, line, s, e, ident)
+     if in_str and (tgt is None or tgt[0] not in ('name', 'attr')):
+         raise NotAName('cursor is not on a name')
+@@ -4034,6 +4423,848 @@
+     return out
+ 
+ 
++def _cursor_ident(cl, col):
++    """Return (start, end) of the identifier under the cursor or raise NotAName."""
++    if col < len(cl) and is_ident_char(cl[col]):
++        s = col
++    elif col > 0 and is_ident_char(cl[col - 1]):
++        s = col - 1
++    else:
++        raise NotAName('cursor is not on a name')
++    while s > 0 and is_ident_char(cl[s - 1]):
++        s -= 1
++    e = s
++    while e < len(cl) and is_ident_char(cl[e]):
++        e += 1
++    ident = cl[s:e]
++    if not ident or ident[0].isdigit() or keyword.iskeyword(ident) or \
++            (s > 0 and cl[s - 1].isdigit() and not is_ident_char(cl[s - 1])):
++        raise NotAName('cursor is not on a name')
++    return s, e
++
++
++def _check_pos(lines, line, col):
++    if line < 1 or line > len(lines):
++        raise SithError('line out of range')
++    if col < 0 or col > len(lines[line - 1]):
++        raise SithError('column out of range')
++
++
++def _load_target(engine, path, text):
++    tree, fixed = parse_source(text, with_text=True)
++    base = os.path.basename(path)
++    info = ModuleInfo(os.path.abspath(path), tree, base[:-3] if base.endswith('.py') else base,
++                      fixed)
++    engine.static_cache[os.path.realpath(path)] = info
++    return info
++
++
++def _skip_dir(parent, name):
++    if name.startswith('.') or name in ('__pycache__', 'node_modules', 'site-packages'):
++        return True
++    return os.path.isfile(os.path.join(parent, name, 'pyvenv.cfg'))
++
++
++def project_files(root):
++    """All ``.py`` files of the project below ``root``, sorted."""
++    out = []
++    for d, dirs, files in os.walk(root):
++        dirs[:] = sorted(x for x in dirs if not _skip_dir(d, x))
++        for f in sorted(files):
++            full = os.path.join(d, f)
++            if f.endswith('.py') and os.path.isfile(full):
++                out.append(full)
++    return out
++
++
++def _module_name(root, path):
++    rp = os.path.relpath(os.path.abspath(path), root)
++    if rp.startswith('..'):
++        return os.path.splitext(os.path.basename(path))[0]
++    parts = os.path.splitext(rp)[0].split(os.sep)
++    if parts[-1] == '__init__' and len(parts) > 1:
++        parts.pop()
++    return '.'.join(parts)
++
++
++# ---------------------------------------------------------------------------
++# Signatures
++# ---------------------------------------------------------------------------
++
++_DEF_LINE_RE = re.compile(r'\s*(?:async\s+def|def|class)\s')
++
++
++def _skip_string(text, i, n):
++    """``text[i]`` starts a string; return the index after it (or ``n``)."""
++    c = text[i]
++    q = c * 3 if text.startswith(c * 3, i) else c
++    j = i + len(q)
++    while j < n:
++        ch = text[j]
++        if ch == '\\':
++            j += 2
++            continue
++        if len(q) == 1 and ch == '\n':
++            return j
++        if text.startswith(q, j):
++            return j + len(q)
++        j += 1
++    return n + 1
++
++
++def _open_brackets(text, end):
++    """Unclosed brackets [(index, char)] before ``end``, and whether ``end``
++    lies inside a comment."""
++    stack = []
++    i = 0
++    line_start = True
++    while i < end:
++        c = text[i]
++        if line_start:
++            line_start = False
++            if stack and _DEF_LINE_RE.match(text, i):
++                stack = []
++        if c == '\n':
++            line_start = True
++        elif c == '#':
++            j = text.find('\n', i)
++            if j < 0 or j >= end:
++                return stack, True
++            i = j
++            continue
++        elif c in '"\'':
++            i = _skip_string(text, i, end)
++            continue
++        elif c in '([{':
++            stack.append((i, c))
++        elif c in ')]}':
++            want = {')': '(', ']': '[', '}': '{'}[c]
++            for k in range(len(stack) - 1, -1, -1):
++                if stack[k][1] == want:
++                    del stack[k:]
++                    break
++        i += 1
++    return stack, False
++
++
++def _paren_kind(text, pos):
++    """Classify the '(' at ``pos``: 'call', 'def' (parameter list) or 'other'."""
++    i = pos
++    while i > 0 and text[i - 1] in ' \t\n\\':
++        i -= 1
++    if i == 0:
++        return 'other'
++    c = text[i - 1]
++    if c in ')]':
++        return 'call'
++    if c in '"\'':
++        return 'call'
++    if not is_ident_char(c):
++        return 'other'
++    j = i
++    while j > 0 and is_ident_char(text[j - 1]):
++        j -= 1
++    word = text[j:i]
++    if word[0].isdigit():
++        return 'other'
++    if keyword.iskeyword(word) and word not in ('None', 'True', 'False'):
++        return 'other'
++    k = j
++    while k > 0 and text[k - 1] in ' \t':
++        k -= 1
++    m = k
++    while m > 0 and is_ident_char(text[m - 1]):
++        m -= 1
++    if text[m:k] in ('def', 'class'):
++        return 'def'
++    return 'call'
++
++
++def _call_args(text, start, cursor):
++    """Split the arguments of a call opened at ``start - 1``.
++
++    Returns (previous_args, current_arg) as source strings.
++    """
++    depth = 0
++    seg = start
++    prev = []
++    end = len(text)
++    i = start
++    n = len(text)
++    while i < n:
++        c = text[i]
++        if c == '#':
++            j = text.find('\n', i)
++            if j < 0:
++                break
++            i = j
++            continue
++        if c in '"\'':
++            i = _skip_string(text, i, n)
++            continue
++        if c == '\n' and i >= cursor:
++            end = i
++            break
++        if c in '([{':
++            depth += 1
++        elif c in ')]}':
++            if depth == 0:
++                end = i
++                break
++            depth -= 1
++        elif c == ',' and depth == 0:
++            if i < cursor:
++                prev.append(text[seg:i])
++                seg = i + 1
++            else:
++                end = i
++                break
++        i += 1
++    if end < cursor:
++        end = cursor
++    return prev, text[seg:end]
++
++
++_KWARG_RE = re.compile(r'\s*((?!\d)\w+)\s*=(?!=)')
++
++
++def _arg_kind(seg):
++    s = re.sub(r'#[^\n]*', '', seg).strip()
++    if s.startswith('**'):
++        return ('dstar', None)
++    if s.startswith('*'):
++        return ('star', None)
++    m = _KWARG_RE.match(s)
++    if m:
++        return ('kw', m.group(1))
++    return ('pos', None)
++
++
++def _param_index(params, prev, cur):
++    """Index of the parameter bound to the current argument (or None)."""
++    positional = [i for i, p in enumerate(params) if p[1] in ('posonly', 'pos')]
++    vararg = next((i for i, p in enumerate(params) if p[1] == 'vararg'), None)
++    kwarg = next((i for i, p in enumerate(params) if p[1] == 'kwarg'), None)
++    kind, name = cur
++    if kind == 'kw':
++        for i, p in enumerate(params):
++            if p[0] == name and p[1] in ('pos', 'kwonly'):
++                return i
++        return kwarg
++    if kind == 'dstar':
++        return kwarg
++    kinds = [k for k, _ in prev]
++    if 'kw' in kinds or 'dstar' in kinds:
++        return None
++    if 'star' in kinds:
++        return vararg
++    n = len(prev)
++    if n < len(positional):
++        return positional[n]
++    return vararg
++
++
++class SigBuilder:
++    def __init__(self, engine, nav):
++        self.e = engine
++        self.nav = nav
++
++    @staticmethod
++    def src(info, node):
++        try:
++            s = ast.get_source_segment(info.text, node)
++        except Exception:
++            s = None
++        if not s:
++            s = _unparse(node)
++        return _ws(s)
++
++    def param_text(self, info, a, d):
++        s = a.arg
++        if a.annotation is not None:
++            s += ': ' + self.src(info, a.annotation)
++        if d is not None:
++            s += '=' + self.src(info, d)
++        return s
++
++    def node_params(self, node, info, skip):
++        """[(name, kind, text)] for a function node."""
++        a = node.args
++        posonly = list(getattr(a, 'posonlyargs', []))
++        positional = posonly + list(a.args)
++        defaults = [None] * (len(positional) - len(a.defaults)) + list(a.defaults)
++        out = []
++        for i, p in enumerate(positional):
++            out.append((p.arg, 'posonly' if i < len(posonly) else 'pos',
++                        self.param_text(info, p, defaults[i])))
++        if skip and out:
++            out = out[1:]
++        if a.vararg is not None:
++            out.append((a.vararg.arg, 'vararg', '*' + self.param_text(info, a.vararg, None)))
++        for p, d in zip(a.kwonlyargs, a.kw_defaults):
++            out.append((p.arg, 'kwonly', self.param_text(info, p, d)))
++        if a.kwarg is not None:
++            out.append((a.kwarg.arg, 'kwarg', '**' + self.param_text(info, a.kwarg, None)))
++        return out
++
++    def sig(self, name, params, ret, doc, mp, line):
++        desc = 'def %s(%s)' % (name, ', '.join(p[2] for p in params))
++        if ret:
++            desc += ' -> ' + ret
++        return {'name': name, 'params': params, 'description': desc, 'docstring': doc or '',
++                '_key': (mp, line)}
++
++    def func_sigs(self, f, name=None, doc=None, with_ret=True):
++        out = []
++        node0 = f.node
++        src_doc = _doc(node0) if not isinstance(node0, ast.Lambda) else ''
++        for node, vsc in self.e.sig_variants(f):
++            info = vsc.module
++            params = self.node_params(node, info, f.skip)
++            if isinstance(node, ast.Lambda):
++                nm = name or '<lambda>'
++                ret = None
++                d = doc or ''
++            else:
++                nm = name or node.name
++                ret = self.src(info, node.returns) if with_ret and node.returns is not None \
++                    else None
++                d = doc if doc is not None else (_doc(node) or src_doc)
++            out.append(self.sig(nm, params, ret, d, self.nav.rel(info.path), node.lineno))
++        return out
++
++    def dataclass_params(self, cls):
++        fields = {}
++        is_dc = False
++        for c in reversed(self.e.mro(cls)):
++            node = c.scope.node
++            nt = any((isinstance(b, ast.Name) and b.id == 'NamedTuple') or
++                     (isinstance(b, ast.Attribute) and b.attr == 'NamedTuple') for b in node.bases)
++            if 'dataclass' not in _decorator_names(node) and not nt:
++                continue
++            is_dc = True
++            info = c.scope.module
++            for st in node.body:
++                if isinstance(st, ast.AnnAssign) and isinstance(st.target, ast.Name):
++                    ann = st.annotation
++                    an = ann.value if isinstance(ann, ast.Subscript) else ann
++                    if (isinstance(an, ast.Name) and an.id == 'ClassVar') or \
++                            (isinstance(an, ast.Attribute) and an.attr == 'ClassVar'):
++                        continue
++                    a = ast.arg(arg=st.target.id, annotation=st.annotation)
++                    fields[st.target.id] = (st.target.id, 'pos', self.param_text(info, a, st.value))
++        return list(fields.values()) if is_dc else None
++
++    def class_sigs(self, cls):
++        node = cls.scope.node
++        info = cls.scope.module
++        mp = self.nav.rel(info.path)
++        cdoc = _doc(node)
++        inits = [g for g in self.e.get_attr(StInst(cls), '__init__') if isinstance(g, StFunc)]
++        if inits:
++            out = []
++            for g in inits:
++                d = cdoc or (_doc(g.node) if not isinstance(g.node, ast.Lambda) else '')
++                for s in self.func_sigs(g, node.name, d, with_ret=False):
++                    s['_key'] = (mp, node.lineno)
++                    out.append(s)
++            return out
++        params = self.dataclass_params(cls)
++        if params is None:
++            params = []
++            for c in self.e.mro(cls):
++                for bn in c.scope.node.bases:
++                    for bv in self.e.infer(bn, c.scope.parent, None):
++                        if isinstance(bv, RtV) and inspect.isclass(bv.obj) and bv.obj is not object:
++                            rs = self.rt_sigs(bv.obj)
++                            if rs:
++                                params = rs[0]['params']
++                                break
++                    if params:
++                        break
++                if params:
++                    break
++        return [self.sig(node.name, params, None, cdoc, mp, node.lineno)]
++
++    def rt_sigs(self, o):
++        try:
++            sig = inspect.signature(o)
++        except (TypeError, ValueError):
++            return []
++        except Exception:
++            return []
++        params = []
++        kinds = {inspect.Parameter.POSITIONAL_ONLY: 'posonly',
++                 inspect.Parameter.POSITIONAL_OR_KEYWORD: 'pos',
++                 inspect.Parameter.VAR_POSITIONAL: 'vararg',
++                 inspect.Parameter.KEYWORD_ONLY: 'kwonly',
++                 inspect.Parameter.VAR_KEYWORD: 'kwarg'}
++        for p in sig.parameters.values():
++            k = kinds[p.kind]
++            t = p.name
++            if p.annotation is not inspect.Parameter.empty:
++                t += ': ' + inspect.formatannotation(p.annotation)
++            if p.default is not inspect.Parameter.empty:
++                try:
++                    t += '=' + repr(p.default)
++                except Exception:
++                    t += '=...'
++            if k == 'vararg':
++                t = '*' + t
++            elif k == 'kwarg':
++                t = '**' + t
++            params.append((p.name, k, t))
++        ret = None
++        if not inspect.isclass(o) and sig.return_annotation is not inspect.Signature.empty:
++            ret = inspect.formatannotation(sig.return_annotation)
++        name = getattr(o, '__name__', None) or type(o).__name__
++        mp, line, _ = self.nav.rt_loc(o)
++        return [self.sig(name, params, ret, _rt_doc(o), mp, line)]
++
++    def value_sigs(self, v):
++        if isinstance(v, StFunc):
++            return self.func_sigs(v)
++        if isinstance(v, StClass):
++            return self.class_sigs(v)
++        if isinstance(v, StInst):
++            out = []
++            for g in self.e.get_attr(v, '__call__'):
++                if isinstance(g, StFunc):
++                    out += self.func_sigs(g)
++            return out
++        if isinstance(v, RtV):
++            o = v.obj
++            if inspect.isclass(o) or inspect.isroutine(o) or callable(o):
++                if inspect.ismodule(o):
++                    return []
++                return self.rt_sigs(o)
++        return []
++
++
++def signatures(path, line, col, project=None):
++    text = read_source(path)
++    lines = text.split('\n')
++    _check_pos(lines, line, col)
++    offset = sum(len(lines[k]) + 1 for k in range(line - 1)) + col
++    stack, in_comment = _open_brackets(text, offset)
++    if in_comment:
++        return []
++    paren = None
++    for pos, ch in reversed(stack):
++        if ch != '(':
++            continue
++        kind = _paren_kind(text, pos)
++        if kind == 'def':
++            return []
++        if kind == 'call':
++            paren = pos
++            break
++    if paren is None:
++        return []
++    expr = extract_expr(text, paren).strip()
++    if not expr:
++        return []
++    node = None
++    for cand in (expr, '(' + expr + ')'):
++        try:
++            node = ast.parse(cand, mode='eval').body
++            break
++        except (SyntaxError, ValueError, RecursionError):
++            continue
++    if node is None:
++        return []
++
++    root = project_root(path, project)
++    engine = Engine(root, path)
++    tree, fixed = parse_source(text, (line, col), with_text=True)
++    info = ModuleInfo(os.path.abspath(path), tree, '__main__', fixed)
++    engine.static_cache[os.path.realpath(path)] = info
++    pline = text.count('\n', 0, paren) + 1
++    pcol = paren - (text.rfind('\n', 0, paren) + 1)
++    pl = lines[pline - 1]
++    pbcol = len(pl[:pcol].encode('utf-8'))
++    sc = info.cursor_scope
++    if sc is None:
++        cl = lines[line - 1]
++        sc = find_scope_by_pos(info.scope, line, len(cl[:col].encode('utf-8')), info.lines,
++                               cl[:col])
++    while sc.kind in ('lambda', 'comp') and sc.parent is not None and \
++            (sc.node.lineno, sc.node.col_offset) > (pline, pbcol):
++        sc = sc.parent
++
++    nav = Navigator(engine, root)
++    sb = SigBuilder(engine, nav)
++    sigs = []
++    for v in engine.infer(node, sc, (pline, pbcol)):
++        try:
++            sigs += sb.value_sigs(v)
++        except RecursionError:
++            pass
++    prev, cur = _call_args(text, paren + 1, offset)
++    prev = [_arg_kind(a) for a in prev]
++    cur = _arg_kind(cur)
++    out = []
++    seen = set()
++    for s in sorted(sigs, key=lambda s: s['_key']):
++        k = (s['name'], tuple(p[2] for p in s['params']), s['description'])
++        if k in seen:
++            continue
++        seen.add(k)
++        out.append({'name': s['name'], 'params': [p[2] for p in s['params']],
++                    'index': _param_index(s['params'], prev, cur),
++                    'description': s['description'], 'docstring': s['docstring']})
++    return out
++
++
++# ---------------------------------------------------------------------------
++# References
++# ---------------------------------------------------------------------------
++
++class RefFinder:
++    def __init__(self, engine, nav):
++        self.e = engine
++        self.nav = nav
++
++    def value_key(self, v):
++        if isinstance(v, StMod):
++            if v.info is not None:
++                return ('m', os.path.realpath(v.info.path))
++            return ('m', os.path.realpath(v.pkgdir or ''))
++        if isinstance(v, StFunc) and not isinstance(v.node, ast.Lambda) and \
++                v.scope.parent is not None:
++            return ('s', id(v.scope.parent), v.node.name)
++        if isinstance(v, StClass) and v.scope.parent is not None:
++            return ('s', id(v.scope.parent), v.name)
++        if isinstance(v, RtV) and inspect.ismodule(v.obj):
++            return ('rtm', v.obj.__name__)
++        return _vkey(v)
++
++    def values_keys(self, vals):
++        return set(self.value_key(v) for v in vals if v is not None)
++
++    def entries_keys(self, ents, seen):
++        out = set()
++        for ent in ents:
++            if ent[0] == 'b':
++                out |= self.binding_keys(ent[1], seen)
++            else:
++                try:
++                    v = ent[1]()
++                except Exception:
++                    v = None
++                if v is not None:
++                    out.add(self.value_key(v))
++        return out
++
++    def binding_keys(self, b, seen=frozenset()):
++        if b.kind in ('import', 'from'):
++            return self.import_keys(b, seen)
++        owner = b.scope.parent if b.attr else b.scope
++        return {('s', id(owner), b.name)}
++
++    def bindings_keys(self, bl, seen=frozenset()):
++        out = set()
++        for b in bl:
++            out |= self.binding_keys(b, seen)
++        return out
++
++    def module_attr_keys(self, mv, attr, seen):
++        e = self.e
++        keys = set()
++        if isinstance(mv, StMod):
++            if mv.info is not None:
++                keys = self.entries_keys(e.module_attr_entries(mv.info, attr), seen)
++                if not keys:
++                    stub = e.stub_for(mv.info)
++                    if stub is not None:
++                        keys = self.entries_keys(e.module_attr_entries(stub, attr), seen)
++            if not keys and mv.pkgdir:
++                found = e.find_local(attr, mv.pkgdir)
++                if found:
++                    keys = {self.value_key(e.static_module(found, attr))}
++        elif mv is not None:
++            keys = self.values_keys(e.get_attr(mv, attr))
++        return keys
++
++    def import_keys(self, b, seen):
++        if id(b) in seen:
++            return set()
++        seen = seen | {id(b)}
++        e = self.e
++        sc = b.scope
++        if b.kind == 'import':
++            full, asname = b.extra
++            mv = e.resolve_module(full if asname else full.split('.')[0], sc.module.dir)
++            return {self.value_key(mv)}
++        mod, level, attr = b.extra
++        mv = e.resolve_module(mod, sc.module.dir, level)
++        pushed = sc.kind == 'module'
++        if pushed:
++            e.import_stack.append((sc.module, b.line))
++        try:
++            keys = self.module_attr_keys(mv, attr, seen)
++        finally:
++            if pushed:
++                e.import_stack.pop()
++        return keys or {('from?', mod, level, attr)}
++
++    def name_keys(self, info, node):
++        e = self.e
++        name = node.id
++        sc = self.nav.scope_of(info, node)
++        for s, _ in e.chain(sc):
++            bl = s.bindings.get(name)
++            if bl:
++                return self.bindings_keys(bl)
++            if s.stars:
++                for (sl, mod, lvl) in s.stars:
++                    mv = e.resolve_module(mod, s.module.dir, lvl)
++                    ent = e.star_names(mv).get(name)
++                    if ent is not None:
++                        return self.entries_keys([ent], frozenset())
++        if hasattr(builtins, name):
++            return {self.value_key(RtV(getattr(builtins, name)))}
++        return {('unresolved', name)}
++
++    def target_keys(self, info, tgt):
++        e = self.e
++        kind = tgt[0]
++        if kind == 'binding':
++            return self.binding_keys(tgt[1])
++        if kind == 'name':
++            return self.name_keys(info, tgt[1])
++        if kind == 'attr':
++            node = tgt[1]
++            if isinstance(node.ctx, ast.Store):
++                v, b = self.nav.self_store_binding(info, node)
++                if b is not None:
++                    return self.binding_keys(b)
++            sc = self.nav.scope_of(info, node)
++            out = set()
++            for v in e.infer(node.value, sc, None):
++                if isinstance(v, (StInst, StClass, SuperInst)):
++                    out |= self.bindings_keys(e.attr_bindings(v, node.attr))
++                else:
++                    out |= self.module_attr_keys(v, node.attr, frozenset())
++            return out
++        if kind == 'kwarg':
++            return self.bindings_keys(self.nav.call_params(info, tgt[1], tgt[2]))
++        if kind == 'module':
++            return {self.value_key(e.resolve_module(tgt[1], info.dir, tgt[2]))}
++        if kind == 'fromattr':
++            mv = e.resolve_module(tgt[1], info.dir, tgt[2])
++            return self.module_attr_keys(mv, tgt[3], frozenset())
++        if kind == 'global':
++            return {('s', id(info.scope), tgt[1])}
++        return set()
++
++    def keys(self, info, tgt):
++        try:
++            return self.target_keys(info, tgt)
++        except RecursionError:
++            return set()
++
++
++def _candidates(info, ident):
++    """Character positions (line, col) of tokens spelled ``ident``."""
++    lines = info.lines
++    out = set()
++    for sc in _all_scopes(info.scope):
++        for b in sc.bindings.get(ident, ()):
++            out.add(b.pos)
++    for node in ast.walk(info.tree):
++        t = type(node)
++        if t is ast.Name:
++            if node.id == ident:
++                out.add((node.lineno, _char_col(lines, node.lineno, node.col_offset)))
++        elif t is ast.Attribute:
++            if node.attr == ident:
++                ln = node.end_lineno
++                out.add((ln, _char_col(lines, ln, node.end_col_offset) - len(ident)))
++        elif t is ast.keyword:
++            if node.arg == ident and getattr(node, 'lineno', None) is not None:
++                out.add((node.lineno, _char_col(lines, node.lineno, node.col_offset)))
++        elif t is ast.Import:
++            for a in node.names:
++                for p, pp in _alias_parts(lines, a)[0]:
++                    if p == ident:
++                        out.add(pp)
++        elif t is ast.ImportFrom:
++            for p, pp, k, mparts in _from_module_parts(lines, node):
++                if p == ident:
++                    out.add(pp)
++            for a in node.names:
++                if a.name == ident:
++                    parts = _alias_parts(lines, a)[0]
++                    if parts:
++                        out.add(parts[0][1])
++        elif t in (ast.Global, ast.Nonlocal):
++            if ident in node.names:
++                rx = re.compile(r'(?<!\w)' + re.escape(ident) + r'(?!\w)')
++                for ln in range(node.lineno, (node.end_lineno or node.lineno) + 1):
++                    m = rx.search(_line_text(lines, ln))
++                    if m:
++                        out.add((ln, m.start()))
++                        break
++    return sorted(out)
++
++
++def _is_def_target(tgt):
++    if tgt[0] == 'binding':
++        return True
++    if tgt[0] == 'attr' and isinstance(tgt[1].ctx, ast.Store):
++        return True
++    return False
++
++
++def references(path, line, col, scope='file', project=None):
++    text = read_source(path)
++    lines = text.split('\n')
++    _check_pos(lines, line, col)
++    cl = lines[line - 1]
++    s, e = _cursor_ident(cl, col)
++    ident = cl[s:e]
++    offset = sum(len(lines[k]) + 1 for k in range(line - 1)) + s
++    in_str = in_comment_or_string(text, offset)
++
++    root = project_root(path, project)
++    engine = Engine(root, path)
++    info = _load_target(engine, path, text)
++    tgt = locate(info, line, s, e, ident)
++    if in_str and (tgt is None or tgt[0] not in ('name', 'attr')):
++        raise NotAName('cursor is not on a name')
++    if tgt is None:
++        return []
++    nav = Navigator(engine, root)
++    rf = RefFinder(engine, nav)
++    keys = rf.keys(info, tgt)
++    results = {}
++
++    def add(finfo, ln, c, t):
++        mp = nav.rel(finfo.path)
++        results[(mp, ln, c)] = {'module_path': mp, 'line': ln, 'column': c,
++                                'is_definition': _is_def_target(t)}
++
++    add(info, line, s, tgt)
++    if keys:
++        if scope == 'project':
++            files = project_files(root)
++            if not any(os.path.realpath(f) == os.path.realpath(path) for f in files):
++                files.append(os.path.abspath(path))
++        else:
++            files = [os.path.abspath(path)]
++        for f in files:
++            if os.path.realpath(f) == os.path.realpath(path):
++                finfo = info
++            else:
++                try:
++                    with open(f, 'rb') as fh:
++                        if ident.encode('utf-8') not in fh.read():
++                            continue
++                except OSError:
++                    continue
++                finfo = engine.load_static(f, _module_name(root, f))
++                if finfo is None:
++                    continue
++            for ln, c in _candidates(finfo, ident):
++                t = locate(finfo, ln, c, c + len(ident), ident)
++                if t is None:
++                    continue
++                if rf.keys(finfo, t) & keys:
++                    add(finfo, ln, c, t)
++    return sorted(results.values(), key=lambda r: (r['module_path'], r['line'], r['column']))
++
++
++# ---------------------------------------------------------------------------
++# Search / names
++# ---------------------------------------------------------------------------
++
++def _strip_doc(d):
++    d = dict(d)
++    d.pop('docstring', None)
++    return d
++
++
++def search(query, project=None):
++    root = os.path.abspath(project) if project else os.getcwd()
++    if not os.path.isdir(root):
++        raise SithError('project directory not found: %s' % project)
++    engine = Engine(root)
++    nav = Navigator(engine, root)
++    q = query.lower()
++    found = []
++    for f in project_files(root):
++        info = engine.load_static(f, _module_name(root, f))
++        if info is None:
++            continue
++        stack = [info.scope]
++        while stack:
++            sc = stack.pop()
++            for name, bl in sc.bindings.items():
++                if MARK in name:
++                    continue
++                low = name.lower()
++                if q not in low:
++                    continue
++                for b in bl:
++                    if b.kind in ('def', 'class') or \
++                            (sc.kind == 'module' and b.kind in ('assign', 'ann', 'unpack')):
++                        found.append(b)
++            for ch in sc.children:
++                if ch.kind == 'class':
++                    stack.append(ch)
++    out = []
++    seen = set()
++    for b in found:
++        try:
++            d = _strip_doc(nav.binding_def(b))
++        except RecursionError:
++            continue
++        k = (d['module_path'], d['line'], d['column'], d['name'])
++        if k in seen:
++            continue
++        seen.add(k)
++        low = d['name'].lower()
++        g = 0 if low == q else (1 if low.startswith(q) else 2)
++        out.append((g, d))
++    out.sort(key=lambda x: (x[0], x[1]['module_path'], x[1]['line'], x[1]['column']))
++    return [d for _, d in out]
++
++
++def names(path, all_scopes=False, project=None):
++    text = read_source(path)
++    root = project_root(path, project)
++    engine = Engine(root, path)
++    info = _load_target(engine, path, text)
++    nav = Navigator(engine, root)
++    bindings = []
++    scopes = _all_scopes(info.scope) if all_scopes else [info.scope]
++    for sc in scopes:
++        for name, bl in sc.bindings.items():
++            if MARK not in name:
++                bindings += bl
++        if all_scopes and sc.kind == 'class':
++            for bl in engine.self_attr_map(class_value(sc)).values():
++                bindings += bl
++    out = []
++    seen = set()
++    for b in bindings:
++        try:
++            d = nav.binding_def(b)
++        except RecursionError:
++            continue
++        if b.kind in ('def', 'class'):
++            d['line'], d['column'] = b.pos
++        k = (d['line'], d['column'], d['name'])
++        if k in seen:
++            continue
++        seen.add(k)
++        d['is_definition'] = True
++        out.append(d)
++    out.sort(key=lambda d: (d['line'], d['column']))
++    return out
++
++
+ def _parse_int(s, what):
+     try:
+         return int(s)
+@@ -4043,38 +5274,66 @@
+ 
+ USAGE = ('usage: sith.py complete <file> <line> <col> [--fuzzy] [--project <dir>]\n'
+          '       sith.py infer <file> <line> <col> [--project <dir>]\n'
+-         '       sith.py goto <file> <line> <col> [--follow-imports] [--project <dir>]\n')
++         '       sith.py goto <file> <line> <col> [--follow-imports] [--project <dir>]\n'
++         '       sith.py signatures <file> <line> <col> [--project <dir>]\n'
++         '       sith.py references <file> <line> <col> [--scope file|project] '
++         '[--project <dir>]\n'
++         '       sith.py search <query> [--project <dir>]\n'
++         '       sith.py names <file> [--all-scopes] [--project <dir>]\n')
++
++_FLAGS = ('--fuzzy', '--follow-imports', '--all-scopes')
++_ARITY = {'complete': 4, 'infer': 4, 'goto': 4, 'signatures': 4, 'references': 4,
++          'search': 2, 'names': 2}
+ 
+ 
+ def main(argv):
+     project = None
++    scope = 'file'
+     rest = []
+     i = 0
+     while i < len(argv):
+         a = argv[i]
+-        if a == '--project' and i + 1 < len(argv):
+-            project = argv[i + 1]
++        if a in ('--project', '--scope') and i + 1 < len(argv):
++            if a == '--project':
++                project = argv[i + 1]
++            else:
++                scope = argv[i + 1]
+             i += 2
+             continue
+         if a.startswith('--project='):
+             project = a[len('--project='):]
++        elif a.startswith('--scope='):
++            scope = a[len('--scope='):]
+         else:
+             rest.append(a)
+         i += 1
+-    fuzzy = '--fuzzy' in rest
+-    follow = '--follow-imports' in rest
+-    args = [a for a in rest if a not in ('--fuzzy', '--follow-imports')]
+-    if len(args) != 4 or args[0] not in ('complete', 'infer', 'goto'):
++    flags = set(a for a in rest if a in _FLAGS)
++    args = [a for a in rest if a not in _FLAGS]
++    if not args or args[0] not in _ARITY or len(args) != _ARITY[args[0]] or \
++            scope not in ('file', 'project'):
+         sys.stderr.write(USAGE)
+         return 1
++    cmd = args[0]
+     try:
+-        line = _parse_int(args[2], 'line')
+-        col = _parse_int(args[3], 'column')
+         sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))
+-        if args[0] == 'complete':
+-            out = {'completions': complete(args[1], line, col, fuzzy, project)}
++        if cmd == 'search':
++            res = search(args[1], project)
++            out = {'results': res, 'definitions': res, 'names': res}
++        elif cmd == 'names':
++            res = names(args[1], '--all-scopes' in flags, project)
++            out = {'names': res, 'definitions': res}
+         else:
+-            out = {'definitions': navigate(args[1], line, col, args[0], project, follow)}
++            line = _parse_int(args[2], 'line')
++            col = _parse_int(args[3], 'column')
++            if cmd == 'complete':
++                out = {'completions': complete(args[1], line, col, '--fuzzy' in flags, project)}
++            elif cmd == 'signatures':
++                out = {'signatures': signatures(args[1], line, col, project)}
++            elif cmd == 'references':
++                out = {'references': references(args[1], line, col, scope, project)}
++            else:
++                out = {'definitions': navigate(args[1], line, col, cmd, project,
++                                               '--follow-imports' in flags)}
+     except SithError as e:
+         sys.stderr.write('error: %s\n' % e)
+         return 1
+

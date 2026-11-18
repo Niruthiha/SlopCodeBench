@@ -1,0 +1,5 @@
+2026-11-09 15:55 pilot.sh stopped after this cell: check_cell.py printed CELL FAIL (rc=1).
+Cause = checker bugs, not isolation: (1) skill-list check required exactly 4 checkpoints (this problem has 5; all 5 lists identical, 17 skills, 0 anthropic-skills);
+(2) resets checked only 2-4 (reset 5 never examined); (3) required a non-empty pre-ckpt-1 workspace listing, but this problem declares no static_assets.
+check_cell.py fixed (checkpoint count from run dir; empty initial listing allowed only when no static_assets; failing conditions now printed).
+check_cell.txt in this dir is the re-run with the fixed checker (CELL PASS, reset 5 included). The original failing output was overwritten; its content is quoted in the session report.

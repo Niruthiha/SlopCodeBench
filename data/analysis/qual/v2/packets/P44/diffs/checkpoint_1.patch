@@ -1,0 +1,2288 @@
+### requirements.txt (created)
+--- requirements.txt
++++ requirements.txt
+@@ -0,0 +1 @@
++# sith has no third-party dependencies; it uses only the Python standard library.
+
+### sith.py (created)
+--- sith.py
++++ sith.py
+@@ -0,0 +1,12 @@
++#!/usr/bin/env python3
++"""sith - a static Python code intelligence tool.
++
++Usage:
++    python sith.py complete <file> <line> <col> [--fuzzy]
++"""
++import sys
++
++from sithlib.cli import main
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv[1:]))
+
+### sithlib/__init__.py (created)
+--- sithlib/__init__.py
++++ sithlib/__init__.py
+@@ -0,0 +1 @@
++"""Core library for the sith code intelligence tool."""
+
+### sithlib/builtin_scope.py (created)
+--- sithlib/builtin_scope.py
++++ sithlib/builtin_scope.py
+@@ -0,0 +1,22 @@
++"""The builtin scope and Python keywords."""
++import builtins
++import keyword
++
++from .entries import ValueEntry
++from .values import wrap_runtime
++
++KEYWORDS = tuple(keyword.kwlist)
++
++
++def builtin_entries():
++    """Entries for every name in the `builtins` module.
++
++    Names that are also keywords (True, False, None) are offered only as
++    keywords, so they are left out here.
++    """
++    entries = {}
++    for name in dir(builtins):
++        if keyword.iskeyword(name):
++            continue
++        entries[name] = ValueEntry(lambda name=name: wrap_runtime(getattr(builtins, name)))
++    return entries
+
+### sithlib/cli.py (created)
+--- sithlib/cli.py
++++ sithlib/cli.py
+@@ -0,0 +1,44 @@
++"""Command-line interface: argument parsing, JSON output and exit codes."""
++import argparse
++import contextlib
++import io
++import json
++import sys
++
++from .completion import complete_file
++from .errors import SithError
++
++
++class _ArgumentParser(argparse.ArgumentParser):
++    """An ArgumentParser that reports usage errors as SithError (exit 1)."""
++
++    def error(self, message):
++        raise SithError(message)
++
++
++def build_parser():
++    parser = _ArgumentParser(prog="sith.py", description="Python code intelligence.")
++    commands = parser.add_subparsers(dest="command", required=True, parser_class=_ArgumentParser)
++    complete = commands.add_parser("complete", help="complete the code at a cursor position")
++    complete.add_argument("file", help="Python source file")
++    complete.add_argument("line", type=int, help="1-based line number")
++    complete.add_argument("col", type=int, help="0-based column number")
++    complete.add_argument("--fuzzy", action="store_true", help="use fuzzy matching")
++    return parser
++
++
++def main(argv=None):
++    try:
++        args = build_parser().parse_args(argv)
++        # Introspected modules may print; keep STDOUT reserved for the JSON result.
++        with contextlib.redirect_stdout(io.StringIO()):
++            completions = complete_file(args.file, args.line, args.col, fuzzy=args.fuzzy)
++    except SithError as error:
++        print(f"error: {error}", file=sys.stderr)
++        return 1
++    except Exception as error:  # analysis must never crash an editor integration
++        print(f"warning: analysis failed: {error!r}", file=sys.stderr)
++        completions = []
++    payload = {"completions": [c.to_dict() for c in completions]}
++    sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
++    return 0
+
+### sithlib/completion.py (created)
+--- sithlib/completion.py
++++ sithlib/completion.py
+@@ -0,0 +1,85 @@
++"""The completion engine: ties context, parsing, scopes and inference together."""
++import ast
++from dataclasses import asdict, dataclass
++
++from . import context as cursor_context
++from .builtin_scope import KEYWORDS
++from .describe import describe_keyword
++from .inference import Inferrer
++from .locate import find_scope
++from .matching import make_matcher
++from .members import is_public
++from .modules import Importer, ModuleContext
++from .parsing import parse_tolerant
++from .ranking import sort_keywords, sort_names
++from .source import load_document
++from .values import MODULE
++
++
++@dataclass
++class Completion:
++    name: str
++    complete: str
++    type: str
++    description: str
++
++    def to_dict(self):
++        return asdict(self)
++
++
++def complete_file(path, line, col, fuzzy=False):
++    """Completions for the cursor at 1-based `line`, 0-based `col` of `path`."""
++    document = load_document(path)
++    document.check_position(line, col)
++    return Completer(document, line, col, fuzzy).run()
++
++
++class Completer:
++    def __init__(self, document, line, col, fuzzy):
++        self.document = document
++        self.line = line
++        self.col = col
++        self.fuzzy = fuzzy
++
++    def run(self):
++        request = cursor_context.analyze(self.document.text_before(self.line, self.col))
++        if request.kind == cursor_context.NONE:
++            return []
++
++        importer = Importer(self.document.directory)
++        tree = parse_tolerant(self.document.text, cursor=(self.line, self.col))
++        module = ModuleContext(self.document.path, "__main__", tree)
++        importer.register(module)
++        inferrer = Inferrer(importer)
++        scope = find_scope(module, self.line, self.col, self.document.lines[self.line - 1])
++
++        if request.kind == cursor_context.ATTRIBUTE:
++            entries = self._attribute_entries(inferrer, scope, request.receiver)
++            keywords = []
++        else:
++            entries = inferrer.visible_entries(scope, self.line)
++            keywords = KEYWORDS
++
++        matches = make_matcher(request.prefix, self.fuzzy)
++        cut = len(request.prefix)
++        results = []
++        for name in sort_names(n for n in entries if matches(n)):
++            kind, description = entries[name].describe(name)
++            results.append(Completion(name, name[cut:], kind, description))
++        for name in sort_keywords(k for k in keywords if matches(k)):
++            kind, description = describe_keyword(name)
++            results.append(Completion(name, name[cut:], kind, description))
++        return results
++
++    def _attribute_entries(self, inferrer, scope, receiver):
++        try:
++            expression = ast.parse(receiver.strip(), mode="eval").body
++        except (SyntaxError, ValueError):
++            return {}
++        value = inferrer.infer(expression, scope, self.line, strict=True)
++        if value is None:
++            return {}
++        entries = inferrer.members.all(value)
++        if value.kind == MODULE:
++            entries = {name: entry for name, entry in entries.items() if is_public(name)}
++        return entries
+
+### sithlib/context.py (created)
+--- sithlib/context.py
++++ sithlib/context.py
+@@ -0,0 +1,112 @@
++"""Textual analysis of the cursor position: prefix and completion kind."""
++from dataclasses import dataclass
++
++NAME = "name"
++ATTRIBUTE = "attribute"
++NONE = "none"
++
++_OPENERS = {")": "(", "]": "[", "}": "{"}
++_STRING_PREFIX_CHARS = "rRbBuUfF"
++
++
++@dataclass
++class CursorContext:
++    """What kind of completion is requested and what has been typed so far."""
++
++    kind: str
++    prefix: str = ""
++    receiver: str = ""
++
++
++def is_identifier_char(char):
++    return char == "_" or char.isalnum()
++
++
++def analyze(text_before_cursor):
++    """Classify the completion request from the source text before the cursor."""
++    end = len(text_before_cursor)
++    start = end
++    while start > 0 and is_identifier_char(text_before_cursor[start - 1]):
++        start -= 1
++    prefix = text_before_cursor[start:]
++    if prefix and prefix[0].isdigit():
++        return CursorContext(NONE, prefix)
++
++    before = text_before_cursor[:start]
++    if not before.endswith("."):
++        return CursorContext(NAME, prefix)
++
++    receiver = extract_receiver(before[:-1])
++    if not receiver or receiver.isdigit() or receiver.endswith("."):
++        return CursorContext(NONE, prefix)
++    return CursorContext(ATTRIBUTE, prefix, receiver)
++
++
++def extract_receiver(text):
++    """Return the expression text that ends at the end of `text`, or None."""
++    i = len(text)
++    while i > 0:
++        char = text[i - 1]
++        if char in _OPENERS:
++            opener = _match_open(text, i - 1)
++            if opener is None:
++                return None
++            i = opener
++            continue
++        if is_identifier_char(char):
++            while i > 0 and is_identifier_char(text[i - 1]):
++                i -= 1
++            if i > 0 and text[i - 1] == ".":
++                i -= 1
++                continue
++            break
++        if char in "\"'":
++            start = _string_start(text, i - 1)
++            if start is None:
++                return None
++            i = start
++            while i > 0 and text[i - 1] in _STRING_PREFIX_CHARS:
++                i -= 1
++            break
++        break
++    return text[i:].strip()
++
++
++def _match_open(text, close_index):
++    """Index of the bracket opening the one at `close_index`, scanning backwards."""
++    stack = [text[close_index]]
++    i = close_index - 1
++    while i >= 0:
++        char = text[i]
++        if char in "\"'":
++            start = _string_start(text, i)
++            if start is None:
++                return None
++            i = start - 1
++            continue
++        if char in _OPENERS:
++            stack.append(char)
++        elif char in "([{":
++            if _OPENERS[stack[-1]] != char:
++                return None
++            stack.pop()
++            if not stack:
++                return i
++        i -= 1
++    return None
++
++
++def _string_start(text, end_index):
++    """Index of the opening quote of the string literal ending at `end_index`."""
++    quote = text[end_index]
++    if end_index >= 2 and text[end_index - 2:end_index + 1] == quote * 3:
++        start = text.rfind(quote * 3, 0, end_index - 2)
++        return None if start < 0 else start
++    i = end_index - 1
++    while i >= 0:
++        if text[i] == quote and (i == 0 or text[i - 1] != "\\"):
++            return i
++        if text[i] == "\n":
++            return None
++        i -= 1
++    return None
+
+### sithlib/describe.py (created)
+--- sithlib/describe.py
++++ sithlib/describe.py
+@@ -0,0 +1,41 @@
++"""Formatting of completion `type` and `description` fields."""
++from .values import CLASS, FUNCTION, INSTANCE, MODULE
++
++STATEMENT = "statement"
++PARAM = "param"
++KEYWORD = "keyword"
++
++
++def describe_value(name, value):
++    """(type, description) for a name bound to an inferred value (or None)."""
++    if value is None:
++        return STATEMENT, STATEMENT
++    if value.kind == MODULE:
++        return MODULE, f"module {name}"
++    if value.kind == CLASS:
++        return CLASS, f"class {name}"
++    if value.kind == FUNCTION:
++        return FUNCTION, f"def {name}(...)"
++    if value.kind == INSTANCE and value.type_name:
++        return INSTANCE, f"instance of {value.type_name}"
++    return STATEMENT, STATEMENT
++
++
++def describe_function(name):
++    return FUNCTION, f"def {name}(...)"
++
++
++def describe_class(name):
++    return CLASS, f"class {name}"
++
++
++def describe_module(name):
++    return MODULE, f"module {name}"
++
++
++def describe_param(name):
++    return PARAM, f"param {name}"
++
++
++def describe_keyword(name):
++    return KEYWORD, name
+
+### sithlib/entries.py (created)
+--- sithlib/entries.py
++++ sithlib/entries.py
+@@ -0,0 +1,56 @@
++"""Lazily-described completion candidates.
++
++An entry stands for whatever a name refers to; its value and description are
++only computed when the name survives prefix filtering.
++"""
++from .describe import (
++    describe_class,
++    describe_function,
++    describe_module,
++    describe_param,
++    describe_value,
++)
++
++_UNSET = object()
++
++
++class BindingEntry:
++    """A name bound by a statement in parsed source."""
++
++    def __init__(self, binding, inferrer):
++        self.binding = binding
++        self.inferrer = inferrer
++
++    def value(self):
++        return self.inferrer.infer_binding(self.binding)
++
++    def describe(self, name):
++        kind = self.binding.kind
++        if kind == "param":
++            return describe_param(name)
++        if kind == "def":
++            return describe_function(name)
++        if kind == "class":
++            return describe_class(name)
++        if kind == "import":
++            return describe_module(name)
++        return describe_value(name, self.value())
++
++
++class ValueEntry:
++    """A name whose value is produced on demand by a factory."""
++
++    def __init__(self, factory):
++        self._factory = factory
++        self._value = _UNSET
++
++    def value(self):
++        if self._value is _UNSET:
++            try:
++                self._value = self._factory()
++            except Exception:
++                self._value = None
++        return self._value
++
++    def describe(self, name):
++        return describe_value(name, self.value())
+
+### sithlib/errors.py (created)
+--- sithlib/errors.py
++++ sithlib/errors.py
+@@ -0,0 +1,5 @@
++"""Exception types used across sith."""
++
++
++class SithError(Exception):
++    """A user-facing error: reported on STDERR and turned into exit code 1."""
+
+### sithlib/inference.py (created)
+--- sithlib/inference.py
++++ sithlib/inference.py
+@@ -0,0 +1,338 @@
++"""Static type inference: names, bindings and expressions to values."""
++import ast
++import types
++
++from .builtin_scope import builtin_entries
++from .entries import BindingEntry
++from .members import MemberResolver
++from .scopes import CLASS, FUNCTION, MODULE, walk_local
++from .values import (
++    LocalClass,
++    LocalFunction,
++    LocalInstance,
++    RuntimeClass,
++    RuntimeInstance,
++)
++
++_MAX_DEPTH = 60
++
++_LITERAL_TYPES = {
++    ast.JoinedStr: str,
++    ast.List: list,
++    ast.ListComp: list,
++    ast.Tuple: tuple,
++    ast.Dict: dict,
++    ast.DictComp: dict,
++    ast.Set: set,
++    ast.SetComp: set,
++    ast.GeneratorExp: types.GeneratorType,
++    ast.Compare: bool,
++}
++
++def instance_of(value):
++    """The instance value produced by calling a class value."""
++    if isinstance(value, LocalClass):
++        return LocalInstance(value)
++    if isinstance(value, RuntimeClass):
++        return RuntimeInstance(value.obj)
++    return None
++
++
++class Inferrer:
++    def __init__(self, importer):
++        self.importer = importer
++        self.members = MemberResolver(self)
++        self._builtins = builtin_entries()
++        self._binding_cache = {}
++        self._entries_cache = {}
++        self._active = set()
++        self._depth = 0
++
++    # -- scopes and name lookup --------------------------------------------
++
++    def scope_chain(self, scope, line, strict):
++        """(scope, line limit) pairs for name resolution starting at `scope`.
++
++        The innermost function/class scope ("local") and the module scope only
++        see bindings up to `line`.  In non-strict mode (inference inside code
++        bodies) the module scope is late-bound once a function scope was seen.
++        Class scopes are only visible from directly inside the class body.
++        """
++        chain = []
++        local_seen = False
++        for index, current in enumerate(scope.chain()):
++            if current.kind == CLASS and index > 0:
++                continue
++            if current.kind == MODULE:
++                limit = line if strict or not local_seen else None
++            elif current.kind in (FUNCTION, CLASS) and not local_seen:
++                limit = line
++                local_seen = True
++            else:
++                limit = None
++            chain.append((current, limit))
++        return chain
++
++    def scope_entries(self, scope, limit=None):
++        """Entries for names bound in `scope` (at or before line `limit`)."""
++        key = (id(scope), limit)
++        if key in self._entries_cache:
++            return self._entries_cache[key]
++        self._entries_cache[key] = {}
++        chosen = {}
++        for name, bindings in scope.bindings.items():
++            binding = _latest_binding(bindings, limit)
++            if binding is not None:
++                chosen[name] = (binding.line, BindingEntry(binding, self))
++        for star in scope.star_imports:
++            if limit is not None and star.line > limit:
++                continue
++            module = self.importer.import_module(scope.module, star.module, star.level)
++            if module is None:
++                continue
++            for name, entry in self.members.public(module).items():
++                if name not in chosen or chosen[name][0] < star.line:
++                    chosen[name] = (star.line, entry)
++        entries = {name: entry for name, (_, entry) in chosen.items()}
++        self._entries_cache[key] = entries
++        return entries
++
++    def lookup(self, name, scope, line, strict=False):
++        for current, limit in self.scope_chain(scope, line, strict):
++            entry = self.scope_entries(current, limit).get(name)
++            if entry is not None:
++                return entry
++        return self._builtins.get(name)
++
++    def visible_entries(self, scope, line):
++        """All names visible at `line` in `scope`, innermost definitions first."""
++        result = {}
++        for current, limit in self.scope_chain(scope, line, strict=True):
++            for name, entry in self.scope_entries(current, limit).items():
++                result.setdefault(name, entry)
++        for name, entry in self._builtins.items():
++            result.setdefault(name, entry)
++        return result
++
++    # -- bindings ------------------------------------------------------------
++
++    def infer_binding(self, binding):
++        key = id(binding)
++        if key in self._binding_cache:
++            return self._binding_cache[key]
++        if key in self._active:
++            return None
++        self._active.add(key)
++        try:
++            value = self._infer_binding(binding)
++        finally:
++            self._active.discard(key)
++        self._binding_cache[key] = value
++        return value
++
++    def _infer_binding(self, binding):
++        context = binding.scope.module
++        kind = binding.kind
++        extra = binding.extra
++        if kind == "def":
++            scope = context.scope_of(binding.node)
++            return LocalFunction(scope) if scope else None
++        if kind == "class":
++            scope = context.scope_of(binding.node)
++            return LocalClass(scope) if scope else None
++        if kind == "import":
++            return self.importer.import_absolute(extra["module"])
++        if kind == "importfrom":
++            return self.resolve_from(context, extra["module"], extra["level"], extra["attribute"])
++        if kind == "assign":
++            value = None
++            if binding.value is not None:
++                value = self.infer(binding.value, binding.scope, binding.line)
++            if value is None and extra.get("annotation") is not None:
++                value = self.infer_annotation(extra["annotation"], binding.scope, binding.line)
++            return value
++        if kind == "param":
++            return self._infer_param(binding)
++        if kind == "except":
++            exception = extra.get("exception")
++            if isinstance(exception, ast.Tuple) and exception.elts:
++                exception = exception.elts[0]
++            if exception is None:
++                return None
++            return instance_of(self.infer(exception, binding.scope, binding.line))
++        return None
++
++    def resolve_from(self, context, module, level, attribute):
++        """The value imported by `from <module> import <attribute>`."""
++        if level and not module:
++            submodule = self.importer.import_relative(context, attribute, level)
++            if submodule is not None:
++                return submodule
++        base = self.importer.import_module(context, module, level)
++        if base is not None:
++            value = self.members.member(base, attribute)
++            if value is not None:
++                return value
++        if not level and module:
++            return self.importer.import_absolute(f"{module}.{attribute}")
++        return None
++
++    def infer_annotation(self, annotation, scope, line):
++        if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
++            try:
++                annotation = ast.parse(annotation.value, mode="eval").body
++            except SyntaxError:
++                return None
++        return instance_of(self.infer(annotation, scope, line))
++
++    def _infer_param(self, binding):
++        node = binding.node
++        arg = binding.extra["arg"]
++        outer = binding.scope.parent
++        if arg.annotation is not None:
++            value = self.infer_annotation(arg.annotation, outer, node.lineno)
++            if value is not None:
++                return value
++        default = _default_for(node.args, arg)
++        if default is not None:
++            return self.infer(default, outer, node.lineno)
++        positional = node.args.posonlyargs + node.args.args
++        is_method = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and outer.kind == CLASS
++        if is_method and positional and positional[0] is arg:
++            decorators = {_decorator_name(d) for d in node.decorator_list}
++            if "staticmethod" in decorators:
++                return None
++            cls = LocalClass(outer)
++            if "classmethod" in decorators or node.name in ("__new__", "__init_subclass__"):
++                return cls
++            return LocalInstance(cls)
++        return None
++
++    # -- expressions -----------------------------------------------------------
++
++    def infer(self, node, scope, line, strict=False):
++        """Infer the value of expression `node` evaluated in `scope` at `line`."""
++        if node is None or self._depth > _MAX_DEPTH:
++            return None
++        self._depth += 1
++        try:
++            return self._infer(node, scope, line, strict)
++        except RecursionError:
++            return None
++        finally:
++            self._depth -= 1
++
++    def _infer(self, node, scope, line, strict):
++        if isinstance(node, ast.Constant):
++            return RuntimeInstance(type(node.value))
++        literal = _LITERAL_TYPES.get(type(node))
++        if literal is not None:
++            return RuntimeInstance(literal)
++        if isinstance(node, ast.Name):
++            entry = self.lookup(node.id, scope, line, strict)
++            return entry.value() if entry is not None else None
++        if isinstance(node, ast.Attribute):
++            base = self.infer(node.value, scope, line, strict)
++            return self.members.member(base, node.attr) if base is not None else None
++        if isinstance(node, ast.Call):
++            return self._infer_call(node, scope, line, strict)
++        if isinstance(node, ast.Lambda):
++            lambda_scope = scope.module.scope_of(node)
++            return LocalFunction(lambda_scope) if lambda_scope else None
++        if isinstance(node, ast.BinOp):
++            return self._infer_binop(node, scope, line, strict)
++        if isinstance(node, ast.UnaryOp):
++            if isinstance(node.op, ast.Not):
++                return RuntimeInstance(bool)
++            return self.infer(node.operand, scope, line, strict)
++        if isinstance(node, ast.IfExp):
++            return self.infer(node.body, scope, line, strict) or self.infer(
++                node.orelse, scope, line, strict)
++        if isinstance(node, ast.NamedExpr):
++            return self.infer(node.value, scope, line, strict)
++        return None
++
++    def _infer_call(self, node, scope, line, strict):
++        function = self.infer(node.func, scope, line, strict)
++        if function is None:
++            return None
++        if isinstance(function, (LocalClass, RuntimeClass)):
++            return instance_of(function)
++        if isinstance(function, LocalFunction):
++            return self.infer_return(function)
++        return None
++
++    def _infer_binop(self, node, scope, line, strict):
++        left = self.infer(node.left, scope, line, strict)
++        if not isinstance(left, RuntimeInstance):
++            return None
++        if isinstance(node.op, ast.Mod) and left.cls in (str, bytes):
++            return left
++        right = self.infer(node.right, scope, line, strict)
++        if isinstance(right, RuntimeInstance) and right.cls is left.cls:
++            return left
++        return None
++
++    def infer_return(self, function):
++        """The value returned by calling a locally defined function."""
++        scope = function.scope
++        node = scope.node
++        key = ("return", id(node))
++        if key in self._active:
++            return None
++        self._active.add(key)
++        try:
++            if isinstance(node, ast.Lambda):
++                return self.infer(node.body, scope, node.lineno)
++            if isinstance(node, ast.AsyncFunctionDef):
++                return None
++            returns = []
++            for child in walk_local(node.body):
++                if isinstance(child, (ast.Yield, ast.YieldFrom)):
++                    return RuntimeInstance(types.GeneratorType)
++                if isinstance(child, ast.Return) and child.value is not None:
++                    returns.append(child)
++            for statement in returns:
++                value = self.infer(statement.value, scope, statement.lineno)
++                if value is not None:
++                    return value
++            return None
++        finally:
++            self._active.discard(key)
++
++
++def _latest_binding(bindings, limit):
++    """The binding in effect at line `limit` (any line when `limit` is None).
++
++    A binding on the limit line itself (e.g. `x = x + 1`, or the statement
++    being typed) only counts when there is no earlier one.
++    """
++    if limit is None:
++        pool = bindings
++    else:
++        pool = [b for b in bindings if b.line < limit] or [b for b in bindings if b.line == limit]
++    if not pool:
++        return None
++    return max(enumerate(pool), key=lambda pair: (pair[1].line, pair[0]))[1]
++
++
++def _default_for(arguments, arg):
++    positional = arguments.posonlyargs + arguments.args
++    if arg in positional:
++        offset = len(positional) - len(arguments.defaults)
++        index = positional.index(arg)
++        return arguments.defaults[index - offset] if index >= offset else None
++    if arg in arguments.kwonlyargs:
++        return arguments.kw_defaults[arguments.kwonlyargs.index(arg)]
++    return None
++
++
++def _decorator_name(node):
++    if isinstance(node, ast.Call):
++        node = node.func
++    if isinstance(node, ast.Attribute):
++        return node.attr
++    if isinstance(node, ast.Name):
++        return node.id
++    return None
++
+
+### sithlib/locate.py (created)
+--- sithlib/locate.py
++++ sithlib/locate.py
+@@ -0,0 +1,97 @@
++"""Finding the innermost scope that contains the cursor."""
++import ast
++
++from .scopes import COMPREHENSION, LAMBDA
++
++_DEFINITIONS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
++
++
++def cursor_indent(line_text, col):
++    """Indentation that governs the cursor's block membership."""
++    before = line_text[:col]
++    if not before.strip():
++        return len(before)
++    return len(line_text) - len(line_text.lstrip())
++
++
++def find_scope(context, line, col, line_text):
++    """The innermost Scope of `context` enclosing the cursor at (line, col)."""
++    byte_col = len(line_text[:col].encode("utf-8"))
++    indent = cursor_indent(line_text, col)
++    scope = context.root
++    for node in _definition_chain(context.tree.body, line, byte_col, indent):
++        scope = context.scope_of(node) or scope
++    return _innermost_expression_scope(scope, line, byte_col)
++
++
++def _definition_chain(statements, line, byte_col, indent):
++    """def/class nodes whose bodies contain the cursor, outermost first."""
++    chain = []
++    while True:
++        candidate = None
++        for statement in statements:
++            if statement.lineno <= line:
++                candidate = statement
++            else:
++                break
++        if candidate is None:
++            return chain
++        inside = line <= candidate.end_lineno or indent > candidate.col_offset
++        if not inside:
++            return chain
++        if isinstance(candidate, _DEFINITIONS):
++            if not _in_body(candidate, line, byte_col):
++                return chain
++            chain.append(candidate)
++            statements = candidate.body
++        else:
++            statements = _child_statements(candidate)
++            if not statements:
++                return chain
++
++
++def _in_body(node, line, byte_col):
++    first = node.body[0]
++    if line > _header_end(node):
++        return True
++    return line == first.lineno and byte_col >= first.col_offset
++
++
++def _header_end(node):
++    parts = []
++    if isinstance(node, ast.ClassDef):
++        parts = node.bases + [k.value for k in node.keywords]
++    else:
++        args = node.args
++        parts = args.posonlyargs + args.args + args.kwonlyargs + args.defaults
++        parts += [d for d in args.kw_defaults if d is not None]
++        parts += [a for a in (args.vararg, args.kwarg, node.returns) if a is not None]
++    return max([node.lineno] + [getattr(p, "end_lineno", None) or node.lineno for p in parts])
++
++
++def _child_statements(node):
++    children = []
++    for field in ("body", "orelse", "finalbody"):
++        children += [s for s in getattr(node, field, []) if isinstance(s, ast.stmt)]
++    for handler in getattr(node, "handlers", []):
++        children += handler.body
++    for case in getattr(node, "cases", []):
++        children += case.body
++    return sorted(children, key=lambda s: (s.lineno, s.col_offset))
++
++
++def _contains(node, line, byte_col):
++    start = (node.lineno, node.col_offset)
++    end = (node.end_lineno, node.end_col_offset)
++    return start <= (line, byte_col) <= end
++
++
++def _innermost_expression_scope(scope, line, byte_col):
++    """Descend into lambda/comprehension scopes that contain the cursor."""
++    while True:
++        for child in scope.children:
++            if child.kind in (LAMBDA, COMPREHENSION) and _contains(child.node, line, byte_col):
++                scope = child
++                break
++        else:
++            return scope
+
+### sithlib/matching.py (created)
+--- sithlib/matching.py
++++ sithlib/matching.py
+@@ -0,0 +1,19 @@
++"""Prefix and fuzzy matching of completion names."""
++
++
++def prefix_match(prefix, name):
++    return name.lower().startswith(prefix.lower())
++
++
++def fuzzy_match(query, name):
++    """True when the characters of `query` appear in `name` in order."""
++    remaining = iter(name.lower())
++    return all(char in remaining for char in query.lower())
++
++
++def make_matcher(prefix, fuzzy):
++    if not prefix:
++        return lambda name: True
++    if fuzzy:
++        return lambda name: fuzzy_match(prefix, name)
++    return lambda name: prefix_match(prefix, name)
+
+### sithlib/members.py (created)
+--- sithlib/members.py
++++ sithlib/members.py
+@@ -0,0 +1,152 @@
++"""Attribute resolution: the members exposed by each kind of value."""
++import ast
++
++from .entries import BindingEntry, ValueEntry
++from .scopes import Binding, walk_local
++from .values import (
++    LocalClass,
++    LocalFunction,
++    LocalInstance,
++    LocalModule,
++    RuntimeClass,
++    RuntimeFunction,
++    RuntimeInstance,
++    RuntimeModule,
++    runtime_sample,
++    wrap_runtime,
++)
++
++
++def _sample_function():
++    """Stand-in used to list the attributes of locally defined functions."""
++
++
++def runtime_entries(obj):
++    """Entries for `dir(obj)`, each resolving the attribute lazily."""
++    try:
++        names = dir(obj)
++    except Exception:
++        return {}
++    return {name: ValueEntry(lambda name=name: wrap_runtime(getattr(obj, name))) for name in names}
++
++
++def is_public(name):
++    return not name.startswith("_")
++
++
++class MemberResolver:
++    def __init__(self, inferrer):
++        self.inferrer = inferrer
++
++    def all(self, value):
++        """Every attribute entry of `value`, keyed by name."""
++        if isinstance(value, LocalModule):
++            return self.inferrer.scope_entries(value.context.root)
++        if isinstance(value, RuntimeModule):
++            return runtime_entries(value.obj)
++        if isinstance(value, LocalClass):
++            return self.class_members(value)
++        if isinstance(value, LocalInstance):
++            return self.instance_members(value.cls)
++        if isinstance(value, (RuntimeClass, RuntimeFunction)):
++            return runtime_entries(value.obj)
++        if isinstance(value, RuntimeInstance):
++            return runtime_entries(runtime_sample(value.cls))
++        if isinstance(value, LocalFunction):
++            return runtime_entries(_sample_function)
++        return {}
++
++    def public(self, value):
++        return {name: entry for name, entry in self.all(value).items() if is_public(name)}
++
++    def member(self, value, name):
++        """The value of attribute `name` of `value`, or None."""
++        entry = self.all(value).get(name)
++        if entry is not None:
++            return entry.value()
++        importer = self.inferrer.importer
++        if isinstance(value, LocalModule):
++            return importer.local_submodule(value, name)
++        if isinstance(value, RuntimeModule):
++            return importer.runtime_submodule(value, name)
++        return None
++
++    # -- classes -----------------------------------------------------------
++
++    def mro(self, cls):
++        """The class followed by its locally defined bases (depth first)."""
++        order = []
++
++        def visit(current):
++            if any(current.scope is seen.scope for seen in order):
++                return
++            order.append(current)
++            node = current.node
++            for base in node.bases:
++                value = self.inferrer.infer(base, current.scope.parent, node.lineno)
++                if isinstance(value, LocalClass):
++                    visit(value)
++
++        visit(cls)
++        return order
++
++    def class_members(self, cls):
++        members = {}
++        for current in reversed(self.mro(cls)):
++            members.update(self.inferrer.scope_entries(current.scope))
++        return members
++
++    def instance_members(self, cls):
++        mro = self.mro(cls)
++        members = {}
++        for current in reversed(mro):
++            members.update(self.inferrer.scope_entries(current.scope))
++        for current in reversed(mro):
++            members.update(self.init_attributes(current))
++        return members
++
++    def init_attributes(self, cls):
++        """Entries for `self.<name> = ...` assignments in the class's `__init__`."""
++        init = None
++        for binding in cls.scope.bindings.get("__init__", []):
++            if binding.kind == "def":
++                init = binding.node
++        if init is None:
++            return {}
++        init_scope = cls.scope.module.scope_of(init)
++        positional = init.args.posonlyargs + init.args.args
++        if init_scope is None or not positional:
++            return {}
++        self_name = positional[0].arg
++        entries = {}
++        for node in walk_local(init.body):
++            if isinstance(node, ast.Assign):
++                for target in node.targets:
++                    for attribute, target_node, value in _self_attributes(target, node.value, self_name):
++                        binding = Binding(attribute, target_node.lineno, "assign", node, init_scope, value)
++                        entries[attribute] = BindingEntry(binding, self.inferrer)
++            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
++                for attribute, target_node, _ in _self_attributes(node.target, None, self_name):
++                    if isinstance(node, ast.AugAssign) and attribute in entries:
++                        continue
++                    kind = "assign" if isinstance(node, ast.AnnAssign) else "augassign"
++                    value = node.value if isinstance(node, ast.AnnAssign) else None
++                    extra = {"annotation": node.annotation} if isinstance(node, ast.AnnAssign) else {}
++                    binding = Binding(attribute, target_node.lineno, kind, node, init_scope, value, extra)
++                    entries[attribute] = BindingEntry(binding, self.inferrer)
++        return entries
++
++
++def _self_attributes(target, value, self_name):
++    """Yield (attribute name, target node, value) for `self.attr` targets."""
++    if isinstance(target, ast.Attribute):
++        if isinstance(target.value, ast.Name) and target.value.id == self_name:
++            yield target.attr, target, value
++    elif isinstance(target, (ast.Tuple, ast.List)):
++        values = None
++        if isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(target.elts):
++            values = value.elts
++        for index, element in enumerate(target.elts):
++            yield from _self_attributes(element, values[index] if values else None, self_name)
++    elif isinstance(target, ast.Starred):
++        yield from _self_attributes(target.value, None, self_name)
+
+### sithlib/modules.py (created)
+--- sithlib/modules.py
++++ sithlib/modules.py
+@@ -0,0 +1,128 @@
++"""Module contexts and import resolution (local files first, then installed)."""
++import contextlib
++import importlib
++import io
++import os
++import warnings
++
++from .parsing import parse_tolerant
++from .scopes import ScopeBuilder
++from .source import read_text
++from .errors import SithError
++from .values import LocalModule, RuntimeModule
++
++
++class ModuleContext:
++    """A parsed Python module together with its scope tree."""
++
++    def __init__(self, path, name, tree):
++        self.path = os.path.abspath(path) if path else None
++        self.directory = os.path.dirname(self.path) if self.path else os.getcwd()
++        self.name = name
++        self.tree = tree
++        builder = ScopeBuilder(self)
++        self.root = builder.build(tree)
++        self.scope_by_node = builder.scope_by_node
++
++    @property
++    def is_package(self):
++        return bool(self.path) and os.path.basename(self.path) == "__init__.py"
++
++    def scope_of(self, node):
++        return self.scope_by_node.get(id(node))
++
++
++class Importer:
++    """Resolves module names to values, preferring files in the project directory."""
++
++    def __init__(self, project_dir):
++        self.project_dir = project_dir
++        self._contexts = {}
++        self._runtime = {}
++
++    def register(self, context):
++        if context.path:
++            self._contexts[context.path] = context
++
++    def context_for_file(self, path, name):
++        path = os.path.abspath(path)
++        if path not in self._contexts:
++            try:
++                text = read_text(path)
++            except SithError:
++                return None
++            self._contexts[path] = ModuleContext(path, name, parse_tolerant(text))
++        return self._contexts[path]
++
++    def import_absolute(self, dotted):
++        """Resolve `import dotted` to a module value, or None."""
++        if not dotted:
++            return None
++        path = self._find_local(self.project_dir, dotted.split("."))
++        if path:
++            context = self.context_for_file(path, dotted)
++            return LocalModule(context) if context else None
++        return self._import_runtime(dotted)
++
++    def import_relative(self, context, dotted, level):
++        """Resolve `from <level dots><dotted> import ...` relative to `context`."""
++        base = context.directory
++        for _ in range(level - 1):
++            base = os.path.dirname(base)
++        parts = dotted.split(".") if dotted else []
++        path = self._find_local(base, parts) if parts else _package_init(base)
++        if not path:
++            return None
++        name = ".".join(p for p in [os.path.basename(base)] + parts if p)
++        context = self.context_for_file(path, name)
++        return LocalModule(context) if context else None
++
++    def import_module(self, context, dotted, level=0):
++        if level:
++            return self.import_relative(context, dotted, level)
++        return self.import_absolute(dotted)
++
++    def local_submodule(self, module_value, name):
++        """A submodule `name` of a local package, if such a file exists."""
++        context = module_value.context
++        if not context.is_package:
++            return None
++        path = self._find_local(context.directory, [name])
++        if not path:
++            return None
++        sub = self.context_for_file(path, f"{context.name}.{name}")
++        return LocalModule(sub) if sub else None
++
++    def runtime_submodule(self, module_value, name):
++        if not hasattr(module_value.obj, "__path__"):
++            return None
++        return self._import_runtime(f"{module_value.obj.__name__}.{name}")
++
++    @staticmethod
++    def _find_local(base, parts):
++        directory = base
++        for part in parts[:-1]:
++            directory = os.path.join(directory, part)
++            if not os.path.isdir(directory):
++                return None
++        last = os.path.join(directory, parts[-1])
++        if os.path.isfile(last + ".py"):
++            return last + ".py"
++        return _package_init(last)
++
++    def _import_runtime(self, dotted):
++        if dotted not in self._runtime:
++            module = None
++            try:
++                with warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()):
++                    warnings.simplefilter("ignore")
++                    module = importlib.import_module(dotted)
++            except BaseException:  # importing arbitrary modules may fail in any way
++                module = None
++            self._runtime[dotted] = RuntimeModule(module) if module is not None else None
++        return self._runtime[dotted]
++
++
++def _package_init(directory):
++    init = os.path.join(directory, "__init__.py")
++    return init if os.path.isfile(init) else None
+
+### sithlib/parsing.py (created)
+--- sithlib/parsing.py
++++ sithlib/parsing.py
+@@ -0,0 +1,296 @@
++"""Error-tolerant parsing of Python source into an AST.
++
++Syntax errors are repaired line by line: the offending line is replaced by a
++sequence of progressively more conservative candidates (a placeholder name at
++the cursor, `pass`, and finally a blank line) until the module parses.  Lines
++are never inserted or removed, so AST line numbers match the original file.
++"""
++import ast
++import re
++import time
++import warnings
++
++# Identifier inserted at the cursor to make incomplete expressions parseable.
++# Bindings whose names contain it are ignored by scope analysis.
++PLACEHOLDER = "__sith_cursor__"
++
++# After this many seconds of repairs, everything from the error onward is dropped.
++_TIME_BUDGET = 1.0
++_INDENTATION_ERRORS = ("unindent does not match", "unexpected indent")
++_INDENTED_BLOCK = re.compile(r"expected an indented block after .* on line (\d+)")
++
++_CLOSERS = {"(": ")", "[": "]", "{": "}"}
++# Keywords that can never appear inside a bracketed expression.
++_STATEMENT_KEYWORDS = {
++    "def", "class", "return", "import", "pass", "break", "continue", "raise", "del",
++    "global", "nonlocal", "assert", "while", "with", "try", "except", "finally", "elif",
++}
++# Keywords that, at or below the opening line's indentation, start a new statement.
++_BLOCK_KEYWORDS = {"if", "for", "else", "async", "from", "match", "case"}
++_FIRST_WORD = re.compile(r"[A-Za-z_]\w*")
++
++
++def parse_tolerant(text, cursor=None):
++    """Parse `text`, repairing syntax errors. `cursor` is (line, col) or None."""
++    lines = close_brackets(text.replace("\0", " ").split("\n"))
++    return _Repairer(lines, cursor).run()
++
++
++def close_brackets(lines):
++    """Close brackets left open when a new statement evidently begins.
++
++    An unclosed bracket otherwise swallows every following line, and the
++    parser then blames those (valid) lines instead of the incomplete one.
++    """
++    lines = list(lines)
++    stack = []  # (bracket, line index)
++    triple = None
++    for index, line in enumerate(lines):
++        if stack and triple is None and _starts_statement(line, lines[stack[0][1]]):
++            _append_closers(lines, stack, index)
++        triple = _scan_brackets(line, stack, triple, index)
++    if stack and triple is None:
++        _append_closers(lines, stack, len(lines))
++    return lines
++
++
++def _starts_statement(line, opener_line):
++    code = line.strip()
++    if not code or code.startswith("#"):
++        return False
++    indent = len(_indent_of(line))
++    opener_indent = len(_indent_of(opener_line))
++    match = _FIRST_WORD.match(code)
++    word = match.group(0) if match else ""
++    if word in _STATEMENT_KEYWORDS:
++        return True
++    if indent <= opener_indent and (word in _BLOCK_KEYWORDS or code.startswith("@")):
++        return True
++    return indent < opener_indent and code[0] not in ")]}"
++
++
++def _append_closers(lines, stack, before):
++    """Append closers for `stack` to the last code line before index `before`."""
++    for index in range(before - 1, stack[0][1] - 1, -1):
++        code = strip_comment(lines[index]).rstrip()
++        if code.strip():
++            lines[index] = code + "".join(_CLOSERS[b] for b, _ in reversed(stack))
++            break
++    stack.clear()
++
++
++def _scan_brackets(line, stack, triple, index):
++    """Update the bracket stack with `line`; returns the open triple quote, if any."""
++    i = 0
++    while i < len(line):
++        if triple is not None:
++            end = line.find(triple, i)
++            if end < 0:
++                return triple
++            i = end + 3
++            triple = None
++            continue
++        char = line[i]
++        if char == "#":
++            break
++        if char in "\"'":
++            if line.startswith(char * 3, i):
++                triple = char * 3
++                i += 3
++                continue
++            i += 1
++            while i < len(line) and line[i] != char:
++                i += 2 if line[i] == "\\" else 1
++        elif char in _CLOSERS:
++            stack.append((char, index))
++        elif char in ")]}" and stack and _CLOSERS[stack[-1][0]] == char:
++            stack.pop()
++        i += 1
++    return triple
++
++
++def strip_comment(line):
++    """Remove a trailing `#` comment, ignoring `#` inside string literals."""
++    quote = None
++    i = 0
++    while i < len(line):
++        char = line[i]
++        if quote:
++            if char == "\\":
++                i += 1
++            elif char == quote:
++                quote = None
++        elif char in "\"'":
++            quote = char
++        elif char == "#":
++            return line[:i]
++        i += 1
++    return line
++
++
++def _neighbour_indent(lines):
++    """Indentation of the first code line in `lines`, or None."""
++    for line in lines:
++        if line.strip() and not line.strip().startswith("#"):
++            return len(_indent_of(line))
++    return None
++
++
++def _indent_of(line):
++    return line[: len(line) - len(line.lstrip())]
++
++
++class _Repairer:
++    def __init__(self, lines, cursor):
++        self.original = lines
++        self.state = list(lines)
++        self.cursor = cursor
++        self.candidates = {}
++        self.positions = {}
++        self.pass_appended = set()
++        self.string_closed = False
++        self.truncated = False
++        self.deadline = None
++
++    def run(self):
++        limit = 4 * len(self.state) + 20
++        self.deadline = time.monotonic() + _TIME_BUDGET
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore")
++            for _ in range(limit):
++                try:
++                    return ast.parse("\n".join(self.state))
++                except (SyntaxError, ValueError) as error:
++                    if not self._repair(error):
++                        break
++        return ast.Module(body=[], type_ignores=[])
++
++    def _repair(self, error):
++        count = len(self.state)
++        line = getattr(error, "lineno", None) or count
++        line = max(1, min(line, count))
++        message = str(getattr(error, "msg", ""))
++        if "unterminated triple-quoted string" in message and self._close_string(error, line):
++            return True
++        if not self.truncated and time.monotonic() > self.deadline:
++            self._drop_from(line)
++            return True
++        match = _INDENTED_BLOCK.search(message)
++        if match:
++            if self._is_cursor_line(line) and self._advance(line):
++                return True
++            if self._append_pass(int(match.group(1)), line):
++                return True
++        if any(text in message for text in _INDENTATION_ERRORS) and self._blank(line):
++            return True
++        if self._advance(line):
++            return True
++        for previous in range(line - 1, 0, -1):
++            if self._advance(previous):
++                return True
++        return False
++
++    def _is_cursor_line(self, line):
++        return self.cursor is not None and self.cursor[0] == line
++
++    def _drop_from(self, line):
++        """Give up on the rest of the file: blank every line from `line` on."""
++        for index in range(line - 1, len(self.state)):
++            self.state[index] = ""
++            self._line_candidates(index + 1)
++            self.positions[index + 1] = len(self.candidates[index + 1]) - 1
++        self.truncated = True
++
++    def _blank(self, line):
++        """Jump straight to the blank candidate (indentation cannot be fixed in place)."""
++        options = self._line_candidates(line)
++        if self.state[line - 1] == "":
++            return False
++        self.positions[line] = len(options) - 1
++        self.state[line - 1] = ""
++        return True
++
++    def _close_string(self, error, line):
++        """Terminate a triple-quoted string that runs to the end of the file."""
++        offset = (getattr(error, "offset", None) or 1) - 1
++        quote = self.state[line - 1][offset:offset + 3]
++        if quote not in ('"""', "'''") or self.string_closed:
++            return False
++        self.state[-1] += " " + quote
++        self.string_closed = True
++        return True
++
++    def _append_pass(self, header_line, error_line):
++        """Give a block header with a missing body an inline `pass` body."""
++        last = min(max(error_line, header_line), len(self.state))
++        for line in range(last, header_line - 1, -1):
++            code = strip_comment(self.state[line - 1]).rstrip()
++            if code.endswith(":") and line not in self.pass_appended:
++                self.state[line - 1] = code + " pass"
++                self.pass_appended.add(line)
++                return True
++        return False
++
++    def _line_candidates(self, line):
++        if line not in self.candidates:
++            text = self.original[line - 1]
++            indent = _indent_of(text)
++            options = [text]
++            if self._is_cursor_line(line):
++                col = min(self.cursor[1], len(text))
++                options.append(text[:col] + PLACEHOLDER + text[col:])
++                options.append(text[:col] + PLACEHOLDER)
++            if self._out_of_place(line, text):
++                options.append("")
++            header = self._header_replacement(line, text)
++            if header:
++                options.append(header)
++            options += [indent + "pass", ""]
++            unique = []
++            for option in options:
++                if option not in unique:
++                    unique.append(option)
++            self.candidates[line] = unique
++            self.positions[line] = 0
++        return self.candidates[line]
++
++    def _out_of_place(self, line, text):
++        """True for a line dedented below both its neighbouring code lines."""
++        indent = len(_indent_of(text))
++        before = _neighbour_indent(reversed(self.original[: line - 1]))
++        after = _neighbour_indent(self.original[line:])
++        return before is not None and after is not None and indent < min(before, after)
++
++    def _header_replacement(self, line, text):
++        """A valid block header for a broken line that is followed by a block.
++
++        Keeping a header lets the indented body that follows still parse,
++        instead of failing line by line with "unexpected indent".
++        """
++        indent = _indent_of(text)
++        for following in self.original[line:]:
++            if following.strip() and not following.strip().startswith("#"):
++                if len(_indent_of(following)) <= len(indent):
++                    return None
++                break
++        else:
++            return None
++        word = (_FIRST_WORD.match(text.strip()) or [""])[0]
++        if word in ("def", "async"):
++            return f"{indent}def {PLACEHOLDER}():"
++        if word == "class":
++            return f"{indent}class {PLACEHOLDER}:"
++        return f"{indent}if True:"
++
++    def _advance(self, line):
++        """Switch `line` to its next repair candidate; False when exhausted."""
++        options = self._line_candidates(line)
++        position = self.positions[line]
++        while position + 1 < len(options):
++            position += 1
++            if options[position] != self.state[line - 1]:
++                self.positions[line] = position
++                self.state[line - 1] = options[position]
++                return True
++        self.positions[line] = position
++        return False
+
+### sithlib/ranking.py (created)
+--- sithlib/ranking.py
++++ sithlib/ranking.py
+@@ -0,0 +1,18 @@
++"""Ordering of completion results."""
++
++
++def name_group(name):
++    """0 for public names, 1 for private (`_x`), 2 for dunders (`__x__`)."""
++    if name.startswith("__") and name.endswith("__"):
++        return 2
++    if name.startswith("_"):
++        return 1
++    return 0
++
++
++def sort_names(names):
++    return sorted(names, key=lambda name: (name_group(name), name.lower(), name))
++
++
++def sort_keywords(keywords):
++    return sorted(keywords, key=lambda name: (name.lower(), name))
+
+### sithlib/scopes.py (created)
+--- sithlib/scopes.py
++++ sithlib/scopes.py
+@@ -0,0 +1,326 @@
++"""Scope analysis: which names each scope binds, and where."""
++import ast
++from dataclasses import dataclass, field
++
++from .parsing import PLACEHOLDER
++
++MODULE = "module"
++FUNCTION = "function"
++CLASS = "class"
++LAMBDA = "lambda"
++COMPREHENSION = "comprehension"
++
++_FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
++_COMPREHENSION_NODES = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
++
++
++@dataclass(eq=False)
++class Binding:
++    """A single place where a name is bound."""
++
++    name: str
++    line: int
++    kind: str
++    node: ast.AST
++    scope: "Scope"
++    value: ast.AST = None
++    extra: dict = field(default_factory=dict)
++
++
++@dataclass(eq=False)
++class StarImport:
++    """A `from module import *` statement."""
++
++    module: str
++    level: int
++    line: int
++    scope: "Scope"
++
++
++class Scope:
++    """A namespace: module, function, class, lambda or comprehension."""
++
++    def __init__(self, kind, node, parent, module):
++        self.kind = kind
++        self.node = node
++        self.parent = parent
++        self.module = module
++        self.bindings = {}
++        self.star_imports = []
++        self.children = []
++        self.global_names = set()
++        self.nonlocal_names = set()
++        if parent is not None:
++            parent.children.append(self)
++
++    def add(self, binding):
++        self.bindings.setdefault(binding.name, []).append(binding)
++
++    def chain(self):
++        """This scope followed by all its ancestors."""
++        scope = self
++        while scope is not None:
++            yield scope
++            scope = scope.parent
++
++    def root(self):
++        scope = self
++        while scope.parent is not None:
++            scope = scope.parent
++        return scope
++
++
++def iter_target_names(target, value):
++    """Yield (Name node, value expression or None) pairs for an assignment target."""
++    if isinstance(target, ast.Name):
++        yield target, value
++    elif isinstance(target, (ast.Tuple, ast.List)):
++        values = None
++        if (
++            isinstance(value, (ast.Tuple, ast.List))
++            and len(value.elts) == len(target.elts)
++            and not any(isinstance(e, ast.Starred) for e in target.elts + value.elts)
++        ):
++            values = value.elts
++        for index, element in enumerate(target.elts):
++            yield from iter_target_names(element, values[index] if values else None)
++    elif isinstance(target, ast.Starred):
++        yield from iter_target_names(target.value, None)
++
++
++def function_parameters(arguments):
++    """All parameter `arg` nodes of an `ast.arguments`, in declaration order."""
++    params = list(arguments.posonlyargs) + list(arguments.args)
++    if arguments.vararg:
++        params.append(arguments.vararg)
++    params += list(arguments.kwonlyargs)
++    if arguments.kwarg:
++        params.append(arguments.kwarg)
++    return params
++
++
++def walk_local(statements):
++    """Walk nodes of a body without descending into nested scopes."""
++    stack = list(reversed(statements))
++    while stack:
++        node = stack.pop()
++        yield node
++        if isinstance(node, _FUNCTION_NODES + (ast.ClassDef, ast.Lambda)):
++            continue
++        stack.extend(reversed(list(ast.iter_child_nodes(node))))
++
++
++def _declared(statements, kind):
++    """Names declared `global`/`nonlocal` directly in a function body."""
++    names = set()
++    stack = list(statements)
++    while stack:
++        node = stack.pop()
++        if isinstance(node, kind):
++            names.update(node.names)
++        if isinstance(node, _FUNCTION_NODES + (ast.ClassDef, ast.Lambda)):
++            continue
++        stack.extend(ast.iter_child_nodes(node))
++    return names
++
++
++class ScopeBuilder:
++    """Walks a module AST and builds its tree of scopes."""
++
++    def __init__(self, module_context):
++        self.module_context = module_context
++        self.scope_by_node = {}
++
++    def build(self, tree):
++        root = self._new_scope(MODULE, tree, None)
++        self._statements(root, tree.body)
++        return root
++
++    def _new_scope(self, kind, node, parent):
++        scope = Scope(kind, node, parent, self.module_context)
++        self.scope_by_node[id(node)] = scope
++        return scope
++
++    # -- binding helpers -------------------------------------------------
++
++    def _bind(self, scope, name, line, kind, node, value=None, **extra):
++        if PLACEHOLDER in name:
++            return
++        if scope.kind == FUNCTION:
++            if name in scope.nonlocal_names:
++                return
++            if name in scope.global_names:
++                scope = scope.root()
++        scope.add(Binding(name, line, kind, node, scope, value, extra))
++
++    def _bind_target(self, scope, target, kind, value, node, **extra):
++        for name_node, element_value in iter_target_names(target, value):
++            self._bind(scope, name_node.id, name_node.lineno, kind, node, element_value, **extra)
++        for child in ast.walk(target):
++            if isinstance(child, (ast.Attribute, ast.Subscript)):
++                self._expression(scope, child)
++
++    def _bind_arguments(self, scope, function_node):
++        for index, param in enumerate(function_parameters(function_node.args)):
++            self._bind(scope, param.arg, function_node.lineno, "param", function_node,
++                       arg=param, index=index)
++
++    # -- statements --------------------------------------------------------
++
++    def _statements(self, scope, statements):
++        for statement in statements:
++            self._statement(scope, statement)
++
++    def _statement(self, scope, node):
++        handler = getattr(self, "_stmt_" + type(node).__name__, None)
++        if handler is not None:
++            handler(scope, node)
++            return
++        for child in ast.iter_child_nodes(node):
++            if isinstance(child, ast.stmt):
++                self._statement(scope, child)
++            else:
++                self._expression(scope, child)
++
++    def _stmt_FunctionDef(self, scope, node):
++        for expression in node.decorator_list + node.args.defaults + node.args.kw_defaults:
++            self._expression(scope, expression)
++        for param in function_parameters(node.args):
++            self._expression(scope, param.annotation)
++        self._expression(scope, node.returns)
++        self._bind(scope, node.name, node.lineno, "def", node)
++        child = self._new_scope(FUNCTION, node, scope)
++        child.global_names = _declared(node.body, ast.Global)
++        child.nonlocal_names = _declared(node.body, ast.Nonlocal)
++        self._bind_arguments(child, node)
++        self._statements(child, node.body)
++
++    _stmt_AsyncFunctionDef = _stmt_FunctionDef
++
++    def _stmt_ClassDef(self, scope, node):
++        for expression in node.decorator_list + node.bases + [k.value for k in node.keywords]:
++            self._expression(scope, expression)
++        self._bind(scope, node.name, node.lineno, "class", node)
++        child = self._new_scope(CLASS, node, scope)
++        self._statements(child, node.body)
++
++    def _stmt_Assign(self, scope, node):
++        self._expression(scope, node.value)
++        for target in node.targets:
++            self._bind_target(scope, target, "assign", node.value, node)
++
++    def _stmt_AnnAssign(self, scope, node):
++        self._expression(scope, node.value)
++        self._expression(scope, node.annotation)
++        if isinstance(node.target, ast.Name):
++            self._bind(scope, node.target.id, node.target.lineno, "assign", node, node.value,
++                       annotation=node.annotation)
++        else:
++            self._expression(scope, node.target)
++
++    def _stmt_AugAssign(self, scope, node):
++        self._expression(scope, node.value)
++        target = node.target
++        if isinstance(target, ast.Name):
++            if target.id not in scope.bindings:
++                self._bind(scope, target.id, target.lineno, "augassign", node)
++        else:
++            self._expression(scope, target)
++
++    def _stmt_For(self, scope, node):
++        self._expression(scope, node.iter)
++        self._bind_target(scope, node.target, "loop", None, node)
++        self._statements(scope, node.body)
++        self._statements(scope, node.orelse)
++
++    _stmt_AsyncFor = _stmt_For
++
++    def _stmt_With(self, scope, node):
++        for item in node.items:
++            self._expression(scope, item.context_expr)
++            if item.optional_vars is not None:
++                self._bind_target(scope, item.optional_vars, "with", None, node,
++                                  context=item.context_expr)
++        self._statements(scope, node.body)
++
++    _stmt_AsyncWith = _stmt_With
++
++    def _stmt_Try(self, scope, node):
++        self._statements(scope, node.body)
++        for handler in node.handlers:
++            self._expression(scope, handler.type)
++            if handler.name:
++                self._bind(scope, handler.name, handler.lineno, "except", handler,
++                           exception=handler.type)
++            self._statements(scope, handler.body)
++        self._statements(scope, node.orelse)
++        self._statements(scope, node.finalbody)
++
++    _stmt_TryStar = _stmt_Try
++
++    def _stmt_Match(self, scope, node):
++        self._expression(scope, node.subject)
++        for case in node.cases:
++            for pattern in ast.walk(case.pattern):
++                for attribute in ("name", "rest"):
++                    name = getattr(pattern, attribute, None)
++                    if isinstance(name, str):
++                        self._bind(scope, name, pattern.lineno, "pattern", case)
++                if isinstance(pattern, ast.MatchValue):
++                    self._expression(scope, pattern.value)
++            self._expression(scope, case.guard)
++            self._statements(scope, case.body)
++
++    def _stmt_Import(self, scope, node):
++        for alias in node.names:
++            if alias.asname:
++                self._bind(scope, alias.asname, node.lineno, "import", node, module=alias.name)
++            else:
++                top = alias.name.split(".")[0]
++                self._bind(scope, top, node.lineno, "import", node, module=top)
++
++    def _stmt_ImportFrom(self, scope, node):
++        for alias in node.names:
++            if alias.name == "*":
++                scope.star_imports.append(StarImport(node.module or "", node.level, node.lineno, scope))
++            else:
++                self._bind(scope, alias.asname or alias.name, node.lineno, "importfrom", node,
++                           module=node.module or "", level=node.level, attribute=alias.name)
++
++    def _stmt_Global(self, scope, node):
++        pass
++
++    _stmt_Nonlocal = _stmt_Global
++
++    # -- expressions -------------------------------------------------------
++
++    def _expression(self, scope, node):
++        if node is None or not isinstance(node, ast.AST):
++            return
++        if isinstance(node, ast.Lambda):
++            for default in node.args.defaults + node.args.kw_defaults:
++                self._expression(scope, default)
++            child = self._new_scope(LAMBDA, node, scope)
++            self._bind_arguments(child, node)
++            self._expression(child, node.body)
++        elif isinstance(node, _COMPREHENSION_NODES):
++            child = self._new_scope(COMPREHENSION, node, scope)
++            for index, generator in enumerate(node.generators):
++                self._expression(scope if index == 0 else child, generator.iter)
++                self._bind_target(child, generator.target, "comprehension", None, generator)
++                for condition in generator.ifs:
++                    self._expression(child, condition)
++            if isinstance(node, ast.DictComp):
++                self._expression(child, node.key)
++                self._expression(child, node.value)
++            else:
++                self._expression(child, node.elt)
++        elif isinstance(node, ast.NamedExpr):
++            self._expression(scope, node.value)
++            target_scope = scope
++            while target_scope.kind == COMPREHENSION:
++                target_scope = target_scope.parent
++            self._bind(target_scope, node.target.id, node.target.lineno, "assign", node, node.value)
++        else:
++            for child in ast.iter_child_nodes(node):
++                self._expression(scope, child)
+
+### sithlib/source.py (created)
+--- sithlib/source.py
++++ sithlib/source.py
+@@ -0,0 +1,59 @@
++"""Loading source documents and validating cursor positions."""
++import os
++from dataclasses import dataclass, field
++
++from .errors import SithError
++
++
++@dataclass
++class Document:
++    """A source file split into lines, with cursor-related helpers."""
++
++    path: str
++    text: str
++    lines: list = field(default_factory=list)
++
++    @property
++    def directory(self):
++        return os.path.dirname(os.path.abspath(self.path))
++
++    def check_position(self, line, col):
++        """Validate a 1-based line and 0-based column."""
++        if line < 1 or line > len(self.lines):
++            raise SithError(f"line {line} is out of range (file has {len(self.lines)} lines)")
++        length = len(self.lines[line - 1])
++        if col < 0 or col > length:
++            raise SithError(f"column {col} is out of range (line {line} has {length} characters)")
++
++    def text_before(self, line, col):
++        """All source text preceding the cursor."""
++        return "\n".join(self.lines[: line - 1] + [self.lines[line - 1][:col]])
++
++
++def normalize_newlines(text):
++    return text.replace("\r\n", "\n").replace("\r", "\n")
++
++
++def read_text(path):
++    """Read a file as UTF-8 text, raising SithError on any problem."""
++    if not os.path.exists(path):
++        raise SithError(f"file not found: {path}")
++    if not os.path.isfile(path):
++        raise SithError(f"not a regular file: {path}")
++    try:
++        with open(path, "rb") as handle:
++            raw = handle.read()
++    except OSError as exc:
++        raise SithError(f"cannot read {path}: {exc}") from exc
++    try:
++        text = raw.decode("utf-8")
++    except UnicodeDecodeError as exc:
++        raise SithError(f"file is not valid UTF-8: {path}") from exc
++    if text.startswith("\ufeff"):
++        text = text[1:]
++    return normalize_newlines(text)
++
++
++def load_document(path):
++    text = read_text(path)
++    return Document(path=path, text=text, lines=text.split("\n"))
+
+### sithlib/values.py (created)
+--- sithlib/values.py
++++ sithlib/values.py
+@@ -0,0 +1,130 @@
++"""Inferred values: what an expression evaluates to, statically."""
++import inspect
++
++MODULE = "module"
++CLASS = "class"
++FUNCTION = "function"
++INSTANCE = "instance"
++
++
++class Value:
++    kind = None
++
++    @property
++    def type_name(self):
++        return None
++
++
++class LocalModule(Value):
++    """A module parsed from a project source file."""
++
++    kind = MODULE
++
++    def __init__(self, context):
++        self.context = context
++
++
++class RuntimeModule(Value):
++    """An installed module, imported for introspection."""
++
++    kind = MODULE
++
++    def __init__(self, obj):
++        self.obj = obj
++
++
++class LocalClass(Value):
++    """A class defined by a `class` statement in parsed source."""
++
++    kind = CLASS
++
++    def __init__(self, scope):
++        self.scope = scope
++
++    @property
++    def node(self):
++        return self.scope.node
++
++    @property
++    def name(self):
++        return self.scope.node.name
++
++
++class LocalFunction(Value):
++    """A `def` or `lambda` from parsed source."""
++
++    kind = FUNCTION
++
++    def __init__(self, scope):
++        self.scope = scope
++
++    @property
++    def node(self):
++        return self.scope.node
++
++
++class LocalInstance(Value):
++    kind = INSTANCE
++
++    def __init__(self, cls):
++        self.cls = cls
++
++    @property
++    def type_name(self):
++        return self.cls.name
++
++
++class RuntimeClass(Value):
++    kind = CLASS
++
++    def __init__(self, obj):
++        self.obj = obj
++
++
++class RuntimeFunction(Value):
++    kind = FUNCTION
++
++    def __init__(self, obj):
++        self.obj = obj
++
++
++class RuntimeInstance(Value):
++    """An instance of a runtime class (also used for literals)."""
++
++    kind = INSTANCE
++
++    def __init__(self, cls):
++        self.cls = cls
++
++    @property
++    def type_name(self):
++        return self.cls.__name__
++
++
++def wrap_runtime(obj):
++    """Wrap a live Python object as a Value (None for opaque data descriptors)."""
++    if inspect.ismodule(obj):
++        return RuntimeModule(obj)
++    if inspect.isclass(obj):
++        return RuntimeClass(obj)
++    origin = getattr(obj, "__origin__", None)
++    if inspect.isclass(origin):  # generic aliases such as typing.List or list[int]
++        return RuntimeClass(origin)
++    if callable(obj):
++        return RuntimeFunction(obj)
++    if inspect.isdatadescriptor(obj):
++        return None
++    return RuntimeInstance(type(obj))
++
++
++# Builtin types whose attributes are introspected on a real (empty) instance,
++# so that e.g. `(1).real` is known to be an int rather than a descriptor.
++_SAMPLE_TYPES = (bool, int, float, complex, str, bytes, bytearray, list, tuple, dict, set,
++                 frozenset, type(None))
++
++
++def runtime_sample(cls):
++    """An instance of `cls` to introspect, or the class itself."""
++    if cls in _SAMPLE_TYPES:
++        return cls()
++    return cls
+
+### tests/test_sith.py (created)
+--- tests/test_sith.py
++++ tests/test_sith.py
+@@ -0,0 +1,241 @@
++"""End-to-end tests for `sith.py complete`."""
++import json
++import os
++import subprocess
++import sys
++import tempfile
++import unittest
++
++SITH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sith.py")
++
++
++def dedent(source):
++    """Like textwrap.dedent, but keeps the indentation of whitespace-only lines."""
++    lines = source.split("\n")
++    indents = [len(l) - len(l.lstrip()) for l in lines if l.strip()]
++    margin = min(indents) if indents else 0
++    return "\n".join(l[min(margin, len(l) - len(l.lstrip())):] for l in lines)
++
++
++class SithTestCase(unittest.TestCase):
++    def setUp(self):
++        self._tmp = tempfile.TemporaryDirectory()
++        self.dir = self._tmp.name
++
++    def tearDown(self):
++        self._tmp.cleanup()
++
++    def write(self, name, source):
++        path = os.path.join(self.dir, name)
++        os.makedirs(os.path.dirname(path), exist_ok=True)
++        with open(path, "w", encoding="utf-8") as handle:
++            handle.write(dedent(source))
++        return path
++
++    def run_sith(self, *args):
++        return subprocess.run([sys.executable, SITH, "complete", *map(str, args)],
++                              capture_output=True, text=True)
++
++    def complete(self, source, line, col, *flags, name="main.py"):
++        path = self.write(name, source)
++        result = self.run_sith(path, line, col, *flags)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertTrue(result.stdout.endswith("\n"))
++        self.assertNotIn(" ", result.stdout.split('"description"')[0].replace('" ', ""))
++        return json.loads(result.stdout)["completions"]
++
++    @staticmethod
++    def by_name(completions):
++        return {c["name"]: c for c in completions}
++
++    @staticmethod
++    def names(completions, include_keywords=True):
++        return [c["name"] for c in completions if include_keywords or c["type"] != "keyword"]
++
++
++class NameCompletionTests(SithTestCase):
++    def test_builtin_prefix(self):
++        result = self.by_name(self.complete("pr", 1, 2))
++        self.assertEqual(result["print"], {"name": "print", "complete": "int", "type": "function",
++                                           "description": "def print(...)"})
++        self.assertEqual(result["property"]["description"], "class property")
++        self.assertEqual(result["property"]["complete"], "operty")
++
++    def test_case_insensitive_complete_by_length(self):
++        result = self.by_name(self.complete("PRI", 1, 3))
++        self.assertEqual(result["print"]["complete"], "nt")
++
++    def test_scopes_and_visibility(self):
++        source = "\n".join([
++            "import os",
++            "GLOBAL = 1",
++            "def outer(p, q=3):",
++            "    local = [1]",
++            "    def inner():",
++            "        z = 1",
++            "        ",
++            "    return inner",
++            "LATER = 2",
++        ])
++        result = self.by_name(self.complete(source, 7, 8))
++        for name in ("z", "local", "p", "q", "inner", "outer", "GLOBAL", "os", "print"):
++            self.assertIn(name, result)
++        self.assertNotIn("LATER", result)
++        self.assertEqual(result["p"]["type"], "param")
++        self.assertEqual(result["os"]["description"], "module os")
++        self.assertEqual(result["local"]["description"], "instance of list")
++
++    def test_not_visible_before_definition(self):
++        source = "a = 1\n\nb = 2\n"
++        names = self.names(self.complete(source, 2, 0))
++        self.assertIn("a", names)
++        self.assertNotIn("b", names)
++
++    def test_ordering(self):
++        source = "_priv = 1\n__dund__ = 2\nZeta = 3\nalpha = 4\n\n"
++        completions = self.complete(source, 5, 0)
++        names = self.names(completions)
++        self.assertLess(names.index("alpha"), names.index("Zeta"))
++        self.assertLess(names.index("Zeta"), names.index("_priv"))
++        self.assertLess(names.index("_priv"), names.index("__dund__"))
++        first_keyword = next(i for i, c in enumerate(completions) if c["type"] == "keyword")
++        self.assertTrue(all(c["type"] == "keyword" for c in completions[first_keyword:]))
++        keywords = names[first_keyword:]
++        self.assertEqual(keywords, sorted(keywords, key=str.lower))
++
++    def test_keywords_included(self):
++        result = self.by_name(self.complete("wh", 1, 2))
++        self.assertEqual(result["while"], {"name": "while", "complete": "ile", "type": "keyword",
++                                           "description": "while"})
++
++    def test_fuzzy(self):
++        names = self.names(self.complete("isins", 1, 5))
++        self.assertIn("isinstance", names)
++        names = self.names(self.complete("isnc", 1, 4, "--fuzzy"))
++        self.assertIn("isinstance", names)
++        completion = self.by_name(self.complete("isnc", 1, 4, "--fuzzy"))["isinstance"]
++        self.assertEqual(completion["complete"], "stance")
++
++    def test_star_import_local_module(self):
++        self.write("helper.py", "def helper_fn(): pass\nVALUE = 3\n_hidden = 1\n")
++        result = self.by_name(self.complete("from helper import *\n", 2, 0))
++        self.assertEqual(result["helper_fn"]["type"], "function")
++        self.assertEqual(result["VALUE"]["description"], "instance of int")
++        self.assertNotIn("_hidden", result)
++
++    def test_star_import_installed(self):
++        result = self.by_name(self.complete("from os import *\ngetc", 2, 4))
++        self.assertIn("getcwd", result)
++
++    def test_from_import_types(self):
++        source = "from os.path import join\nfrom os import path\nfrom collections import OrderedDict\n"
++        result = self.by_name(self.complete(source, 4, 0))
++        self.assertEqual(result["join"]["type"], "function")
++        self.assertEqual(result["path"]["type"], "module")
++        self.assertEqual(result["OrderedDict"]["type"], "class")
++
++    def test_class_body_scope(self):
++        source = "class A:\n    x = 1\n    \n"
++        self.assertIn("x", self.names(self.complete(source, 3, 4)))
++        source = "class A:\n    x = 1\n    def m(self):\n        \n"
++        names = self.names(self.complete(source, 4, 8))
++        self.assertNotIn("x", names)
++        self.assertIn("self", names)
++
++
++class AttributeCompletionTests(SithTestCase):
++    SOURCE = """\
++        import os
++        class Base:
++            attr = []
++            def base_method(self):
++                pass
++
++        class Child(Base):
++            def __init__(self, x):
++                self.x = x
++                self.items = {}
++
++            def method(self):
++                return Child(1)
++
++        c = Child(2)
++        """
++
++    def test_instance(self):
++        source = self.SOURCE + "c.\n"
++        result = self.by_name(self.complete(source, 16, 2))
++        self.assertEqual(set(result), {"attr", "base_method", "method", "x", "items", "__init__"})
++        self.assertEqual(result["items"]["description"], "instance of dict")
++        self.assertTrue(all(c["type"] != "keyword" for c in result.values()))
++
++    def test_class(self):
++        source = self.SOURCE + "Child.\n"
++        names = self.names(self.complete(source, 16, 6))
++        self.assertEqual(names, ["attr", "base_method", "method", "__init__"])
++
++    def test_method_return(self):
++        source = self.SOURCE + "c.method().ite\n"
++        self.assertEqual(self.names(self.complete(source, 16, 14)), ["items"])
++
++    def test_self(self):
++        source = "class A:\n    def __init__(self):\n        self.v = 1\n    def m(self):\n        self.\n"
++        self.assertEqual(self.names(self.complete(source, 5, 13)), ["m", "v", "__init__"])
++
++    def test_module(self):
++        source = self.SOURCE + "os.pat\n"
++        names = self.names(self.complete(source, 16, 6))
++        self.assertIn("path", names)
++        self.assertTrue(all(not n.startswith("_") for n in self.names(
++            self.complete(self.SOURCE + "os.\n", 16, 3))))
++
++    def test_literals(self):
++        self.assertIn("upper", self.names(self.complete('"abc".up', 1, 8)))
++        self.assertIn("append", self.names(self.complete("[1, 2].", 1, 7)))
++        self.assertIn("keys", self.names(self.complete("{}.", 1, 3)))
++        self.assertIn("add", self.names(self.complete("{1}.", 1, 4)))
++
++    def test_unknown_receiver(self):
++        self.assertEqual(self.complete("unknown_thing.", 1, 14), [])
++
++
++class ToleranceAndErrorTests(SithTestCase):
++    def test_syntax_errors(self):
++        source = """\
++            import os
++            def broken(:
++                pass
++            value = 1
++            def f():
++                print(os.path.join(
++            va
++            """
++        self.assertIn("value", self.names(self.complete(source, 7, 2)))
++
++    def test_incomplete_block_at_eof(self):
++        source = "def f(arg):\n    "
++        self.assertIn("arg", self.names(self.complete(source, 2, 4)))
++
++    def test_position_errors(self):
++        path = self.write("main.py", "x = 1\n")
++        self.assertEqual(self.run_sith(path, 10, 0).returncode, 1)
++        self.assertEqual(self.run_sith(path, 1, 6).returncode, 1)
++        self.assertEqual(self.run_sith(path, 0, 0).returncode, 1)
++        self.assertEqual(self.run_sith(path, 1, 5).returncode, 0)
++
++    def test_file_errors(self):
++        result = self.run_sith(os.path.join(self.dir, "missing.py"), 1, 0)
++        self.assertEqual(result.returncode, 1)
++        self.assertTrue(result.stderr)
++        self.assertEqual(self.run_sith(self.dir, 1, 0).returncode, 1)
++        bad = os.path.join(self.dir, "bad.py")
++        with open(bad, "wb") as handle:
++            handle.write(b"\xff\xfe\x00")
++        self.assertEqual(self.run_sith(bad, 1, 0).returncode, 1)
++
++    def test_zero_completions_exit_zero(self):
++        self.assertEqual(self.complete("zzzzqqq", 1, 7), [])
++
++
++if __name__ == "__main__":
++    unittest.main()
+

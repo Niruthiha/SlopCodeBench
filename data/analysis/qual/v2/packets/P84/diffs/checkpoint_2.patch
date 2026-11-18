@@ -1,0 +1,971 @@
+### appctl_cli/app.py (modified)
+--- appctl_cli/app.py
++++ appctl_cli/app.py
+@@ -1,50 +1,167 @@
+-"""Top-level orchestration: rewrite, parse, resolve, validate, run."""
++"""Top-level orchestration: config, aliases, rewrite, parse, resolve, validate, run."""
+ 
+ import os
+ import sys
+ 
+-from .arguments import parse_argv
++from . import config_loader
++from .arguments import END_OF_OPTIONS, is_assoc_token, parse_argv
+ from .commands import build_command_tree
+ from .context import Context
+ from .errors import AppctlError, UsageError
+ from .help import render_root_help, render_usage
++from .output import Output
++from .remote import run_remote
+ from .resolver import resolve
+ from .rewrites import apply_rewrites
+-from .runtime_config import build_runtime_config, is_strict_mode
++from .runtime_config import build_runtime_config, deprecation_warnings, is_strict_mode
++from .suggest import get_suggestion
+ from .validator import ArgumentValidator
+-from .output import Output
+ 
+ 
+-def main(argv=None, environ=None, stdout=None, stderr=None):
+-    argv = sys.argv[1:] if argv is None else list(argv)
+-    environ = os.environ if environ is None else environ
+-    strict = is_strict_mode(environ)
++def extract_alias(argv):
++    """Return ``(alias, argv_without_alias)``; the alias is the first non-flag token."""
++    for index, token in enumerate(argv):
++        if token == END_OF_OPTIONS:
++            break
++        if is_assoc_token(token):
++            continue
++        if config_loader.is_alias(token):
++            return token, argv[:index] + argv[index + 1:]
++        break
++    return None, list(argv)
+ 
+-    parsed = parse_argv(apply_rewrites(argv), strict=strict)
+-    runtime = build_runtime_config(parsed.runtime)
+-    output = Output(quiet=bool(runtime["quiet"]), debug=bool(runtime["debug"]),
+-                    stdout=stdout, stderr=stderr)
+-    root = build_command_tree()
+ 
++def _unique(items):
++    seen = []
++    for item in items:
++        if item not in seen:
++            seen.append(item)
++    return seen
++
++
++def check_disabled(command, typed, disabled):
++    """Raise if the command or one of its parents is disabled."""
++    disabled = {" ".join(str(entry).split()) for entry in disabled}
++    for path in (command.path, typed[:len(command.path)]):
++        for depth in range(1, len(path) + 1):
++            name = " ".join(path[:depth])
++            if name in disabled:
++                raise AppctlError(f"The '{name}' command has been disabled.")
++
++
++def guarded(output, action, *args):
++    """Run ``action`` and report user-facing errors; return the exit code."""
+     try:
+-        if not parsed.positional:
+-            output.line(render_root_help(root))
+-            return 0
+-        command, remaining = resolve(root, parsed.positional)
+-        if not command.is_runnable:
+-            output.line(render_usage(command))
+-            return 0
+-        output.debug(f"Running command: {command.full_name}")
+-        args, assoc = ArgumentValidator(command).validate(
+-            remaining, parsed.assoc, warn=output.warning
+-        )
+-        context = Context(root=root, command=command, output=output,
+-                          runtime=runtime, strict=strict)
+-        result = command.handler(context, args, assoc)
+-        return int(result or 0)
++        return int(action(*args) or 0)
+     except UsageError as exc:
+         output.line(exc.usage)
+         return exc.exit_code
+     except AppctlError as exc:
+         output.error(exc.message)
+         return exc.exit_code
++
++
++class Runner:
++    def __init__(self, argv, parsed, environ, output, strict, loaded):
++        self.argv = argv
++        self.parsed = parsed
++        self.environ = environ
++        self.output = output
++        self.strict = strict
++        self.loaded = loaded
++        self._root = None
++
++    @property
++    def root(self):
++        if self._root is None:
++            self._root = build_command_tree()
++        return self._root
++
++    # -- aliases ----------------------------------------------------------
++
++    def run_alias(self, name, stack=()):
++        aliases = self.loaded.aliases
++        if name == config_loader.ALL_ALIAS and not aliases:
++            raise AppctlError("Cannot use '@all' when no aliases are registered.")
++        if name not in aliases:
++            message = f"Alias '{name}' not found."
++            suggestion = get_suggestion(name, list(aliases))
++            if suggestion:
++                message += f"\nDid you mean '{suggestion}'?"
++            raise AppctlError(message)
++        definition = aliases[name]
++        if name == config_loader.ALL_ALIAS and definition is None:
++            members = sorted((a for a, d in aliases.items() if a != name and not isinstance(d, list)),
++                             key=config_loader.alias_sort_key)
++            return self.run_group(name, members, stack)
++        if isinstance(definition, list):
++            members = _unique(definition)
++            invalid = [m for m in members if m not in aliases]
++            if invalid:
++                raise AppctlError(
++                    f"Group '{name}' contains one or more invalid aliases: {', '.join(invalid)}."
++                )
++            return self.run_group(name, members, stack)
++        return self.run(name, definition if isinstance(definition, dict) else {})
++
++    def run_group(self, name, members, stack):
++        stack = stack + (name,)
++        result = 0
++        for member in members:
++            if member in stack:
++                continue
++            self.output.log(member)
++            self.output.stdout.flush()
++            code = guarded(self.output, self.run_alias, member, stack)
++            self.output.stdout.flush()
++            if code:
++                result = code
++        return result
++
++    # -- a single execution ----------------------------------------------
++
++    def run(self, alias=None, alias_params=None):
++        runtime = build_runtime_config(self.parsed.runtime, self.loaded.merged, alias_params)
++        if runtime.get("ssh"):
++            return run_remote(runtime["ssh"], self.argv, self.environ, self.output,
++                              alias=alias, alias_params=alias_params,
++                              skip_tty=bool(runtime.get("skip-tty")))
++        positional = self.parsed.positional
++        if not positional:
++            self.output.line(render_root_help(self.root))
++            return 0
++        command, remaining = resolve(self.root, positional)
++        check_disabled(command, positional, runtime["disabled_commands"])
++        if not command.is_runnable:
++            self.output.line(render_usage(command))
++            return 0
++        self.output.debug(f"Running command: {command.full_name}")
++        args, assoc = ArgumentValidator(command).validate(
++            remaining, self.parsed.assoc, warn=self.output.warning
++        )
++        context = Context(root=self.root, command=command, output=self.output,
++                          runtime=runtime, strict=self.strict, config=self.loaded,
++                          alias=alias)
++        return command.handler(context, args, assoc)
++
++
++def main(argv=None, environ=None, stdout=None, stderr=None, cwd=None):
++    argv = sys.argv[1:] if argv is None else list(argv)
++    environ = os.environ if environ is None else environ
++    strict = is_strict_mode(environ)
++
++    alias, argv = extract_alias(argv)
++    parsed = parse_argv(apply_rewrites(argv), strict=strict)
++    output = Output(quiet=bool(parsed.runtime.get("quiet")), debug=bool(parsed.runtime.get("debug")),
++                    stdout=stdout, stderr=stderr)
++    for warning in deprecation_warnings(parsed.runtime):
++        print(warning, file=output.stderr)
++
++    def start():
++        loaded = config_loader.load(environ, cwd)
++        runner = Runner(argv, parsed, environ, output, strict, loaded)
++        if alias:
++            return runner.run_alias(alias)
++        return runner.run()
++
++    return guarded(output, start)
+
+### appctl_cli/commands/cli.py (modified)
+--- appctl_cli/commands/cli.py
++++ appctl_cli/commands/cli.py
+@@ -7,7 +7,7 @@
+ from ..formatter import format_value
+ from ..errors import AppctlError
+ from ..resolver import try_resolve
+-from ..runtime_config import GLOBAL_PARAMETERS
++from ..runtime_config import GLOBAL_PARAMETERS, visible_parameters
+ 
+ 
+ def version(ctx, args, assoc):
+@@ -20,6 +20,9 @@
+         "python_version": platform.python_version(),
+         "os": platform.system(),
+         "strict_args_mode": ctx.strict,
++        "global_config_path": ctx.config.global_path if ctx.config else None,
++        "project_config_path": ctx.config.project_path if ctx.config else None,
++        "packages_dir": ctx.config.packages_dir if ctx.config else None,
+         "runtime_config": {k: v for k, v in ctx.runtime.items()
+                            if v != GLOBAL_PARAMETERS[k].default},
+     }
+@@ -32,13 +35,16 @@
+     ctx.output.line(f"Python version:\t{data['python_version']}")
+     ctx.output.line(f"OS:\t{data['os']}")
+     ctx.output.line(f"Strict args mode:\t{'enabled' if ctx.strict else 'disabled'}")
++    ctx.output.line(f"Global config:\t{data['global_config_path'] or ''}")
++    ctx.output.line(f"Project config:\t{data['project_config_path'] or ''}")
++    ctx.output.line(f"Packages dir:\t{data['packages_dir'] or ''}")
+     for key, value in data["runtime_config"].items():
+         ctx.output.line(f"--{key}:\t{format_value(value)}")
+ 
+ 
+ def param_dump(ctx, args, assoc):
+     dump = {}
+-    for name, param in GLOBAL_PARAMETERS.items():
++    for name, param in visible_parameters().items():
+         entry = {"synopsis": param.synopsis, "description": param.description,
+                  "default": param.default}
+         if assoc.get("with-values"):
+
+### appctl_cli/config_loader.py (created)
+--- appctl_cli/config_loader.py
++++ appctl_cli/config_loader.py
+@@ -0,0 +1,235 @@
++"""Loading of global/project YAML config files and alias definitions."""
++
++import json
++import os
++import re
++from dataclasses import dataclass, field
++
++import yaml
++
++from .errors import AppctlError
++
++CONFIG_PATH_ENV = "APPCTL_CONFIG_PATH"
++ROOT_DIR_ENV = "APPCTL_ROOT_DIR"
++PACKAGES_DIR_ENV = "APPCTL_PACKAGES_DIR"
++RUNTIME_ALIAS_ENV = "APPCTL_RUNTIME_ALIAS"
++
++PROJECT_CONFIG_FILES = ("appctl.local.yml", "appctl.yml")
++ALIAS_RE = re.compile(r"^@[A-Za-z0-9_.\-]+$")
++ALL_ALIAS = "@all"
++META_KEY = "_"
++
++# Keys the global config file must always define, with their defaults.
++REQUIRED_GLOBAL_KEYS = (("locale", "en_US"), ("installer_version", "stable"))
++
++
++def is_alias(name):
++    return isinstance(name, str) and bool(ALIAS_RE.match(name))
++
++
++def alias_sort_key(name):
++    return (name.lower(), name)
++
++
++# -- locations -----------------------------------------------------------
++
++
++def root_dir(environ):
++    value = environ.get(ROOT_DIR_ENV)
++    if value:
++        return value
++    return os.path.join(os.path.expanduser("~"), ".appctl")
++
++
++def global_config_path(environ):
++    value = environ.get(CONFIG_PATH_ENV)
++    if value:
++        return value
++    return os.path.join(root_dir(environ), "config", "config.yml")
++
++
++def packages_dir(environ):
++    value = environ.get(PACKAGES_DIR_ENV)
++    if value:
++        return value
++    return os.path.join(root_dir(environ), "packages")
++
++
++def find_project_config(cwd):
++    """Search upward from ``cwd``; the first directory with a config wins."""
++    directory = os.path.abspath(cwd)
++    while True:
++        for name in PROJECT_CONFIG_FILES:
++            candidate = os.path.join(directory, name)
++            if os.path.isfile(candidate):
++                return candidate
++        parent = os.path.dirname(directory)
++        if parent == directory:
++            return None
++        directory = parent
++
++
++# -- auto-creation ---------------------------------------------------------
++
++
++def _read_mapping(path):
++    with open(path, encoding="utf-8") as handle:
++        text = handle.read()
++    try:
++        data = yaml.safe_load(text)
++    except yaml.YAMLError as exc:
++        raise AppctlError(f"Unable to parse the config file '{path}': {exc}") from exc
++    if data is None:
++        data = {}
++    if not isinstance(data, dict):
++        raise AppctlError(f"The config file '{path}' must contain a YAML mapping.")
++    return data, text
++
++
++def ensure_global_config(path, strict=True):
++    """Add missing required keys to the global config file, creating it.
++
++    Write failures raise :class:`AppctlError` unless ``strict`` is false.
++    """
++    try:
++        if os.path.exists(path):
++            data, text = _read_mapping(path)
++        else:
++            data, text = {}, ""
++        missing = [(k, v) for k, v in REQUIRED_GLOBAL_KEYS if k not in data]
++        if not missing:
++            return
++        if text and not text.endswith("\n"):
++            text += "\n"
++        text += "".join(f"{key}: {value}\n" for key, value in missing)
++        directory = os.path.dirname(path)
++        if directory:
++            os.makedirs(directory, exist_ok=True)
++        with open(path, "w", encoding="utf-8") as handle:
++            handle.write(text)
++    except OSError as exc:
++        if strict:
++            reason = exc.strerror or str(exc)
++            raise AppctlError(f"Unable to write the config file '{path}': {reason}.") from exc
++
++
++# -- YAML loading with inheritance -------------------------------------------
++
++
++def _merge(base, override, append_arrays):
++    """Overlay ``override`` on ``base``; nested mappings merge recursively."""
++    if isinstance(base, dict) and isinstance(override, dict):
++        merged = dict(base)
++        for key, value in override.items():
++            merged[key] = _merge(base[key], value, append_arrays) if key in base else value
++        return merged
++    if append_arrays and isinstance(base, list) and isinstance(override, list):
++        return base + override
++    return override
++
++
++def _absolutize_alias_paths(data, directory):
++    for key, value in data.items():
++        if is_alias(key) and isinstance(value, dict):
++            path = value.get("path")
++            if isinstance(path, str) and path and "ssh" not in value:
++                value["path"] = os.path.normpath(os.path.join(directory, os.path.expanduser(path)))
++
++
++def load_config_file(path, accumulated=None, _seen=None):
++    """Merge the YAML file at ``path`` (and its ancestors) over ``accumulated``."""
++    accumulated = dict(accumulated or {})
++    if not path:
++        return accumulated
++    path = os.path.abspath(path)
++    seen = set(_seen or ())
++    if path in seen or not os.path.isfile(path):
++        return accumulated
++    seen.add(path)
++    try:
++        data, _ = _read_mapping(path)
++    except OSError:
++        return accumulated
++    directory = os.path.dirname(path)
++    meta = data.pop(META_KEY, None)
++    meta = meta if isinstance(meta, dict) else {}
++    inherit = meta.get("inherit")
++    if isinstance(inherit, str) and inherit:
++        base = os.path.join(directory, os.path.expanduser(inherit))
++        accumulated = load_config_file(base, accumulated, seen)
++    _absolutize_alias_paths(data, directory)
++    return _merge(accumulated, data, meta.get("merge") is True)
++
++
++# -- aliases -------------------------------------------------------------------
++
++
++def runtime_aliases(environ, cwd):
++    raw = environ.get(RUNTIME_ALIAS_ENV)
++    if not raw:
++        return {}
++    try:
++        decoded = json.loads(raw)
++    except ValueError:
++        return {}
++    if not isinstance(decoded, dict):
++        return {}
++    aliases = {k: v for k, v in decoded.items() if is_alias(k)}
++    _absolutize_alias_paths(aliases, cwd)
++    return aliases
++
++
++def collect_aliases(config, extra=None):
++    """Return ``{name: definition}``, registering ``@all`` when needed.
++
++    A definition is either a mapping of connection parameters or a list
++    of alias names (a group).
++    """
++    aliases = {}
++    for key, value in list(config.items()) + list((extra or {}).items()):
++        if not is_alias(key):
++            continue
++        if isinstance(value, list):
++            aliases[key] = [str(v) for v in value]
++        elif isinstance(value, dict):
++            aliases[key] = dict(value)
++        elif value is None:
++            aliases[key] = {}
++        else:
++            aliases[key] = value
++    if aliases and ALL_ALIAS not in aliases:
++        aliases[ALL_ALIAS] = None  # implicit: every registered alias
++    return aliases
++
++
++# -- entry point ---------------------------------------------------------------
++
++
++@dataclass
++class LoadedConfig:
++    global_path: str = None
++    project_path: str = None
++    global_config: dict = field(default_factory=dict)
++    merged: dict = field(default_factory=dict)
++    aliases: dict = field(default_factory=dict)
++    packages_dir: str = None
++
++
++def load(environ, cwd=None):
++    cwd = cwd or os.getcwd()
++    global_path = global_config_path(environ)
++    explicit = bool(environ.get(CONFIG_PATH_ENV) or environ.get(ROOT_DIR_ENV))
++    ensure_global_config(global_path, strict=explicit)
++    global_config = load_config_file(global_path)
++    project_path = find_project_config(cwd)
++    if project_path and os.path.abspath(project_path) == os.path.abspath(global_path):
++        project_path = None
++    merged = load_config_file(project_path, global_config)
++    return LoadedConfig(
++        global_path=global_path,
++        project_path=project_path,
++        global_config=global_config,
++        merged=merged,
++        aliases=collect_aliases(merged, runtime_aliases(environ, cwd)),
++        packages_dir=packages_dir(environ),
++    )
+
+### appctl_cli/context.py (modified)
+--- appctl_cli/context.py
++++ appctl_cli/context.py
+@@ -10,3 +10,5 @@
+     output: object
+     runtime: dict = field(default_factory=dict)
+     strict: bool = False
++    config: object = None
++    alias: str = None
+
+### appctl_cli/remote.py (created)
+--- appctl_cli/remote.py
++++ appctl_cli/remote.py
+@@ -0,0 +1,132 @@
++"""Execution of a command on a remote endpoint (SSH, Docker, Vagrant)."""
++
++import json
++import os
++import re
++import shlex
++import subprocess
++import sys
++
++from . import PROGRAM_NAME
++from .arguments import END_OF_OPTIONS, is_assoc_token, parse_assoc_token
++from .errors import AppctlError
++
++SSH_PRE_CMD_ENV = "APPCTL_SSH_PRE_CMD"
++SSH_BINARY_ENV = "APPCTL_SSH_BINARY"
++CONNECTION_FAILED = 255
++
++SSH_URL_RE = re.compile(
++    r"^(?:(?P<scheme>docker|docker-compose|docker-compose-run|ssh|vagrant):(?://)?)?"
++    r"(?:(?P<user>[^@:/]+)@)?"
++    r"(?P<host>[^:/~]+)"
++    r"(?::(?P<port>\d*))?"
++    r"(?P<path>[/~].*)?$"
++)
++
++
++def parse_ssh_url(url):
++    """Split ``[scheme:][user@]host[:port][path]`` into its components."""
++    match = SSH_URL_RE.match(str(url).strip())
++    if not match:
++        raise AppctlError(f"Invalid SSH connection string '{url}'.")
++    return {k: v for k, v in match.groupdict().items() if v}
++
++
++def _strip_ssh_flags(argv):
++    stripped = []
++    end_of_options = False
++    for token in argv:
++        if token == END_OF_OPTIONS:
++            end_of_options = True
++        elif not end_of_options and is_assoc_token(token) and parse_assoc_token(token)[0] == "ssh":
++            continue
++        stripped.append(token)
++    return stripped
++
++
++def build_remote_command(argv, environ, alias=None, alias_params=None, path=None):
++    """The shell command run on the remote side."""
++    binary = environ.get(SSH_BINARY_ENV) or PROGRAM_NAME
++    prefix = ""
++    pre_cmd = (environ.get(SSH_PRE_CMD_ENV) or "").strip().rstrip(";").strip()
++    if pre_cmd:
++        prefix = pre_cmd + "; "
++    words = []
++    if alias:
++        forwarded = {k: v for k, v in (alias_params or {}).items() if k != "ssh"}
++        if forwarded:
++            encoded = json.dumps({alias: forwarded}, separators=(",", ":"))
++            prefix += f"APPCTL_RUNTIME_ALIAS={shlex.quote(encoded)} "
++            words.append(alias)
++    words.extend(_strip_ssh_flags(argv))
++    if path:
++        words.append(f"--path={path}")
++    return prefix + " ".join([binary] + [shlex.quote(w) for w in words])
++
++
++def build_transport(bits, remote_command, tty=False, proxyjump=None, key=None):
++    """argv of the local process that carries ``remote_command``."""
++    scheme = bits.get("scheme", "ssh")
++    host = bits["host"]
++    user = bits.get("user")
++    if scheme == "docker":
++        argv = ["docker", "exec"]
++        if user:
++            argv += ["--user", user]
++        argv += ["-it" if tty else "-i", host, "sh", "-c", remote_command]
++        return argv
++    if scheme in ("docker-compose", "docker-compose-run"):
++        argv = ["docker-compose", "exec" if scheme == "docker-compose" else "run"]
++        if user:
++            argv += ["--user", user]
++        if not tty:
++            argv.append("-T")
++        if scheme == "docker-compose-run":
++            argv.append("--rm")
++        argv += [host, "sh", "-c", remote_command]
++        return argv
++    if scheme == "vagrant":
++        return ["vagrant", "ssh", "-c", remote_command, host]
++    argv = ["ssh", "-q"]
++    if proxyjump:
++        argv += ["-J", str(proxyjump)]
++    if key:
++        argv += ["-i", str(key)]
++    if bits.get("port"):
++        argv += ["-p", str(int(bits["port"]))]
++    argv.append("-t" if tty else "-T")
++    argv.append(f"{user}@{host}" if user else host)
++    argv.append(remote_command)
++    return argv
++
++
++def _real_stream(stream, default):
++    return stream is None or stream is default
++
++
++def run_remote(ssh, argv, environ, output, alias=None, alias_params=None, skip_tty=False):
++    """Run the command remotely and return its exit code."""
++    bits = parse_ssh_url(ssh)
++    alias_params = alias_params or {}
++    remote_command = build_remote_command(argv, environ, alias, alias_params, bits.get("path"))
++    passthrough = _real_stream(output.stdout, sys.stdout) and _real_stream(output.stderr, sys.stderr)
++    tty = bool(passthrough and not skip_tty and sys.stdout.isatty() and sys.stdin.isatty())
++    transport = build_transport(bits, remote_command, tty=tty,
++                                proxyjump=alias_params.get("proxyjump"),
++                                key=alias_params.get("key"))
++    output.debug("Running SSH command: " + " ".join(shlex.quote(a) for a in transport))
++    output.stdout.flush()
++    output.stderr.flush()
++    try:
++        if passthrough:
++            code = subprocess.run(transport, env=dict(environ)).returncode
++        else:
++            result = subprocess.run(transport, env=dict(environ), capture_output=True, text=True)
++            output.stdout.write(result.stdout)
++            output.stderr.write(result.stderr)
++            code = result.returncode
++    except OSError:
++        code = CONNECTION_FAILED
++    if code == CONNECTION_FAILED:
++        raise AppctlError("Cannot connect over SSH using provided configuration.", CONNECTION_FAILED)
++    return code
+
+### appctl_cli/runtime_config.py (modified)
+--- appctl_cli/runtime_config.py
++++ appctl_cli/runtime_config.py
+@@ -1,5 +1,6 @@
+ """Global runtime configuration parameters."""
+ 
++import copy
+ from dataclasses import dataclass
+ 
+ STRICT_ARGS_ENV = "APPCTL_STRICT_ARGS_MODE"
+@@ -11,6 +12,15 @@
+     synopsis: str
+     description: str
+     default: object = None
++    runtime: bool = True
++    file: bool = True
++    multiple: bool = False
++    deprecated: str = None
++    hidden: bool = False
++
++
++def _file_only(name, description, default=None):
++    return GlobalParameter(name, "", description, default, runtime=False, file=True)
+ 
+ 
+ GLOBAL_PARAMETERS = {
+@@ -28,24 +38,74 @@
+         GlobalParameter("require", "--require=<path>", "Load a file before running the command.", None),
+         GlobalParameter("exec", "--exec=<php-code>", "Execute code before running the command.", None),
+         GlobalParameter("context", "--context=<context>", "Load the application in a given context.", "cli"),
++        _file_only("disabled_commands", "(Sub)commands to disable.", []),
++        _file_only("projects_path", "Path where projects are stored."),
++        _file_only("locale", "Locale to use.", "en_US"),
++        _file_only("cert-email", "Email address used for certificate registration."),
++        _file_only("env", "Environment the tool runs in."),
++        _file_only("admin-email", "Email address of the administrator."),
++        _file_only("sysctl", "Kernel parameters applied to containers."),
++        _file_only("skip-tty", "Never allocate a TTY for remote commands.", False),
++        _file_only("custom-compose", "Path to a custom compose file."),
++        _file_only("installer_version", "Release channel of the installer.", "stable"),
+         GlobalParameter("color", "--[no-]color", "Whether to colorize the output.", "auto"),
+-        GlobalParameter("debug", "--debug[=<group>]", "Show all errors and debug messages.", False),
+-        GlobalParameter("prompt", "--prompt[=<assoc>]", "Prompt the user to enter values for all arguments.", False),
+-        GlobalParameter("quiet", "--quiet", "Suppress informational messages.", False),
++        GlobalParameter("debug", "--debug[=<group>]", "Show all errors and debug messages.", False,
++                        file=False),
++        GlobalParameter("prompt", "--prompt[=<assoc>]", "Prompt the user to enter values for all arguments.",
++                        False, file=False),
++        GlobalParameter("quiet", "--quiet", "Suppress informational messages.", False, file=False),
+     )
+ }
+ 
+ 
+ def is_global_parameter(key):
+-    return key in GLOBAL_PARAMETERS
++    """True for global parameters that may be given as runtime flags."""
++    param = GLOBAL_PARAMETERS.get(key)
++    return param is not None and param.runtime
++
++
++def is_file_parameter(key):
++    param = GLOBAL_PARAMETERS.get(key)
++    return param is not None and param.file
++
++
++def visible_parameters():
++    """Global parameters that may be shown in help output."""
++    return {name: p for name, p in GLOBAL_PARAMETERS.items() if not p.hidden}
++
++
++def deprecation_warnings(supplied):
++    """Warning lines for every deprecated parameter used as a runtime flag."""
++    return [
++        f"Warning: The --{key} global parameter is deprecated."
++        for key in supplied
++        if key in GLOBAL_PARAMETERS and GLOBAL_PARAMETERS[key].deprecated is not None
++    ]
+ 
+ 
+ def is_strict_mode(environ):
+     return bool(environ.get(STRICT_ARGS_ENV))
+ 
+ 
+-def build_runtime_config(supplied):
+-    """Merge supplied global values over the defaults."""
+-    config = {name: param.default for name, param in GLOBAL_PARAMETERS.items()}
++def _arrayify(value):
++    if value is None:
++        return []
++    return list(value) if isinstance(value, (list, tuple)) else [value]
++
++
++def build_runtime_config(supplied, *layers):
++    """Merge configuration over the defaults.
++
++    ``layers`` are file-derived mappings from lowest to highest precedence
++    (e.g. global config, project config, alias); only recognized
++    file parameters are taken from them. ``supplied`` holds the runtime
++    flags, which win over everything.
++    """
++    config = {name: copy.deepcopy(param.default) for name, param in GLOBAL_PARAMETERS.items()}
++    for layer in layers:
++        for key, value in (layer or {}).items():
++            if is_file_parameter(key):
++                config[key] = value
+     config.update(supplied)
++    config["disabled_commands"] = [str(c) for c in _arrayify(config.get("disabled_commands"))]
+     return config
+
+### requirements.txt (modified)
+--- requirements.txt
++++ requirements.txt
+@@ -1,2 +1 @@
+-# appctl uses only the Python standard library (Python 3.9+).
+-# There are no third-party runtime dependencies to install.
++PyYAML>=6.0
+
+### tests/test_config.py (created)
+--- tests/test_config.py
++++ tests/test_config.py
+@@ -0,0 +1,221 @@
++"""Configuration files, aliases and remote execution."""
++
++import json
++import os
++import stat
++import subprocess
++import sys
++import tempfile
++import textwrap
++import unittest
++
++from appctl_cli.config_loader import load_config_file
++from appctl_cli.remote import parse_ssh_url
++from appctl_cli.runtime_config import build_runtime_config
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++SCRIPT = os.path.join(ROOT, "appctl.py")
++
++FAKE_SSH = """#!/bin/sh
++for a in "$@"; do echo "ARG[$a]"; done
++exit ${FAKE_SSH_EXIT:-0}
++"""
++
++
++class ConfigTestCase(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.dir = self.tmp.name
++        self.project = self.mkdir("project")
++        self.env = {k: v for k, v in os.environ.items() if not k.startswith("APPCTL_")}
++        self.env["APPCTL_ROOT_DIR"] = self.mkdir("root")
++
++    def tearDown(self):
++        self.tmp.cleanup()
++
++    def mkdir(self, *parts):
++        path = os.path.join(self.dir, *parts)
++        os.makedirs(path, exist_ok=True)
++        return path
++
++    def write(self, path, content):
++        os.makedirs(os.path.dirname(path), exist_ok=True)
++        with open(path, "w", encoding="utf-8") as handle:
++            handle.write(textwrap.dedent(content))
++        return path
++
++    def run_cli(self, *args, cwd=None, **env):
++        return subprocess.run([sys.executable, SCRIPT, *args], capture_output=True, text=True,
++                              cwd=cwd or self.project, env=dict(self.env, **env))
++
++    def runtime(self, *args, **kwargs):
++        result = self.run_cli(*args, "cli", "info", "--format=json", **kwargs)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        return json.loads(result.stdout)["runtime_config"]
++
++
++class ConfigLoadingTest(ConfigTestCase):
++    def test_global_config_is_auto_created(self):
++        self.run_cli("cli", "version")
++        path = os.path.join(self.env["APPCTL_ROOT_DIR"], "config", "config.yml")
++        with open(path, encoding="utf-8") as handle:
++            self.assertEqual(handle.read(), "locale: en_US\ninstaller_version: stable\n")
++
++    def test_auto_creation_keeps_existing_values(self):
++        path = self.write(os.path.join(self.dir, "global.yml"), "locale: fr_FR\n")
++        self.run_cli("cli", "version", APPCTL_CONFIG_PATH=path)
++        with open(path, encoding="utf-8") as handle:
++            self.assertEqual(handle.read(), "locale: fr_FR\ninstaller_version: stable\n")
++
++    def test_unwritable_global_config(self):
++        blocker = self.write(os.path.join(self.dir, "file"), "")
++        result = self.run_cli("site", "list", APPCTL_CONFIG_PATH=os.path.join(blocker, "c.yml"))
++        self.assertEqual(result.returncode, 1)
++        self.assertTrue(result.stderr.startswith("Error: "))
++
++    def test_precedence(self):
++        path = self.write(os.path.join(self.dir, "global.yml"),
++                          "color: false\nurl: global.test\nuser: admin\n")
++        self.write(os.path.join(self.project, "appctl.yml"), "url: project.test\n")
++        config = self.runtime(APPCTL_CONFIG_PATH=path)
++        self.assertEqual((config["color"], config["url"], config["user"]),
++                         (False, "project.test", "admin"))
++        config = self.runtime("--url=cli.test", "--color", APPCTL_CONFIG_PATH=path)
++        self.assertEqual((config["color"], config["url"]), (True, "cli.test"))
++
++    def test_project_config_search(self):
++        self.write(os.path.join(self.project, "appctl.yml"), "url: outer\n")
++        inner = self.mkdir("project", "inner", "deep")
++        self.assertEqual(self.runtime(cwd=inner)["url"], "outer")
++        self.write(os.path.join(self.project, "inner", "appctl.yml"), "url: inner\n")
++        self.assertEqual(self.runtime(cwd=inner)["url"], "inner")
++        self.write(os.path.join(self.project, "inner", "appctl.local.yml"), "url: local\n")
++        self.assertEqual(self.runtime(cwd=inner)["url"], "local")
++
++    def test_runtime_only_and_file_only_parameters(self):
++        self.write(os.path.join(self.project, "appctl.yml"), "quiet: true\nlocale: fr_FR\n")
++        config = self.runtime()
++        self.assertNotIn("quiet", config)
++        self.assertEqual(config["locale"], "fr_FR")
++        result = self.run_cli("config", "create", "--dbname=a", "--dbuser=b", "--locale=xx")
++        self.assertIn("locale: xx", result.stdout)
++
++    def test_inherit_and_merge(self):
++        base = self.write(os.path.join(self.dir, "base", "base.yml"),
++                          "disabled_commands: [a]\nlocale: de_DE\nurl: base\n")
++        child = self.write(os.path.join(self.dir, "child.yml"),
++                           "_:\n  inherit: base/base.yml\ndisabled_commands: [b]\nurl: child\n")
++        self.assertEqual(load_config_file(child),
++                         {"disabled_commands": ["b"], "locale": "de_DE", "url": "child"})
++        self.write(child, "_:\n  inherit: base/base.yml\n  merge: true\ndisabled_commands: [b, a]\n")
++        self.assertEqual(load_config_file(child)["disabled_commands"], ["a", "b", "a"])
++        self.assertTrue(os.path.isfile(base))
++
++    def test_disabled_commands(self):
++        self.write(os.path.join(self.project, "appctl.yml"), "disabled_commands:\n  - site delete\n  - db\n")
++        result = self.run_cli("site", "delete", "main", "--yes")
++        self.assertEqual((result.returncode, result.stderr),
++                         (1, "Error: The 'site delete' command has been disabled.\n"))
++        result = self.run_cli("db", "query", "SELECT 1")
++        self.assertEqual(result.stderr, "Error: The 'db' command has been disabled.\n")
++        self.assertEqual(self.run_cli("site", "list").returncode, 0)
++
++    def test_build_runtime_config_ignores_non_file_layers(self):
++        config = build_runtime_config({"quiet": True}, {"debug": True, "locale": "x"})
++        self.assertEqual((config["debug"], config["quiet"], config["locale"]), (False, True, "x"))
++
++
++class AliasTest(ConfigTestCase):
++    CONFIG = """\
++        "@staging":
++          ssh: ssh://deploy@staging.example.com:2222/var/www
++        "@deploy-all":
++          - "@staging"
++          - "@nonexistent"
++        "@Beta":
++          path: sites/beta
++        "@alpha":
++          path: /srv/alpha
++        "@pair":
++          - "@alpha"
++          - "@Beta"
++          - "@alpha"
++        """
++
++    def setUp(self):
++        super().setUp()
++        bin_dir = self.mkdir("bin")
++        ssh = self.write(os.path.join(bin_dir, "ssh"), FAKE_SSH)
++        os.chmod(ssh, os.stat(ssh).st_mode | stat.S_IEXEC)
++        self.env["PATH"] = bin_dir + os.pathsep + self.env.get("PATH", "")
++
++    def configure(self):
++        self.write(os.path.join(self.project, "appctl.yml"), self.CONFIG)
++
++    def test_all_without_aliases(self):
++        result = self.run_cli("@all", "site", "list")
++        self.assertEqual((result.returncode, result.stdout, result.stderr),
++                         (1, "", "Error: Cannot use '@all' when no aliases are registered.\n"))
++
++    def test_invalid_group(self):
++        self.configure()
++        result = self.run_cli("@deploy-all", "site", "list")
++        self.assertEqual((result.returncode, result.stderr), (1, (
++            "Error: Group '@deploy-all' contains one or more invalid aliases: @nonexistent.\n")))
++
++    def test_unknown_alias(self):
++        self.configure()
++        result = self.run_cli("@stagign", "site", "list")
++        self.assertEqual((result.returncode, result.stderr), (1, (
++            "Error: Alias '@stagign' not found.\nDid you mean '@staging'?\n")))
++        result = self.run_cli("@qqqqqqq", "site", "list")
++        self.assertEqual(result.stderr, "Error: Alias '@qqqqqqq' not found.\n")
++
++    def test_local_path_is_absolutized(self):
++        self.configure()
++        result = self.run_cli("@Beta", "config", "path", cwd=self.mkdir("project", "nested"))
++        expected = os.path.join(self.project, "sites", "beta", "config.php")
++        self.assertEqual(result.stdout, expected + "\n")
++
++    def test_group_runs_each_member_once(self):
++        self.configure()
++        result = self.run_cli("@pair", "config", "path")
++        beta = os.path.join(self.project, "sites", "beta", "config.php")
++        self.assertEqual(result.stdout, f"@alpha\n/srv/alpha/config.php\n@Beta\n{beta}\n")
++
++    def test_all_runs_in_case_insensitive_order(self):
++        self.configure()
++        result = self.run_cli("@all", "config", "path")
++        headers = [line for line in result.stdout.splitlines() if line.startswith("@")]
++        self.assertEqual(headers, ["@alpha", "@Beta", "@staging"])
++
++    def test_runtime_alias_overrides_file_alias(self):
++        self.configure()
++        result = self.run_cli("@alpha", "config", "path",
++                              APPCTL_RUNTIME_ALIAS=json.dumps({"@alpha": {"path": "/rt"}}))
++        self.assertEqual(result.stdout, "/rt/config.php\n")
++
++    def test_remote_execution(self):
++        self.configure()
++        result = self.run_cli("@staging", "site", "list", APPCTL_SSH_PRE_CMD="cd /tmp")
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertEqual(result.stdout, (
++            "ARG[-q]\nARG[-p]\nARG[2222]\nARG[-T]\nARG[deploy@staging.example.com]\n"
++            "ARG[cd /tmp; appctl site list --path=/var/www]\n"))
++
++    def test_ssh_connection_failure(self):
++        self.configure()
++        result = self.run_cli("@staging", "site", "list", FAKE_SSH_EXIT="255")
++        self.assertEqual(result.returncode, 255)
++        self.assertTrue(result.stderr.endswith(
++            "Error: Cannot connect over SSH using provided configuration.\n"))
++
++    def test_parse_ssh_url(self):
++        self.assertEqual(parse_ssh_url("docker:user@app"),
++                         {"scheme": "docker", "user": "user", "host": "app"})
++        self.assertEqual(parse_ssh_url("example.com:22~/www"),
++                         {"host": "example.com", "port": "22", "path": "~/www"})
++
++
++if __name__ == "__main__":
++    unittest.main()
+

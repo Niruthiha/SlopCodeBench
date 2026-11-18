@@ -1,0 +1,57 @@
+
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.16, pytest-9.2.0, pluggy-1.7.0 -- /tmp/uv-cache/archive-v0/BEQWoeAeZWBMiizz/bin/python
+cachedir: .pytest_cache
+metadata: {'Python': '3.12.16', 'Platform': 'Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41', 'Packages': {'pytest': '9.2.0', 'pluggy': '1.7.0'}, 'Plugins': {'timeout': '2.4.0', 'json-report': '1.5.0', 'metadata': '3.1.1', 'json-ctrf': '0.6.1'}}
+rootdir: /workspace
+configfile: pytest.ini
+plugins: timeout-2.4.0, json-report-1.5.0, metadata-3.1.1, json-ctrf-0.6.1
+timeout: 30.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 39 items
+
+.evaluation_tests/test_checkpoint_1.py::test_complete_name_scope_prefix_and_insert_text PASSED [  2%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_attribute_on_instance_includes_methods_and_init_attrs PASSED [  5%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_keywords_not_in_attribute_context PASSED [  7%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_ordering_public_private_dunder_then_keywords PASSED [ 10%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_fuzzy_matching_relaxes_prefix PASSED [ 12%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_local_name_shadows_global PASSED [ 15%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_nested_scope_shadowing_prefers_innermost_name PASSED [ 17%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_name_defined_after_cursor_not_visible PASSED [ 20%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_comprehension_var_not_visible_outside PASSED [ 23%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_tolerates_syntax_errors PASSED [ 25%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_literal_attribute_sets["abc"-upper] PASSED [ 28%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_literal_attribute_sets[[]-append] PASSED [ 30%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_literal_attribute_sets[{}-keys] PASSED [ 33%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_literal_attribute_sets[{1}-add] PASSED [ 35%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_star_import_uses_all PASSED [ 38%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_star_import_without_all_uses_public_names PASSED [ 41%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_case_insensitive_prefix PASSED [ 43%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_case_insensitive_ordering_includes_both_spellings PASSED [ 46%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_no_prefix_after_dot_returns_all_attrs PASSED [ 48%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_attribute_prefix_filters_attrs PASSED [ 51%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_line_out_of_range_exits_1 PASSED [ 53%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_line_zero_exits_1 PASSED [ 56%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_invalid_utf8_exits_1 PASSED [ 58%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_column_out_of_range_exits_1 PASSED [ 61%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_file_not_found_exits_1 PASSED [ 64%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_directory_path_exits_1 PASSED [ 66%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_inherited_attribute_from_base_class PASSED [ 69%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_enclosing_scope_name_visible PASSED [ 71%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_function_param_is_visible_with_param_metadata PASSED [ 74%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_names_are_visible_on_their_definition_line PASSED [ 76%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_from_import_name_visible PASSED [ 79%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_class_body_name_not_visible_in_method PASSED [ 82%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_case_insensitive_complete_field_strips_by_length PASSED [ 84%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_includes_builtin_name PASSED [ 87%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_fuzzy_is_case_insensitive_and_ordered PASSED [ 89%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_module_attribute_respects_all PASSED [ 92%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_multiple_inheritance_mro PASSED [ 94%]
+.evaluation_tests/test_checkpoint_1.py::test_complete_metadata_for_function_class_and_keyword PASSED [ 97%]
+.evaluation_tests/test_checkpoint_1.py::test_checkpoint_name_fixture_is_wired PASSED [100%]
+
+--------------------------------- JSON report ----------------------------------
+report saved to: .scbench/pytest-report.json
+============================== 39 passed in 9.81s ==============================

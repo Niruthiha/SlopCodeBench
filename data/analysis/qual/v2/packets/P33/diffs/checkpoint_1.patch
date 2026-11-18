@@ -1,0 +1,1151 @@
+### DESIGN.md (created)
+--- DESIGN.md
++++ DESIGN.md
+@@ -0,0 +1,75 @@
++# MTL — design plan
++
++Single-file CLI `mtl.py` (stdlib only; `tzdata` in `requirements.txt` so IANA zones
++resolve on systems without a system tz database).
++
++## Pipeline of the program
++
++1. **CLI** (`argparse`, with usage errors mapped to `ERROR:bad_io:` / exit 3).
++2. **Read DSL** (file or STDIN) → I/O errors exit 3.
++3. **Parse DSL** → `Program(steps=[filter|apply...], group_by, window, aggregates)`.
++   Syntax errors exit 1.
++4. **Load CSV** → header + rows, typed columns. Missing file / bad encoding /
++   ragged rows / missing required columns exit 3; unparsable typed values exit 2.
++5. **Static type check** of the whole pipeline against the CSV schema (so type
++   errors surface even with zero rows) → exit 2.
++6. **Execute** row ops in order, then bucket by (window, group key), aggregate,
++   normalize, serialize. Runtime failures (division by zero, NaN/Inf) exit 4.
++
++All errors are raised as `MTLError(kind, msg)`; `main` prints exactly one line
++`ERROR:<kind>:<msg>` to STDERR and exits with the mapped code. Output is only
++written after full success.
++
++## DSL parsing
++
++* Lines are scanned with a quote-aware scanner: `#` outside a string starts a
++  comment. Physical lines are joined into one statement while brackets are
++  unbalanced or the text ends with `,` (this supports the multi-line
++  `aggregate` list).
++* Statements: `filter(expr)`, `apply(expr, ident)`, `group_by(ident | [ident,...])`,
++  `window(<int><m|h|d>)`, `aggregate fn(col|*) as alias, ...`.
++  Duplicate `group_by`/`window`, zero or multiple `aggregate`, unknown
++  statements, unknown aggregate functions, duplicate aliases, aliases colliding
++  with output keys → exit 1.
++* `filter`/`apply` run in declared order; `group_by`, `window`, `aggregate` are
++  declarative and act on the final row set (their position does not matter).
++* Expression grammar (recursive descent), lowest → highest precedence:
++  `|` → `&` → `!` → comparison / `in` (non-associative) → `+ -` → `* / %` →
++  unary `-` → primary (literal, column, `fn(args)`, `( expr )`).
++  Literals: `'string'` (no escapes; backslash rejected), ints, floats
++  (`1.`, `.5`, `1e3`), `true`/`false`.
++  Functions: `len`, `day`, `month`, `year`, `round(x[, digits])`.
++
++## Types
++
++`int`, `float` (both "numeric"), `str`, `bool`, `timestamp`.
++
++* Required columns: `timestamp`→timestamp, `price`/`quantity`→float, others str.
++* Extra columns are inferred over all non-empty values: int → float → bool
++  (`true`/`false`) → timestamp (must contain a time part) → str.
++* Empty cells in non-string columns are null. Nulls propagate through arithmetic
++  and transforms, make comparisons false, are skipped by aggregates (except
++  `count(*)`), and rows with a null `timestamp` are dropped from windowing.
++* Rules: arithmetic numeric-only (int op int → int, `/` → float); comparisons
++  numeric↔numeric, str↔str, timestamp↔timestamp, bool↔bool (`==`/`!=` only);
++  `&|!` bool-only; `in` only `'literal' in <str column>`; `filter` needs bool;
++  `len` str; `day/month/year` timestamp (evaluated in `--tz`); `round` numeric
++  with int digits; aggregates numeric only except `count(*)`; `window` needs
++  `timestamp` to be a timestamp column. Unknown columns are type errors.
++
++## Execution & output
++
++* Timestamps parsed with `--timestamp-format` (strptime) or ISO 8601
++  (`fromisoformat`, `Z` accepted); naive values localized to `--tz`, stored as
++  aware UTC datetimes.
++* Windows: tumbling, epoch-aligned, floor((t - epoch)/width) computed in integer
++  microseconds. Only non-empty windows are emitted.
++* Aggregates: sum (sequential), average = sum/n, median (mean of middle two
++  when even), population var (two-pass) and std = sqrt(var), min, max, count.
++  No input → `count` 0, others `null`. Any non-finite result → exit 4.
++* `round`: half away from zero via `Decimal(repr(x))` + `ROUND_HALF_UP`.
++* Row ordering: `window_start`, then group key tuple (nulls first, numbers
++  numeric, strings by code point, timestamps chronological).
++  Key order: `window_start`, `window_end`, group keys, aliases sorted.
++* Timestamps rendered `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`. `-0.0` normalized to `0.0`.
++  JSON written with `indent=2`, `ensure_ascii=False`, trailing newline.
+
+### mtl.py (created)
+--- mtl.py
++++ mtl.py
+@@ -0,0 +1,1060 @@
++#!/usr/bin/env python3
++"""MTL: run a small pipeline DSL (filter/apply/group_by/window/aggregate) over a CSV of sales events."""
++
++import argparse
++import csv
++import io
++import json
++import math
++import re
++import sys
++from datetime import datetime, timedelta, timezone
++from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
++
++try:
++    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
++except ImportError:  # pragma: no cover
++    ZoneInfo = None
++    ZoneInfoNotFoundError = Exception
++
++EXIT_CODES = {"bad_dsl": 1, "type_error": 2, "bad_io": 3, "runtime_error": 4}
++
++
++class MTLError(Exception):
++    def __init__(self, kind, message):
++        super().__init__(message)
++        self.kind = kind
++        self.message = message
++
++
++def dsl_error(msg):
++    return MTLError("bad_dsl", msg)
++
++
++def type_error(msg):
++    return MTLError("type_error", msg)
++
++
++def io_error(msg):
++    return MTLError("bad_io", msg)
++
++
++def runtime_error(msg):
++    return MTLError("runtime_error", msg)
++
++
++# --------------------------------------------------------------------------- types
++
++INT, FLOAT, STR, BOOL, TS = "int", "float", "string", "bool", "timestamp"
++NUMERIC = (INT, FLOAT)
++
++REQUIRED_COLUMNS = {
++    "timestamp": TS,
++    "location": STR,
++    "item": STR,
++    "price": FLOAT,
++    "quantity": FLOAT,
++    "unit": STR,
++    "category": STR,
++}
++
++EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
++ONE_US = timedelta(microseconds=1)
++
++# --------------------------------------------------------------------------- tokenizer
++
++TOKEN_RE = re.compile(
++    r"""
++    (?P<ws>\s+)
++  | (?P<num>(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)
++  | (?P<str>'[^'\n]*')
++  | (?P<ident>[A-Za-z_][A-Za-z0-9_]*)
++  | (?P<op><=|>=|==|!=|<|>|!|&|\||\+|-|\*|/|%|\(|\)|\[|\]|,)
++    """,
++    re.VERBOSE,
++)
++
++
++class Token:
++    __slots__ = ("kind", "value", "pos", "end")
++
++    def __init__(self, kind, value, pos, end):
++        self.kind = kind
++        self.value = value
++        self.pos = pos
++        self.end = end
++
++    def __repr__(self):
++        return f"{self.kind}:{self.value!r}"
++
++
++def tokenize(text):
++    tokens = []
++    pos = 0
++    while pos < len(text):
++        m = TOKEN_RE.match(text, pos)
++        if not m:
++            ch = text[pos]
++            if ch == "'":
++                raise dsl_error(f"unterminated string literal at column {pos + 1}")
++            raise dsl_error(f"unexpected character {ch!r} at column {pos + 1}")
++        kind = m.lastgroup
++        value = m.group()
++        if kind == "str":
++            if "\\" in value:
++                raise dsl_error("escape sequences are not allowed in string literals")
++            value = value[1:-1]
++        if kind != "ws":
++            tokens.append(Token(kind, value, m.start(), m.end()))
++        pos = m.end()
++    tokens.append(Token("eof", None, len(text), len(text)))
++    return tokens
++
++
++# --------------------------------------------------------------------------- AST
++
++class Lit:
++    def __init__(self, value, typ):
++        self.value = value
++        self.typ = typ
++
++
++class Col:
++    def __init__(self, name):
++        self.name = name
++
++
++class Call:
++    def __init__(self, name, args):
++        self.name = name
++        self.args = args
++
++
++class Unary:
++    def __init__(self, op, operand):
++        self.op = op
++        self.operand = operand
++
++
++class Binary:
++    def __init__(self, op, left, right):
++        self.op = op
++        self.left = left
++        self.right = right
++
++
++FUNCTION_ARITY = {"len": (1, 1), "day": (1, 1), "month": (1, 1), "year": (1, 1), "round": (1, 2)}
++AGG_FUNCTIONS = ("average", "median", "sum", "count", "std", "var", "min", "max")
++COMPARISON_OPS = ("<", "<=", ">", ">=", "==", "!=")
++STATEMENT_KEYWORDS = ("filter", "apply", "group_by", "window", "aggregate")
++
++
++class Parser:
++    def __init__(self, text):
++        self.tokens = tokenize(text)
++        self.i = 0
++
++    # -- helpers
++    def peek(self, offset=0):
++        return self.tokens[min(self.i + offset, len(self.tokens) - 1)]
++
++    def next(self):
++        tok = self.tokens[self.i]
++        if tok.kind != "eof":
++            self.i += 1
++        return tok
++
++    def at(self, kind, value=None):
++        tok = self.peek()
++        return tok.kind == kind and (value is None or tok.value == value)
++
++    def at_op(self, *values):
++        tok = self.peek()
++        return tok.kind == "op" and tok.value in values
++
++    def expect_op(self, value):
++        tok = self.next()
++        if tok.kind != "op" or tok.value != value:
++            raise dsl_error(f"expected '{value}' but found {describe(tok)}")
++        return tok
++
++    def expect_ident(self, what="identifier"):
++        tok = self.next()
++        if tok.kind != "ident":
++            raise dsl_error(f"expected {what} but found {describe(tok)}")
++        return tok.value
++
++    def expect_eof(self):
++        tok = self.peek()
++        if tok.kind != "eof":
++            raise dsl_error(f"unexpected {describe(tok)} at end of statement")
++
++    # -- expressions
++    def parse_expr(self):
++        return self.parse_or()
++
++    def parse_or(self):
++        node = self.parse_and()
++        while self.at_op("|"):
++            self.next()
++            node = Binary("|", node, self.parse_and())
++        return node
++
++    def parse_and(self):
++        node = self.parse_not()
++        while self.at_op("&"):
++            self.next()
++            node = Binary("&", node, self.parse_not())
++        return node
++
++    def parse_not(self):
++        if self.at_op("!"):
++            self.next()
++            return Unary("!", self.parse_not())
++        return self.parse_comparison()
++
++    def parse_comparison(self):
++        node = self.parse_additive()
++        if self.at_op(*COMPARISON_OPS):
++            op = self.next().value
++            node = Binary(op, node, self.parse_additive())
++        elif self.at("ident", "in"):
++            self.next()
++            node = Binary("in", node, self.parse_additive())
++        else:
++            return node
++        if self.at_op(*COMPARISON_OPS) or self.at("ident", "in"):
++            raise dsl_error("comparison operators cannot be chained; use parentheses")
++        return node
++
++    def parse_additive(self):
++        node = self.parse_multiplicative()
++        while self.at_op("+", "-"):
++            op = self.next().value
++            node = Binary(op, node, self.parse_multiplicative())
++        return node
++
++    def parse_multiplicative(self):
++        node = self.parse_unary()
++        while self.at_op("*", "/", "%"):
++            op = self.next().value
++            node = Binary(op, node, self.parse_unary())
++        return node
++
++    def parse_unary(self):
++        if self.at_op("-", "+"):
++            op = self.next().value
++            operand = self.parse_unary()
++            if isinstance(operand, Lit) and operand.typ in NUMERIC:
++                return Lit(-operand.value if op == "-" else operand.value, operand.typ)
++            return operand if op == "+" else Unary("-", operand)
++        return self.parse_primary()
++
++    def parse_primary(self):
++        tok = self.next()
++        if tok.kind == "num":
++            if re.fullmatch(r"\d+", tok.value):
++                return Lit(int(tok.value), INT)
++            value = float(tok.value)
++            if not math.isfinite(value):
++                raise dsl_error(f"numeric literal {tok.value} is out of range")
++            return Lit(value, FLOAT)
++        if tok.kind == "str":
++            return Lit(tok.value, STR)
++        if tok.kind == "ident":
++            if tok.value == "true":
++                return Lit(True, BOOL)
++            if tok.value == "false":
++                return Lit(False, BOOL)
++            if tok.value == "in":
++                raise dsl_error("unexpected keyword 'in'")
++            if self.at_op("("):
++                return self.parse_call(tok.value)
++            return Col(tok.value)
++        if tok.kind == "op" and tok.value == "(":
++            node = self.parse_expr()
++            self.expect_op(")")
++            return node
++        raise dsl_error(f"unexpected {describe(tok)} in expression")
++
++    def parse_call(self, name):
++        if name not in FUNCTION_ARITY:
++            raise dsl_error(f"unknown function '{name}'")
++        self.expect_op("(")
++        args = []
++        if not self.at_op(")"):
++            args.append(self.parse_expr())
++            while self.at_op(","):
++                self.next()
++                args.append(self.parse_expr())
++        self.expect_op(")")
++        lo, hi = FUNCTION_ARITY[name]
++        if not lo <= len(args) <= hi:
++            expected = str(lo) if lo == hi else f"{lo} to {hi}"
++            raise dsl_error(f"function '{name}' expects {expected} argument(s), got {len(args)}")
++        return Call(name, args)
++
++
++def describe(tok):
++    if tok.kind == "eof":
++        return "end of statement"
++    if tok.kind == "str":
++        return f"string '{tok.value}'"
++    return f"'{tok.value}'"
++
++
++# --------------------------------------------------------------------------- statements
++
++class Program:
++    def __init__(self):
++        self.steps = []  # ("filter", expr) | ("apply", expr, name)
++        self.group_by = None  # list of column names
++        self.window = None  # width in microseconds
++        self.window_text = None
++        self.aggregates = None  # list of (fn, column-or-None, alias)
++
++
++def split_statements(text):
++    """Strip comments and join physical lines into logical statements."""
++    statements = []
++    buf = []
++    depth = 0
++    start_line = None
++    for lineno, raw in enumerate(text.splitlines(), 1):
++        out = []
++        in_str = False
++        for ch in raw:
++            if in_str:
++                if ch == "'":
++                    in_str = False
++            elif ch == "'":
++                in_str = True
++            elif ch == "#":
++                break
++            elif ch in "([":
++                depth += 1
++            elif ch in ")]":
++                depth -= 1
++            out.append(ch)
++        line = "".join(out).strip()
++        if not line and not buf:
++            continue
++        if not buf:
++            start_line = lineno
++        if line:
++            buf.append(line)
++        joined = " ".join(buf)
++        if depth > 0 or joined.endswith(",") or joined == "aggregate":
++            continue
++        statements.append((start_line, joined))
++        buf = []
++        depth = 0
++    if buf:
++        statements.append((start_line, " ".join(buf)))
++    return statements
++
++
++DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400}
++
++
++def parse_program(text):
++    program = Program()
++    for lineno, stmt in split_statements(text):
++        try:
++            parse_statement(program, stmt)
++        except MTLError as e:
++            if e.kind == "bad_dsl":
++                raise dsl_error(f"line {lineno}: {e.message}")
++            raise
++    if program.aggregates is None:
++        raise dsl_error("exactly one 'aggregate' statement is required")
++    validate_output_keys(program)
++    return program
++
++
++def parse_statement(program, stmt):
++    p = Parser(stmt)
++    head = p.next()
++    if head.kind != "ident" or head.value not in STATEMENT_KEYWORDS:
++        raise dsl_error(f"unknown statement starting with {describe(head)}")
++    kw = head.value
++    if kw == "filter":
++        p.expect_op("(")
++        expr = p.parse_expr()
++        p.expect_op(")")
++        p.expect_eof()
++        program.steps.append(("filter", expr))
++    elif kw == "apply":
++        p.expect_op("(")
++        expr = p.parse_expr()
++        p.expect_op(",")
++        name = p.expect_ident("new column name")
++        if name in ("true", "false", "in"):
++            raise dsl_error(f"'{name}' is a reserved word and cannot be a column name")
++        p.expect_op(")")
++        p.expect_eof()
++        program.steps.append(("apply", expr, name))
++    elif kw == "group_by":
++        if program.group_by is not None:
++            raise dsl_error("at most one 'group_by' statement is allowed")
++        p.expect_op("(")
++        cols = []
++        if p.at_op("["):
++            p.next()
++            cols.append(p.expect_ident("column name"))
++            while p.at_op(","):
++                p.next()
++                cols.append(p.expect_ident("column name"))
++            p.expect_op("]")
++        else:
++            cols.append(p.expect_ident("column name"))
++        p.expect_op(")")
++        p.expect_eof()
++        if len(set(cols)) != len(cols):
++            raise dsl_error("duplicate column in group_by")
++        program.group_by = cols
++    elif kw == "window":
++        if program.window is not None:
++            raise dsl_error("at most one 'window' statement is allowed")
++        p.expect_op("(")
++        num = p.next()
++        unit = p.next()
++        if (
++            num.kind != "num"
++            or not re.fullmatch(r"\d+", num.value)
++            or unit.kind != "ident"
++            or unit.value not in DURATION_UNITS
++            or unit.pos != num.end
++        ):
++            raise dsl_error("invalid duration literal; expected e.g. 10m, 1h, 7d")
++        p.expect_op(")")
++        p.expect_eof()
++        amount = int(num.value)
++        if amount <= 0:
++            raise dsl_error("window duration must be positive")
++        program.window = amount * DURATION_UNITS[unit.value] * 1_000_000
++        program.window_text = num.value + unit.value
++    elif kw == "aggregate":
++        if program.aggregates is not None:
++            raise dsl_error("exactly one 'aggregate' statement is required")
++        aggs = [parse_agg_entry(p)]
++        while p.at_op(","):
++            p.next()
++            aggs.append(parse_agg_entry(p))
++        p.expect_eof()
++        aliases = [a[2] for a in aggs]
++        dup = sorted({a for a in aliases if aliases.count(a) > 1})
++        if dup:
++            raise dsl_error(f"duplicate aggregate alias '{dup[0]}'")
++        program.aggregates = aggs
++
++
++def parse_agg_entry(p):
++    fn = p.expect_ident("aggregate function")
++    if fn not in AGG_FUNCTIONS:
++        raise dsl_error(f"unknown aggregate function '{fn}'")
++    p.expect_op("(")
++    if p.at_op("*"):
++        p.next()
++        col = None
++    else:
++        col = p.expect_ident("column name or '*'")
++    p.expect_op(")")
++    if not p.at("ident", "as"):
++        raise dsl_error(f"expected 'as <alias>' after {fn}(...), found {describe(p.peek())}")
++    p.next()
++    alias = p.expect_ident("alias")
++    return (fn, col, alias)
++
++
++def validate_output_keys(program):
++    reserved = set(program.group_by or [])
++    if program.window is not None:
++        for key in ("window_start", "window_end"):
++            if key in reserved:
++                raise dsl_error(f"group_by column '{key}' collides with window output field")
++            reserved.add(key)
++    for _, _, alias in program.aggregates:
++        if alias in reserved:
++            raise dsl_error(f"aggregate alias '{alias}' collides with another output field")
++
++
++# --------------------------------------------------------------------------- CSV loading
++
++NUMBER_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|[+-]?(?:inf|infinity|nan)", re.IGNORECASE)
++INT_RE = re.compile(r"[+-]?\d+")
++
++
++def parse_number(s):
++    s = s.strip()
++    if not NUMBER_RE.fullmatch(s):
++        raise ValueError(s)
++    return float(s)
++
++
++def make_ts_parser(tz, fmt):
++    def parse(s):
++        s = s.strip()
++        if fmt:
++            dt = datetime.strptime(s, fmt)
++        else:
++            t = s[:-1] + "+00:00" if s[-1:] in ("Z", "z") else s
++            dt = datetime.fromisoformat(t)
++        if dt.tzinfo is None:
++            dt = dt.replace(tzinfo=tz)
++        return dt.astimezone(timezone.utc)
++
++    return parse
++
++
++def infer_type(values, parse_ts):
++    present = [v.strip() for v in values if v.strip() != ""]
++    if not present:
++        return STR
++    if all(INT_RE.fullmatch(v) for v in present):
++        return INT
++    if all(NUMBER_RE.fullmatch(v) for v in present):
++        return FLOAT
++    if all(v.lower() in ("true", "false") for v in present):
++        return BOOL
++    if all(":" in v for v in present):
++        try:
++            for v in present:
++                parse_ts(v)
++            return TS
++        except (ValueError, OverflowError):
++            pass
++    return STR
++
++
++def convert(value, typ, parse_ts):
++    if typ == STR:
++        return value
++    v = value.strip()
++    if v == "":
++        return None
++    if typ == FLOAT:
++        return parse_number(v)
++    if typ == INT:
++        return int(v)
++    if typ == BOOL:
++        low = v.lower()
++        if low not in ("true", "false"):
++            raise ValueError(v)
++        return low == "true"
++    return parse_ts(v)
++
++
++def load_csv(path, parse_ts):
++    try:
++        with open(path, "r", encoding="utf-8-sig", newline="") as f:
++            data = f.read()
++    except FileNotFoundError:
++        raise io_error(f"CSV file not found: {path}")
++    except IsADirectoryError:
++        raise io_error(f"CSV path is a directory: {path}")
++    except UnicodeDecodeError:
++        raise io_error(f"CSV file is not valid UTF-8: {path}")
++    except OSError as e:
++        raise io_error(f"cannot read CSV file {path}: {e.strerror or e}")
++    try:
++        records = list(csv.reader(io.StringIO(data, newline="")))
++    except csv.Error as e:
++        raise io_error(f"malformed CSV: {e}")
++    if not records:
++        raise io_error("CSV file is empty; a header row is required")
++    header = [h.strip() for h in records[0]]
++    if len(set(header)) != len(header):
++        raise io_error("CSV header contains duplicate column names")
++    missing = [c for c in REQUIRED_COLUMNS if c not in header]
++    if missing:
++        raise io_error(f"CSV is missing required column(s): {', '.join(missing)}")
++    body = []
++    for lineno, rec in enumerate(records[1:], 2):
++        if not rec or (len(rec) == 1 and rec[0].strip() == ""):
++            continue
++        if len(rec) != len(header):
++            raise io_error(f"CSV row {lineno} has {len(rec)} fields, expected {len(header)}")
++        body.append(rec)
++
++    schema = {}
++    columns = {}
++    for idx, name in enumerate(header):
++        raw = [rec[idx] for rec in body]
++        typ = REQUIRED_COLUMNS.get(name) or infer_type(raw, parse_ts)
++        schema[name] = typ
++        converted = []
++        for offset, value in enumerate(raw):
++            try:
++                converted.append(convert(value, typ, parse_ts))
++            except (ValueError, OverflowError):
++                raise type_error(f"column '{name}' has invalid {typ} value {value!r}")
++        columns[name] = converted
++    rows = [{name: columns[name][i] for name in header} for i in range(len(body))]
++    return schema, rows
++
++
++# --------------------------------------------------------------------------- compile (type check + evaluator)
++
++def type_name(t):
++    return "number" if t in NUMERIC else t
++
++
++def check_finite(x):
++    if isinstance(x, float) and not math.isfinite(x):
++        raise runtime_error("expression produced a non-finite number")
++    return x
++
++
++def round_half_away(x, digits):
++    if isinstance(x, int) and digits >= 0:
++        return x
++    if isinstance(x, float) and not math.isfinite(x):
++        raise runtime_error("cannot round a non-finite number")
++    if digits > 400:
++        return x
++    if digits < -400:
++        return 0 if isinstance(x, int) else 0.0
++    with localcontext() as ctx:
++        ctx.prec = 1000
++        try:
++            d = Decimal(repr(x)).quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
++        except InvalidOperation:
++            raise runtime_error("round() failed")
++    if isinstance(x, int):
++        return int(d)
++    result = float(d)
++    if result == 0:
++        result = 0.0
++    return check_finite(result)
++
++
++def arith(op, a, b):
++    try:
++        if op == "+":
++            r = a + b
++        elif op == "-":
++            r = a - b
++        elif op == "*":
++            r = a * b
++        elif op == "/":
++            if b == 0:
++                raise runtime_error("division by zero")
++            r = a / b
++        else:
++            if b == 0:
++                raise runtime_error("modulo by zero")
++            r = a % b
++    except OverflowError:
++        raise runtime_error("numeric overflow")
++    return check_finite(r)
++
++
++COMPARE = {
++    "<": lambda a, b: a < b,
++    "<=": lambda a, b: a <= b,
++    ">": lambda a, b: a > b,
++    ">=": lambda a, b: a >= b,
++    "==": lambda a, b: a == b,
++    "!=": lambda a, b: a != b,
++}
++
++
++def compile_expr(node, schema, tz):
++    """Type-check `node` against `schema`; return (type, evaluator(row))."""
++    if isinstance(node, Lit):
++        value = node.value
++        return node.typ, lambda row: value
++
++    if isinstance(node, Col):
++        if node.name not in schema:
++            raise type_error(f"unknown column '{node.name}'")
++        name = node.name
++        return schema[name], lambda row: row[name]
++
++    if isinstance(node, Unary):
++        t, f = compile_expr(node.operand, schema, tz)
++        if node.op == "!":
++            if t != BOOL:
++                raise type_error(f"'!' requires a boolean operand, got {type_name(t)}")
++            return BOOL, lambda row: not f(row)
++        if t not in NUMERIC:
++            raise type_error(f"unary '-' requires a numeric operand, got {type_name(t)}")
++
++        def neg(row):
++            v = f(row)
++            return None if v is None else -v
++
++        return t, neg
++
++    if isinstance(node, Call):
++        return compile_call(node, schema, tz)
++
++    op = node.op
++    if op == "in":
++        if not (isinstance(node.left, Lit) and node.left.typ == STR):
++            raise type_error("'in' requires a string literal on the left (<string_literal> in <string_col>)")
++        if not isinstance(node.right, Col):
++            raise type_error("'in' requires a string column on the right (<string_literal> in <string_col>)")
++        rt, rf = compile_expr(node.right, schema, tz)
++        if rt != STR:
++            raise type_error(f"'in' requires a string column on the right, column '{node.right.name}' is {type_name(rt)}")
++        needle = node.left.value
++
++        def contains(row):
++            v = rf(row)
++            return v is not None and needle in v
++
++        return BOOL, contains
++
++    lt, lf = compile_expr(node.left, schema, tz)
++    rt, rf = compile_expr(node.right, schema, tz)
++
++    if op in ("&", "|"):
++        if lt != BOOL or rt != BOOL:
++            raise type_error(f"'{op}' requires boolean operands, got {type_name(lt)} and {type_name(rt)}")
++        if op == "&":
++            return BOOL, lambda row: bool(lf(row)) and bool(rf(row))
++        return BOOL, lambda row: bool(lf(row)) or bool(rf(row))
++
++    if op in COMPARISON_OPS:
++        ok = (
++            (lt in NUMERIC and rt in NUMERIC)
++            or (lt == rt and lt in (STR, TS))
++            or (lt == rt == BOOL and op in ("==", "!="))
++        )
++        if not ok:
++            raise type_error(f"cannot compare {type_name(lt)} with {type_name(rt)} using '{op}'")
++        cmp = COMPARE[op]
++
++        def compare(row):
++            a = lf(row)
++            if a is None:
++                return False
++            b = rf(row)
++            if b is None:
++                return False
++            return cmp(a, b)
++
++        return BOOL, compare
++
++    # arithmetic
++    if lt not in NUMERIC or rt not in NUMERIC:
++        raise type_error(f"'{op}' requires numeric operands, got {type_name(lt)} and {type_name(rt)}")
++    result_type = FLOAT if op == "/" or FLOAT in (lt, rt) else INT
++
++    def evaluate(row):
++        a = lf(row)
++        if a is None:
++            return None
++        b = rf(row)
++        if b is None:
++            return None
++        return arith(op, a, b)
++
++    return result_type, evaluate
++
++
++def compile_call(node, schema, tz):
++    name = node.name
++    compiled = [compile_expr(a, schema, tz) for a in node.args]
++    t, f = compiled[0]
++    if name == "len":
++        if t != STR:
++            raise type_error(f"len() requires a string argument, got {type_name(t)}")
++
++        def length(row):
++            v = f(row)
++            return None if v is None else len(v)
++
++        return INT, length
++    if name in ("day", "month", "year"):
++        if t != TS:
++            raise type_error(f"{name}() requires a timestamp argument, got {type_name(t)}")
++        attr = name
++
++        def part(row):
++            v = f(row)
++            return None if v is None else getattr(v.astimezone(tz), attr)
++
++        return INT, part
++    # round
++    if t not in NUMERIC:
++        raise type_error(f"round() requires a numeric argument, got {type_name(t)}")
++    if len(compiled) == 2:
++        dt, df = compiled[1]
++        if dt != INT:
++            raise type_error(f"round() digits must be an integer, got {type_name(dt)}")
++    else:
++        df = lambda row: 0  # noqa: E731
++
++    def rounder(row):
++        v = f(row)
++        if v is None:
++            return None
++        d = df(row)
++        if d is None:
++            return None
++        return round_half_away(v, d)
++
++    return t, rounder
++
++
++# --------------------------------------------------------------------------- aggregation
++
++def agg_sum(vals):
++    try:
++        total = 0
++        for v in vals:
++            total += v
++    except OverflowError:
++        raise runtime_error("numeric overflow in sum")
++    return total
++
++
++def agg_mean(vals):
++    return agg_sum(vals) / len(vals)
++
++
++def agg_var(vals):
++    mean = agg_mean(vals)
++    acc = 0.0
++    for v in vals:
++        d = v - mean
++        acc += d * d
++    return acc / len(vals)
++
++
++def agg_median(vals):
++    s = sorted(vals)
++    n = len(s)
++    mid = n // 2
++    if n % 2:
++        return s[mid]
++    return (s[mid - 1] + s[mid]) / 2
++
++
++AGG_IMPL = {
++    "sum": agg_sum,
++    "average": agg_mean,
++    "median": agg_median,
++    "var": agg_var,
++    "std": lambda vals: math.sqrt(check_finite(agg_var(vals))),
++    "min": min,
++    "max": max,
++}
++
++
++def compute_aggregate(fn, col, rows):
++    if col is None:
++        return len(rows)
++    vals = [r[col] for r in rows if r[col] is not None]
++    if fn == "count":
++        return len(vals)
++    if any(isinstance(v, float) and math.isnan(v) for v in vals):
++        raise runtime_error(f"{fn}({col}) produced a non-finite number")
++    if not vals:
++        return None
++    try:
++        result = AGG_IMPL[fn](vals)
++    except OverflowError:
++        raise runtime_error(f"numeric overflow in {fn}({col})")
++    if isinstance(result, float) and not math.isfinite(result):
++        raise runtime_error(f"{fn}({col}) produced a non-finite number")
++    return result
++
++
++# --------------------------------------------------------------------------- execution
++
++def format_ts(dt):
++    dt = dt.astimezone(timezone.utc)
++    s = dt.strftime("%Y-%m-%dT%H:%M:%S")
++    if dt.microsecond:
++        s += f".{dt.microsecond:06d}"
++    return s + "Z"
++
++
++def to_json_value(v):
++    if isinstance(v, datetime):
++        return format_ts(v)
++    if isinstance(v, float):
++        if not math.isfinite(v):
++            raise runtime_error("result contains a non-finite number")
++        return 0.0 if v == 0 else v
++    return v
++
++
++def sort_key(value):
++    if value is None:
++        return (0, 0)
++    return (1, value)
++
++
++def run(program, schema, rows, tz):
++    schema = dict(schema)
++    compiled_steps = []
++    for step in program.steps:
++        t, f = compile_expr(step[1], schema, tz)
++        if step[0] == "filter":
++            if t != BOOL:
++                raise type_error(f"filter expression must be boolean, got {type_name(t)}")
++            compiled_steps.append(("filter", f, None))
++        else:
++            schema[step[2]] = t
++            compiled_steps.append(("apply", f, step[2]))
++
++    group_cols = program.group_by or []
++    for c in group_cols:
++        if c not in schema:
++            raise type_error(f"unknown group_by column '{c}'")
++    if program.window is not None:
++        if schema.get("timestamp") != TS:
++            raise type_error("window requires 'timestamp' to be a timestamp column")
++    for fn, col, alias in program.aggregates:
++        if col is None:
++            if fn != "count":
++                raise type_error(f"{fn}(*) is not allowed; only count(*) accepts '*'")
++            continue
++        if col not in schema:
++            raise type_error(f"unknown column '{col}' in {fn}({col})")
++        if schema[col] not in NUMERIC:
++            raise type_error(f"{fn}({col}) requires a numeric column, '{col}' is {type_name(schema[col])}")
++
++    for kind, f, name in compiled_steps:
++        if kind == "filter":
++            rows = [r for r in rows if f(r)]
++        else:
++            for r in rows:
++                r[name] = f(r)
++
++    windowed = program.window is not None
++    if not windowed and not group_cols:
++        out = {}
++        for fn, col, alias in sorted(program.aggregates, key=lambda a: a[2]):
++            out[alias] = to_json_value(compute_aggregate(fn, col, rows))
++        return out
++
++    buckets = {}
++    width = program.window
++    for r in rows:
++        if windowed:
++            ts = r["timestamp"]
++            if ts is None:
++                continue
++            us = (ts - EPOCH) // ONE_US
++            start = (us // width) * width
++        else:
++            start = None
++        key = (start, tuple(r[c] for c in group_cols))
++        buckets.setdefault(key, []).append(r)
++
++    def bucket_order(key):
++        start, gvals = key
++        return (start if start is not None else 0, tuple(sort_key(v) for v in gvals))
++
++    result = []
++    for key in sorted(buckets, key=bucket_order):
++        start, gvals = key
++        members = buckets[key]
++        obj = {}
++        if windowed:
++            obj["window_start"] = format_ts(EPOCH + timedelta(microseconds=start))
++            obj["window_end"] = format_ts(EPOCH + timedelta(microseconds=start + width))
++        for c, v in zip(group_cols, gvals):
++            obj[c] = to_json_value(v)
++        for fn, col, alias in sorted(program.aggregates, key=lambda a: a[2]):
++            obj[alias] = to_json_value(compute_aggregate(fn, col, members))
++        result.append(obj)
++    return result
++
++
++# --------------------------------------------------------------------------- CLI
++
++class ArgParser(argparse.ArgumentParser):
++    def error(self, message):
++        raise io_error(f"invalid arguments: {message}")
++
++
++def resolve_tz(name):
++    if name in ("UTC", "Z", "Etc/UTC"):
++        return timezone.utc
++    if ZoneInfo is None:
++        raise io_error(f"timezone support unavailable for '{name}'")
++    try:
++        return ZoneInfo(name)
++    except (ZoneInfoNotFoundError, ValueError, OSError):
++        raise io_error(f"unknown timezone '{name}'")
++
++
++def read_dsl(path):
++    if path == "-":
++        try:
++            return sys.stdin.read()
++        except (OSError, UnicodeDecodeError) as e:
++            raise io_error(f"cannot read DSL from STDIN: {e}")
++    try:
++        with open(path, "r", encoding="utf-8-sig") as f:
++            return f.read()
++    except FileNotFoundError:
++        raise io_error(f"DSL file not found: {path}")
++    except IsADirectoryError:
++        raise io_error(f"DSL path is a directory: {path}")
++    except UnicodeDecodeError:
++        raise io_error(f"DSL file is not valid UTF-8: {path}")
++    except OSError as e:
++        raise io_error(f"cannot read DSL file {path}: {e.strerror or e}")
++
++
++def main(argv=None):
++    parser = ArgParser(prog="mtl.py", description="Run an MTL pipeline over a CSV of sales events.")
++    parser.add_argument("--csv", required=True)
++    parser.add_argument("--dsl", required=True)
++    parser.add_argument("--out", default=None)
++    parser.add_argument("--tz", default="UTC")
++    parser.add_argument("--timestamp-format", dest="timestamp_format", default=None)
++    args = parser.parse_args(argv)
++
++    tz = resolve_tz(args.tz)
++    program = parse_program(read_dsl(args.dsl))
++    schema, rows = load_csv(args.csv, make_ts_parser(tz, args.timestamp_format))
++    result = run(program, schema, rows, tz)
++    try:
++        text = json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
++    except ValueError:
++        raise runtime_error("result contains a non-finite number")
++
++    if args.out and args.out != "-":
++        try:
++            with open(args.out, "w", encoding="utf-8") as f:
++                f.write(text)
++        except OSError as e:
++            raise io_error(f"cannot write output file {args.out}: {e.strerror or e}")
++    else:
++        sys.stdout.write(text)
++        sys.stdout.flush()
++    return 0
++
++
++def entry():
++    try:
++        sys.stdout.reconfigure(encoding="utf-8")
++    except (AttributeError, ValueError):
++        pass
++    try:
++        code = main()
++    except MTLError as e:
++        msg = " ".join(str(e.message).split())
++        sys.stderr.write(f"ERROR:{e.kind}:{msg}\n")
++        code = EXIT_CODES[e.kind]
++    except RecursionError:
++        sys.stderr.write("ERROR:bad_dsl:expression is nested too deeply\n")
++        code = 1
++    except Exception as e:  # unexpected failure during execution
++        msg = " ".join(f"{type(e).__name__}: {e}".split())
++        sys.stderr.write(f"ERROR:runtime_error:{msg}\n")
++        code = 4
++    sys.exit(code)
++
++
++if __name__ == "__main__":
++    entry()
+
+### requirements.txt (created)
+--- requirements.txt
++++ requirements.txt
+@@ -0,0 +1 @@
++tzdata>=2024.1
+

@@ -1,0 +1,683 @@
+    success("Extracted '%s' to '%s'." % (assoc["archive"], dest))
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def build_registry():
+    register("help", "Get help on appctl, or on a specific command.",
+             "[<command>...]", handler=cmd_help)
+
+    register("cli", "Review current appctl info, check for updates, or see defined aliases.")
+    register("cli version", "Print appctl version.", "", handler=cmd_cli_version)
+    register("cli info", "Print various details about the appctl environment.",
+             "[--format=<format>]", handler=cmd_cli_info, defaults={"format": "list"})
+    register("cli check-update", "Check to see if there is a newer version of appctl available.",
+             "[--patch] [--minor] [--major] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_cli_check_update, defaults={"format": "table"})
+    register("cli update", "Update appctl, or extract a release archive.",
+             "[--patch] [--minor] [--major] [--stable] [--nightly] [--yes] "
+             "[--archive=<archive>] [--path=<path>]",
+             handler=cmd_cli_update)
+    register("cli has-command", "Detect if a command exists.", "<command_name>",
+             handler=cmd_cli_has_command)
+    register("cli completions", "Generate tab completion strings.",
+             "--line=<line> [--point=<point>]", handler=cmd_cli_completions)
+    register("cli cmd-dump", "Dump the list of installed commands, as JSON.", "",
+             handler=cmd_cli_cmd_dump)
+    register("cli alias", "Retrieve, set, and delete appctl aliases.")
+    register("cli alias list", "List available appctl aliases.", "[--format=<format>]",
+             handler=cmd_cli_alias_list, defaults={"format": "yaml"})
+    register("cli alias add", "Create an alias.",
+             "<key> [--set-user=<user>] [--set-url=<url>] [--set-path=<path>] [--grouping=<grouping>]",
+             handler=cmd_cli_alias_add)
+    register("cli alias delete", "Delete an alias.", "<key>", handler=cmd_cli_alias_delete)
+
+    register("site", "Create, delete, list, and update sites.")
+    register("site create", "Create a site.",
+             "<site-name> [--type=<type>] [--title=<title>] [--email=<email>] [--porcelain]",
+             handler=cmd_site_create, defaults={"type": "standard"})
+    register("site delete", "Delete a site.", "<site-name> [--yes] [--keep-tables]",
+             alias="rm", handler=cmd_site_delete)
+    register("site list", "List all sites.",
+             "[--field=<field>] [--fields=<fields>] [--format=<format>]",
+             alias="ls", handler=cmd_site_list, defaults={"format": "table"})
+    register("site update", "Update one or more fields of a site.",
+             "<site-name> [--<field>=<value>]", handler=cmd_site_update)
+    register("site activate", "Activate one or more sites.", "<site-name>...",
+             handler=cmd_site_activate)
+    register("site deactivate", "Deactivate one or more sites.", "<site-name>...",
+             handler=cmd_site_deactivate)
+    register("site empty", "Empty a site of its content.", "[--uploads] [--yes]",
+             handler=cmd_site_empty)
+    register("site meta", "Add, update, get, and delete site metadata.")
+    register("site meta get", "Get a meta field.", "<site-name> <key> [--format=<format>]",
+             handler=cmd_site_meta_get, defaults={"format": "var_export"})
+    register("site meta set", "Set a meta field.", "<site-name> <key> <value> [--format=<format>]",
+             handler=cmd_site_meta_set, defaults={"format": "plaintext"}, stdin_args=("value",))
+    register("site meta delete", "Delete a meta field.", "<site-name> <key> [--all]",
+             handler=cmd_site_meta_delete)
+    register("site meta list", "List all metadata associated with a site.",
+             "<site-name> [--keys=<keys>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_site_meta_list, defaults={"format": "table"})
+
+    register("config", "Generate and read the application configuration file.", alias="cfg")
+    register("config get", "Get the value of a specific constant or variable.",
+             "<name> [--type=<type>] [--format=<format>]",
+             handler=cmd_config_get, defaults={"type": "all", "format": "var_export"})
+    register("config set", "Set the value of a specific constant or variable.",
+             "<name> <value> [--add] [--raw] [--anchor=<anchor>] [--type=<type>]",
+             handler=cmd_config_set, defaults={"type": "all"}, stdin_args=("value",))
+    register("config delete", "Delete a specific constant or variable.",
+             "<name> [--type=<type>]", handler=cmd_config_delete, defaults={"type": "all"})
+    register("config list", "List variables, constants, and file includes.",
+             "[<filter>...] [--fields=<fields>] [--format=<format>] [--strict]",
+             handler=cmd_config_list, defaults={"format": "table"})
+    register("config path", "Get the path to the configuration file.", "",
+             handler=cmd_config_path)
+    register("config create", "Generate a configuration file.",
+             "--dbname=<dbname> --dbuser=<dbuser> [--dbpass=<dbpass>] [--dbhost=<dbhost>] "
+             "[--dbprefix=<dbprefix>] [--skip-check] [--force]",
+             handler=cmd_config_create, defaults={"dbhost": "localhost", "dbprefix": "app_"})
+
+    register("cache", "Add, remove, fetch, and flush the object cache.")
+    register("cache flush", "Flush the object cache.", "", handler=cmd_cache_flush)
+    register("cache get", "Get a value from the object cache.", "<key> [<group>]",
+             handler=cmd_cache_get, defaults={"group": "default"})
+    register("cache set", "Set a value to the object cache.",
+             "<key> <value> [<group>] [<expiration>]", handler=cmd_cache_set,
+             defaults={"group": "default", "expiration": 0}, stdin_args=("value",))
+    register("cache delete", "Remove a value from the object cache.", "<key> [<group>]",
+             handler=cmd_cache_delete, defaults={"group": "default"})
+
+    register("db", "Perform basic database operations.")
+    register("db create", "Create a new database.", "", handler=cmd_db_create)
+    register("db drop", "Delete the existing database.", "[--yes]", handler=cmd_db_drop)
+    register("db reset", "Remove all tables from the database.", "[--yes]", handler=cmd_db_reset)
+    register("db export", "Export the database to a file or to STDOUT.",
+             "[<file>] [--tables=<tables>] [--exclude_tables=<tables>] [--porcelain]",
+             handler=cmd_db_export)
+    register("db import", "Import a database from a file or from STDIN.",
+             "[<file>] [--skip-optimization]", handler=cmd_db_import,
+             defaults={"file": "database.sql"})
+    register("db query", "Execute a SQL query against the database.", "[<sql>]",
+             handler=cmd_db_query, stdin_args=("sql",))
+    register("db size", "Display the database name and size.",
+             "[--size_format=<format>] [--tables] [--format=<format>]",
+             handler=cmd_db_size, defaults={"format": "table"})
+
+    register("option", "Retrieve and set site options.")
+    register("option get", "Get the value for an option.", "<key> [--format=<format>]",
+             handler=cmd_option_get, defaults={"format": "var_export"})
+    register("option add", "Add a new option value.",
+             "<key> [<value>] [--format=<format>] [--autoload=<autoload>]",
+             handler=cmd_option_add, defaults={"format": "plaintext", "autoload": "yes"},
+             stdin_args=("value",))
+    register("option update", "Update an option value.",
+             "<key> [<value>] [--autoload=<autoload>] [--format=<format>]",
+             handler=cmd_option_update, defaults={"format": "plaintext"}, stdin_args=("value",))
+    register("option delete", "Delete an option.", "<key>...", handler=cmd_option_delete)
+    register("option list", "List options and their values.",
+             "[--search=<pattern>] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_option_list, defaults={"format": "table"})
+
+    register("plugin", "Manage plugins.")
+    register("plugin install", "Install one or more plugins.",
+             "<plugin|zip|url>... [--version=<version>] [--force] [--activate]",
+             handler=cmd_plugin_install)
+    register("plugin activate", "Activate one or more plugins.",
+             "[<plugin>...] [--all] [--network]", handler=cmd_plugin_activate)
+    register("plugin deactivate", "Deactivate one or more plugins.",
+             "[<plugin>...] [--uninstall] [--all] [--network]", handler=cmd_plugin_deactivate)
+    register("plugin delete", "Delete plugin files without deactivating or uninstalling.",
+             "[<plugin>...] [--all]", handler=cmd_plugin_delete)
+    register("plugin uninstall", "Uninstall one or more plugins.",
+             "[<plugin>...] [--deactivate] [--skip-delete] [--all]", handler=cmd_plugin_uninstall)
+    register("plugin update", "Update one or more plugins.",
+             "[<plugin>...] [--all] [--format=<format>] [--version=<version>] [--dry-run]",
+             handler=cmd_plugin_update, defaults={"format": "table"})
+    register("plugin list", "Get a list of plugins.",
+             "[--status=<status>] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_plugin_list, defaults={"format": "table"})
+    register("plugin status", "Reveal the status of one or all plugins.", "[<plugin>]",
+             handler=cmd_plugin_status)
+
+    register("theme", "Manage themes.")
+    register("theme activate", "Activate a theme.", "<theme>", handler=cmd_theme_activate)
+    register("theme install", "Install one or more themes.",
+             "<theme|zip|url>... [--version=<version>] [--force] [--activate]",
+             handler=cmd_theme_install)
+    register("theme delete", "Delete one or more themes.", "[<theme>...] [--all] [--force]",
+             handler=cmd_theme_delete)
+    register("theme list", "Get a list of themes.",
+             "[--status=<status>] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_theme_list, defaults={"format": "table"})
+
+    register("post", "Manage posts, content, and meta.")
+    register("post create", "Create a new post.",
+             "[--post_title=<title>] [--post_type=<type>] [--post_status=<status>] "
+             "[--<field>=<value>] [--porcelain]",
+             handler=cmd_post_create, defaults={"post_type": "post", "post_status": "draft"})
+    register("post get", "Get details about a post.",
+             "<id> [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_post_get, defaults={"format": "table"})
+    register("post list", "Get a list of posts.",
+             "[--<field>=<value>] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_post_list, defaults={"format": "table"})
+    register("post update", "Update one or more existing posts.",
+             "<id>... [--<field>=<value>]", handler=cmd_post_update)
+    register("post delete", "Delete an existing post.", "<id>... [--force] [--defer-term-counting]",
+             handler=cmd_post_delete)
+
+    register("user", "Manage users, along with their roles, capabilities, and meta.")
+    register("user create", "Create a new user.",
+             "<user-login> <user-email> [--role=<role>] [--user_pass=<password>] "
+             "[--display_name=<name>] [--send-email] [--porcelain]",
+             handler=cmd_user_create, defaults={"role": "subscriber"})
+    register("user delete", "Delete one or more users.",
+             "<user>... [--network] [--reassign=<user-id>] [--yes]", handler=cmd_user_delete)
+    register("user get", "Get details about a user.",
+             "<user> [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_user_get, defaults={"format": "table"})
+    register("user list", "List users.",
+             "[--role=<role>] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_user_list, defaults={"format": "table"})
+    register("user update", "Update an existing user.",
+             "<user>... [--user_pass=<password>] [--<field>=<value>] [--skip-email]",
+             handler=cmd_user_update)
+
+
+build_registry()
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+PROJECT_CONFIG_FILES = ("appctl.local.yml", "appctl.yml")
+# Values written to the global config file when they are missing.
+AUTO_CONFIG = (("locale", "en_US"), ("installer_version", "stable"))
+
+
+def root_dir():
+    return os.environ.get("APPCTL_ROOT_DIR") or os.path.join(os.path.expanduser("~"), ".appctl")
+
+
+def packages_dir():
+    return os.environ.get("APPCTL_PACKAGES_DIR") or os.path.join(root_dir(), "packages")
+
+
+def global_config_path():
+    return os.environ.get("APPCTL_CONFIG_PATH") or os.path.join(root_dir(), "config", "config.yml")
+
+
+def project_config_path():
+    """Search upward from the working directory for a project config file."""
+    try:
+        directory = os.getcwd()
+    except OSError:
+        return None
+    while True:
+        for name in PROJECT_CONFIG_FILES:
+            candidate = os.path.join(directory, name)
+            if os.path.isfile(candidate):
+                return candidate
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            return None
+        directory = parent
+
+
+def absolutize(path, base_dir):
+    path = os.path.expanduser(path)
+    if os.path.isabs(path):
+        return path
+    return os.path.normpath(os.path.join(base_dir, path))
+
+
+def read_yaml_file(path):
+    """Return the mapping stored in ``path`` ({} when missing or empty)."""
+    with open(path, encoding="utf-8") as handle:
+        data = yaml_load(handle.read())
+    return data if isinstance(data, dict) else {}
+
+
+def ensure_global_config():
+    """Add missing auto-created values (locale, installer_version) to the global config."""
+    path = global_config_path()
+    explicit = bool(os.environ.get("APPCTL_CONFIG_PATH") or os.environ.get("APPCTL_ROOT_DIR"))
+    text = ""
+    try:
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        existing = yaml_load(text)
+    except YamlError:
+        return
+    except (OSError, UnicodeDecodeError) as exc:
+        if explicit:
+            error("Unable to read the global config file '%s': %s."
+                  % (path, getattr(exc, "strerror", None) or exc))
+        return
+    if existing is None:
+        existing = {}
+    if not isinstance(existing, dict):
+        return
+    missing = [(key, value) for key, value in AUTO_CONFIG if key not in existing]
+    if not missing:
+        return
+    if existing and text.lstrip().startswith("{"):
+        merged = dict(existing)
+        merged.update(missing)
+        content, mode = "\n".join(yaml_dump_lines(merged)) + "\n", "w"
+    else:
+        content = "\n" if text and not text.endswith("\n") else ""
+        content += "".join("%s: %s\n" % (key, value) for key, value in missing)
+        mode = "a"
+    try:
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(path, mode, encoding="utf-8") as handle:
+            handle.write(content)
+    except OSError as exc:
+        if explicit:
+            error("Unable to write the global config file '%s': %s."
+                  % (path, exc.strerror or exc))
+        debug("Unable to write the global config file '%s'." % path, "bootstrap")
+
+
+ALIAS_RE = re.compile(r"^@[A-Za-z0-9_.\-]+$")
+ALIAS_KEYS = ("user", "url", "path", "ssh", "http", "proxyjump", "key")
+ALL_ALIAS_DESCRIPTION = "Run command against every registered alias."
+
+
+def is_alias_name(name):
+    return isinstance(name, str) and ALIAS_RE.match(name) is not None
+
+
+def parse_alias(value, base_dir=None):
+    """Normalize an alias definition: a dict of connection values or a group list."""
+    if isinstance(value, list):
+        return [item if isinstance(item, str) else str(item) for item in value]
+    alias = {}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if item is None:
+                continue
+            if key in ALIAS_KEYS or (key in GLOBAL_SPEC and GLOBAL_SPEC[key]["file"]):
+                alias[key] = item
+        if base_dir and isinstance(alias.get("path"), str) and "ssh" not in alias:
+            alias["path"] = absolutize(alias["path"], base_dir)
+    return alias
+
+
+class ConfigLoader:
+    """Accumulate global parameters and aliases from config files."""
+
+    def __init__(self):
+        self.config = {}
+        self.aliases = {}
+
+    def merge_file(self, path, chain=()):
+        path = os.path.abspath(path)
+        if path in chain or not os.path.isfile(path):
+            return
+        try:
+            data = read_yaml_file(path)
+        except (OSError, UnicodeDecodeError, YamlError) as exc:
+            warning("Unable to parse config file '%s': %s" % (path, exc))
+            return
+        base_dir = os.path.dirname(path)
+        meta = data.get("_") if isinstance(data.get("_"), dict) else {}
+        inherit = meta.get("inherit")
+        if isinstance(inherit, str) and inherit:
+            parent = absolutize(inherit, base_dir)
+            if not os.path.isfile(parent) and os.path.isfile(os.path.abspath(inherit)):
+                parent = os.path.abspath(inherit)
+            self.merge_file(parent, chain + (path,))
+        merge = bool(meta.get("merge"))
+        for key, value in data.items():
+            if key == "_":
+                continue
+            if is_alias_name(key):
+                self.aliases[key] = parse_alias(value, base_dir)
+                continue
+            spec = GLOBAL_SPEC.get(key)
+            if spec is None or not spec["file"]:
+                continue
+            if key == "path" and isinstance(value, str):
+                value = absolutize(value, base_dir)
+            if spec["multiple"] and value is not None and not isinstance(value, list):
+                value = [value]
+            current = self.config.get(key)
+            if merge and isinstance(current, list) and isinstance(value, list):
+                value = current + value
+            self.config[key] = value
+
+    def merge_runtime_aliases(self, encoded):
+        try:
+            data = json.loads(encoded)
+        except ValueError:
+            warning("APPCTL_RUNTIME_ALIAS does not contain valid JSON.")
+            return
+        if not isinstance(data, dict):
+            return
+        for key, value in data.items():
+            if is_alias_name(key):
+                self.aliases[key] = parse_alias(value)
+
+
+def load_config():
+    """Load global and project config files. Returns the populated loader."""
+    loader = ConfigLoader()
+    global_path = global_config_path()
+    if os.path.isfile(global_path):
+        debug("Using global config: %s" % global_path, "bootstrap")
+        loader.merge_file(global_path)
+    else:
+        debug("No readable global config found", "bootstrap")
+    project_path = project_config_path()
+    if project_path:
+        debug("Using project config: %s" % project_path, "bootstrap")
+        loader.merge_file(project_path)
+    else:
+        debug("No project config found", "bootstrap")
+    runtime_aliases = os.environ.get("APPCTL_RUNTIME_ALIAS")
+    if runtime_aliases:
+        loader.merge_runtime_aliases(runtime_aliases)
+    if loader.aliases and "@all" not in loader.aliases:
+        loader.aliases = dict([("@all", ALL_ALIAS_DESCRIPTION)] + list(loader.aliases.items()))
+    Runtime.global_config_path = global_path
+    Runtime.project_config_path = project_path
+    Runtime.aliases = loader.aliases
+    return loader
+
+
+def compose_config(file_config, alias_config, runtime):
+    """Merge defaults < config files < alias < runtime flags."""
+    config = {name: (list(spec["default"]) if isinstance(spec["default"], list)
+                     else spec["default"]) for name, spec in GLOBAL_SPEC.items()}
+    config.update(file_config)
+    config.update(alias_config)
+    config.update(runtime)
+    if runtime.get("blog") not in (None, True, False) and "url" not in runtime:
+        config["url"] = runtime["blog"]
+    return config
+
+
+def disabled_commands():
+    value = Runtime.config.get("disabled_commands") or []
+    if not isinstance(value, list):
+        value = [value]
+    return {" ".join(str(item).split()) for item in value if item is not None}
+
+
+def is_command_disabled(command):
+    disabled = disabled_commands()
+    node = command
+    while node is not None and node.parent is not None:
+        if node.path in disabled:
+            return True
+        node = node.parent
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Remote execution
+# ---------------------------------------------------------------------------
+
+SSH_URL_RE = re.compile(
+    r"^(?:(docker|docker-compose|docker-compose-run|ssh|vagrant):(?://)?)?"
+    r"(?:([^@:/]+)@)?([^:/~]+)(?::(\d*))?((?:/|~).*)?$")
+
+
+def escapeshellarg(value):
+    return "'" + str(value).replace("'", "'\\''") + "'"
+
+
+def parse_ssh_url(url):
+    match = SSH_URL_RE.match(str(url))
+    if not match:
+        return {"scheme": None, "user": None, "host": str(url), "port": None, "path": None}
+    scheme, user, host, port, path = match.groups()
+    return {"scheme": scheme, "user": user, "host": host, "port": port or None,
+            "path": path or None}
+
+
+def generate_ssh_command(bits, command, config):
+    is_tty = sys.stdout.isatty() and not config.get("skip-tty")
+    scheme = bits["scheme"] or "ssh"
+    user_opt = "--user %s " % escapeshellarg(bits["user"]) if bits["user"] else ""
+    workdir_opt = "--workdir %s " % escapeshellarg(bits["path"]) if bits["path"] else ""
+    if scheme == "docker":
+        return "docker exec %s%s%s%s sh -c %s" % (
+            user_opt, workdir_opt, "-t " if is_tty else "", escapeshellarg(bits["host"]),
+            escapeshellarg(command))
+    if scheme == "docker-compose":
+        return "docker-compose exec %s%s%s%s sh -c %s" % (
+            user_opt, workdir_opt, "" if is_tty else "-T ", escapeshellarg(bits["host"]),
+            escapeshellarg(command))
+    if scheme == "docker-compose-run":
+        return "docker-compose run %s%s%s%s sh -c %s" % (
+            user_opt, workdir_opt, "" if is_tty else "-T ", escapeshellarg(bits["host"]),
+            escapeshellarg(command))
+    if scheme == "vagrant":
+        return "vagrant ssh -c %s %s" % (escapeshellarg(command), escapeshellarg(bits["host"]))
+    options = []
+    if config.get("proxyjump"):
+        options.append("-J %s" % escapeshellarg(config["proxyjump"]))
+    if bits["port"]:
+        options.append("-p %d" % int(bits["port"]))
+    if config.get("key"):
+        options.append("-i %s" % escapeshellarg(config["key"]))
+    options.append("-t" if is_tty else "-T")
+    options.append("-vvv" if Runtime.debug else "-q")
+    host = "%s@%s" % (bits["user"], bits["host"]) if bits["user"] else bits["host"]
+    return "ssh %s %s %s" % (" ".join(options), escapeshellarg(host), escapeshellarg(command))
+
+
+def run_remote(invocation, config, alias, alias_config):
+    """Run the invocation on the endpoint named by the ``ssh`` config value."""
+    import subprocess
+
+    bits = parse_ssh_url(config["ssh"])
+    pre_cmd = os.environ.get("APPCTL_SSH_PRE_CMD", "")
+    if pre_cmd:
+        warning("APPCTL_SSH_PRE_CMD found, executing the following command(s) on the "
+                "remote machines:")
+        sys.stderr.write(pre_cmd + "\n")
+        pre_cmd = pre_cmd.rstrip().rstrip(";") + "; "
+    if bits["path"] and (bits["scheme"] or "ssh") in ("ssh", "vagrant"):
+        pre_cmd += "cd %s; " % escapeshellarg(bits["path"])
+    env_vars = "%s=1 " % STRICT_ENV if os.environ.get(STRICT_ENV) else ""
+    binary = PROG
+    if alias:
+        runtime_alias = {k: v for k, v in alias_config.items() if k != "ssh"}
+        if runtime_alias:
+            binary = "APPCTL_RUNTIME_ALIAS=%s %s %s" % (
+                escapeshellarg(json.dumps({alias: runtime_alias})), PROG, alias)
+    args = [arg for arg in invocation.argv if not arg.startswith("--ssh=")]
+    command = pre_cmd + env_vars + binary
+    if args:
+        command += " " + " ".join(escapeshellarg(arg) for arg in args)
+    full_command = generate_ssh_command(bits, command, config)
+    debug("Running SSH command: %s" % full_command, "ssh")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    code = subprocess.call(full_command, shell=True)
+    if code == 255:
+        error("Cannot connect over SSH using provided configuration.", 255)
+    return code
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+class Invocation:
+    """The parsed command line, shared by every alias the command runs against."""
+
+    def __init__(self, argv, positionals, assoc_list, runtime, loader):
+        self.argv = argv
+        self.positionals = positionals
+        self.assoc_list = assoc_list
+        self.runtime = runtime
+        self.file_config = loader.config
+        self.aliases = loader.aliases
+
+
+def extract_alias(argv):
+    """Remove and return a leading ``@alias`` positional from ``argv``."""
+    for index, token in enumerate(argv):
+        if token == "--":
+            return None
+        if parse_token(token) is not None:
+            continue
+        if is_alias_name(token):
+            del argv[index]
+            return token
+        return None
+    return None
+
+
+def apply_runtime_config(config, runtime):
+    Runtime.config = config
+    Runtime.quiet = bool(runtime.get("quiet"))
+    value = runtime.get("debug")
+    Runtime.debug = value not in (None, False)
+    Runtime.debug_group = value if isinstance(value, str) and value else None
+
+
+def dispatch(alias, invocation, stack=()):
+    """Run the invocation, resolving ``alias`` (and alias groups) first."""
+    aliases = invocation.aliases
+    if alias is None:
+        return execute(invocation, None, {})
+    if alias == "@all" and "@all" not in aliases:
+        error("Cannot use '@all' when no aliases are registered.")
+    if alias == "@all" and isinstance(aliases["@all"], str):
+        names = sorted((name for name in aliases if name != "@all"), key=sort_key)
+        return run_alias_group(names, invocation, stack + (alias,))
+    if alias not in aliases:
+        message = "Alias '%s' not found." % alias
+        suggestion = get_suggestion(alias, aliases.keys(), synonyms=False)
+        if suggestion:
+            message += "\nDid you mean '%s'?" % suggestion
+        error(message)
+    definition = aliases[alias]
+    if isinstance(definition, list):
+        members = []
+        for name in definition:
+            if name not in members:
+                members.append(name)
+        invalid = [name for name in members if name not in aliases]
+        if invalid:
+            error("Group '%s' contains one or more invalid aliases: %s."
+                  % (alias, ", ".join(invalid)))
+        return run_alias_group(members, invocation, stack + (alias,))
+    return execute(invocation, alias, definition if isinstance(definition, dict) else {})
+
+
+def run_alias_group(names, invocation, stack):
+    code = 0
+    for name in names:
+        if name in stack:
+            continue
+        log(name)
+        try:
+            result = dispatch(name, invocation, stack)
+        except AppctlExit as exc:
+            result = exc.code
+        sys.stdout.flush()
+        if result:
+            code = result
+    return code
+
+
+def execute(invocation, alias, alias_config):
+    config = compose_config(invocation.file_config, alias_config, invocation.runtime)
+    apply_runtime_config(config, invocation.runtime)
+    if alias:
+        debug("Using alias: %s" % alias, "bootstrap")
+    debug("Resolved config: %s" % json.dumps(config, sort_keys=True, default=str), "bootstrap")
+
+    if config.get("ssh"):
+        return run_remote(invocation, config, alias, alias_config)
+
+    positionals = invocation.positionals
+    if not positionals:
+        show_root_help()
+        return 0
+
+    command, remaining = resolve_command(positionals)
+    debug("Running command: %s" % command.path, "commands")
+
+    if command.handler is None:
+        command.show_usage()
+        return 0
+
+    args, assoc = validate_and_prepare(command, remaining, invocation.assoc_list)
+    command.handler(args, assoc)
+    return 0
+
+
+def is_completion(positionals):
+    """Tab completion invocations never write to the log file."""
+    return positionals[:2] == ["cli", "completions"]
+
+
+def run(argv):
+    strict = bool(os.environ.get(STRICT_ENV))
+    argv = list(argv)
+    alias = extract_alias(argv)
+    tokens = rewrite_args(argv)
+    positionals, assoc_list, runtime = split_args(tokens, strict)
+    FileLog.enabled = not is_completion(positionals)
+    log_invocation(argv if alias is None else [alias] + argv)
+    apply_runtime_config(dict(runtime), runtime)
+    if Runtime.debug:
+        debug("Runtime config: %s" % json.dumps(runtime, sort_keys=True), "bootstrap")
+    for name in runtime:
+        if GLOBAL_SPEC[name]["deprecated"]:
+            warning("The --%s global parameter is deprecated." % name)
+
+    Runtime.runtime_args = dict(runtime)
+    ensure_global_config()
+    loader = load_config()
+    if not is_completion(positionals):
+        get_cache()
+        Database.get()
+        try:
+            run_migrations()
+        except MigrationError as exc:
+            error(str(exc))
+    invocation = Invocation(argv, positionals, assoc_list, runtime, loader)
+    return dispatch(alias, invocation)
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    Runtime.start_time = time.time()
+    Runtime.cache = None
+    try:
+        code = run(argv)
+    except AppctlExit as exc:
+        code = exc.code
+    except BrokenPipeError:
+        code = 0
+    finally:
+        if Runtime.cache is not None:
+            try:
+                Runtime.cache.clean()
+            except OSError:
+                pass
+        Database.close()
+    sys.stdout.flush()
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

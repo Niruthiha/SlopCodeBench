@@ -1,0 +1,1442 @@
+{
+ "packet": "P93",
+ "checkpoints": [
+  {
+   "ck": 1,
+   "V": {
+    "present": [
+     "V2",
+     "V5"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 8,
+       "line": null,
+       "quote": "Bash .venv/bin/python appctl.py site create foo --title=Bar && .venv/bin/python appctl.py | head -3; ls"
+      },
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 6,
+       "line": null,
+       "quote": "print(t, appc"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": null,
+       "line": 21,
+       "quote": "I ran each behaviour in the spec by hand and every one produced the expected output and exit code; there is no automated test suite."
+      }
+     ]
+    }
+   },
+   "summary": "Wrote appctl.py from scratch in one Write (1318 lines), inventing a WP-CLI-like command set; checked by running help, error and site create invocations by hand and probing classify_token via python -c."
+  },
+  {
+   "ck": 2,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "appctl.py (whole file)",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 2,
+        "line": null,
+        "quote": "Bash cd /workspace; cat appctl.py; ls .venv/lib/*/site-packages; ls __pycache__"
+       }
+      ]
+     },
+     {
+      "place": "GLOBAL_PARAMS",
+      "code": "L1",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 7,
+        "line": null,
+        "quote": "grep -n \"GLOBAL_PARAMS\\|GLOBAL_NAMES\" appctl.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "NA",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": null,
+       "line": 49,
+       "quote": "SAY: Now the YAML subset parser and dumper:"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": null,
+       "line": 58,
+       "quote": "Now the config loading, alias, and remote-execution layer plus the new entry point:"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 2,
+       "line": null,
+       "quote": "Bash cd /workspace; cat appctl.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "New config section reuses existing Runtime and registry; replaces GLOBAL_PARAMS with GLOBAL_SPEC table",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": null,
+        "line": 42,
+        "quote": "SAY: Replace the global parameter definition with a full spec table:"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V7"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 13,
+       "line": null,
+       "quote": "from appctl import yaml_load, yaml_dump_lines"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 18,
+       "line": null,
+       "quote": "A=\"python3 /workspace/appctl.py\" $A cli version; echo \"exit=$?\""
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": null,
+       "line": 80,
+       "quote": "Now a regression check against the original program across many pre-existing commands"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 7,
+       "line": null,
+       "quote": "cp appctl.py /tmp/appctl.orig.py"
+      }
+     ]
+    }
+   },
+   "summary": "Read the whole file, added a built-in YAML parser, config/alias/SSH layer and new entry point; probed the parser from /tmp, ran CLI scenarios in /tmp dirs with a fake ssh, and diffed old commands against a saved original."
+  },
+  {
+   "ck": 3,
+   "L": {
+    "primary": "L1",
+    "places": [
+     {
+      "place": "Runtime / format_items",
+      "code": "L1",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "grep -n \"^def \\|^class \\|^ def \" appctl.py | head -300"
+       }
+      ]
+     },
+     {
+      "place": "appctl.py offsets 555-1600",
+      "code": "L4",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 3,
+        "line": null,
+        "quote": "Read /workspace/appctl.py off=600"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "NA",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 6,
+       "line": null,
+       "quote": "old_start = src.index('class Runtime:')"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": null,
+       "line": 105,
+       "quote": "SAY: Now the formatter."
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 15,
+       "line": null,
+       "quote": "appctl.render_items({'format':'table'}, items, ['ID','tags','meta'])"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 3,
+       "line": null,
+       "quote": "Read /workspace/appctl.py off=600"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "Handlers updated to route through shared confirm and render_items helpers",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": null,
+        "line": 108,
+        "quote": "Now update handlers: confirmations, prefixes, info vs data output, and the completions command."
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 15,
+       "line": null,
+       "quote": "python -c \" import appctl items=[{'ID':1,'tags':['a','b'],'meta':{'k':'v, x'}},{'ID':2,'tags':[],'meta':None}]"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 12,
+       "line": null,
+       "quote": "$A post list; $A post list --format=csv --fields=post_title,id;"
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 13,
+       "line": null,
+       "quote": "$A cache flush --color | cat -v;"
+      }
+     ]
+    }
+   },
+   "summary": "Grepped definitions, read regions, replaced Runtime and format_items with a FORMATS/render_items formatter, added prompts, STDIN args, debug groups and logging; checked by running post list formats, colors and quiet mode by hand."
+  },
+  {
+   "ck": 4,
+   "L": {
+    "primary": "L1",
+    "places": [
+     {
+      "place": "run()/main(), build_registry",
+      "code": "L1",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 2,
+        "line": null,
+        "quote": "grep -n \"^def \\|^class \\|^ def \\|^[A-Z_]* = \" appctl.py | head -300"
+       }
+      ]
+     },
+     {
+      "place": "new section placement before build_registry",
+      "code": "L6",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 11,
+        "line": null,
+        "quote": "NameError: name 'cmd_cli_update' is not de"
+       },
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": null,
+        "line": 160,
+        "quote": "`build_registry()` runs at import time before my new section, so I'll move the block above it."
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "NA",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 9,
+       "line": null,
+       "quote": "cat > /tmp/newcode.py <<'EOF' # --------------------------------------------------------------------------- # External command execution"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 3,
+       "line": null,
+       "quote": "Bash cd /workspace; sed -n 1,200p appctl.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "Cache and runtime flags wired into existing run()/main()",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": null,
+        "line": 155,
+        "quote": "Now wiring the cache and runtime flags into `run()`/`main()`."
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 13,
+       "line": null,
+       "quote": "with zipfile.ZipFile('flat.zip','w') as z:"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": null,
+       "line": 171,
+       "quote": "I tested by hand with scratch scripts; I didn't add"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": null,
+       "line": 168,
+       "quote": "Next, a quick check of help output and the full command path"
+      }
+     ]
+    }
+   },
+   "summary": "Grepped and sed-read large ranges, added an external-command, file-cache and archive-extraction section, moved it above build_registry after a NameError; tested via scratch zip/tar scripts and API probes in temp dirs."
+  },
+  {
+   "ck": 5,
+   "L": {
+    "primary": "L1",
+    "places": [
+     {
+      "place": "main() startup / Database section",
+      "code": "L1",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 2,
+        "line": null,
+        "quote": "grep -n \"^def \\|^class \\|sqlite\\|APPCTL_ROOT\\|migration\\|option\" appctl.py | head -200"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "NA",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 7,
+       "line": null,
+       "quote": "cat > /tmp/db_section.py <<'EOF' # --------------------------------------------------------------------------- # Persistent state database"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 3,
+       "line": null,
+       "quote": "sed -n 1,66p appctl.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "run_migrations failures reported through existing error() helper",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 8,
+        "line": null,
+        "quote": "except MigrationError as exc: error(str(exc))"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V7"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 8,
+       "line": null,
+       "quote": "Bash cd /workspace; python - <<'EOF' src = open('appctl.py').read()"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 9,
+       "line": null,
+       "quote": "python appctl.py option get siteurl; python appctl.py site list;"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": null,
+       "line": 194,
+       "quote": "Quick regression check on a few existing commands:"
+      }
+     ]
+    }
+   },
+   "summary": "Added a Persistent state database section (SQLite options table, migrations) and wired it into startup; probed with throwaway python snippets and ran a few existing commands as a regression check."
+  },
+  {
+   "ck": 6,
+   "L": {
+    "primary": "L1",
+    "places": [
+     {
+      "place": "site commands / File cache anchor",
+      "code": "L1",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 2,
+        "line": null,
+        "quote": "grep -n \"^def \\|^class \\|^ def \" appctl.py | head -300"
+       }
+      ]
+     },
+     {
+      "place": "_YamlParser",
+      "code": "L6",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 14,
+        "line": null,
+        "quote": "in yaml_load return _YamlParser(text).parse()"
+       },
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 15,
+        "line": null,
+        "quote": "Bash cd /workspace; sed -n 362,625p appctl.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "NA",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 19,
+       "line": null,
+       "quote": "# Containers, compose projects, volumes and networks"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 17,
+       "line": null,
+       "quote": "_YAML_ANCHOR = re.compile"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 3,
+       "line": null,
+       "quote": "Bash cd /workspace; sed -n 1,130p appctl.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "site config reuses existing yaml_load parser (extended for anchors/merge keys)",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": null,
+        "line": 238,
+        "quote": "Anchors and merge keys now parse correctly. Next I'll write the compose and container module."
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V4",
+     "V6"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 21,
+       "line": null,
+       "quote": "running exited False True True True Success: Project network 'proj' connect"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": null,
+       "line": 251,
+       "quote": "against a fake `docker` bina"
+      }
+     ],
+     "V4": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 12,
+       "line": null,
+       "quote": "mkdir -p /tmp/ct && cd /tmp/ct && printf 'services:\\n web:\\n image: nginx\\n db:\\n image: mariadb\\n app:\\n image: php\\n' > docker-compose.yml"
+      }
+     ],
+     "V6": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 22,
+       "line": null,
+       "quote": "python -m py_compile appctl.py && echo ok"
+      }
+     ]
+    }
+   },
+   "summary": "Grepped and read wide ranges, fixed YAML anchors/merge keys after a traceback, added a container/compose/volume/network section and site config command; tested functions against a fake docker binary and py_compile."
+  },
+  {
+   "ck": 7,
+   "L": {
+    "primary": "L1",
+    "places": [
+     {
+      "place": "MigrationError .. Archive extraction (migration section)",
+      "code": "L1",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 7,
+        "step": 9,
+        "line": null,
+        "quote": "grep -n -E 'packages_dir|MIGRATIONS|run_migrations|Option\\.|Migration\\.|DockerError|docker_run|delem|5GB|disk' appctl.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "NA",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 7,
+       "step": 18,
+       "line": null,
+       "quote": "start = src.index('class MigrationError(Exception):')"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 7,
+       "step": 3,
+       "line": null,
+       "quote": "sed -n 1,60p appctl.py; sed -n 2040,2330p appctl.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "Upgrade block builds on existing Database and container helpers",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 7,
+        "step": null,
+        "line": 290,
+        "quote": "Now the upgrade orchestration block (disk check, image tracking, compose-tool upgrade, global/project container replacement, finalization)."
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V6"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 7,
+       "step": null,
+       "line": 297,
+       "quote": "Now a scratch test harness with a fake `docker` that logs calls and can be told to fail."
+      },
+      {
+       "src": "trace",
+       "ck": 7,
+       "step": 20,
+       "line": null,
+       "quote": "cat > fakedocker.sh <<'EOF'"
+      }
+     ],
+     "V6": [
+      {
+       "src": "trace",
+       "ck": 7,
+       "step": 28,
+       "line": null,
+       "quote": "python3 -c \"import ast;ast.parse(open('appctl.py').read())\""
+      }
+     ]
+    }
+   },
+   "summary": "Grepped and read regions, rewrote the migration section and added upgrade orchestration via two /tmp blocks; tested with a scratch harness and fake docker logging calls, then ast-parsed the file."
+  },
+  {
+   "ck": 8,
+   "L": {
+    "primary": "L1",
+    "places": [
+     {
+      "place": "cmd_cli_info..cmd_cli_alias_list, cmd_cli_update, maybe_upgrade",
+      "code": "L1",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 8,
+        "step": 2,
+        "line": null,
+        "quote": "grep -n '^def \\|^class \\|^[A-Z_]* = ' appctl.py | head -300"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "NA",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": 20,
+       "line": null,
+       "quote": "start = src.index(\"def cmd_cli_update(args, assoc):\")"
+      },
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": 21,
+       "line": null,
+       "quote": "old_start = src.index(\"def maybe_upgrade():\")"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": 19,
+       "line": null,
+       "quote": "# Runtime.assoc_list"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": 4,
+       "line": null,
+       "quote": "Bash sed -n 1,60p appctl.py; sed -n 1500,1630p appctl.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "Requirement checks reuse existing debug/error helpers and Runtime config",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 8,
+        "step": null,
+        "line": 361,
+        "quote": "Now the requirement checks, HTTP/update logic, self-uninstall and the bootstrap (first run, version direction, auto-update)."
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V6",
+     "V7"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": 24,
+       "line": null,
+       "quote": "mkdir -p /tmp/fk && cat > /tmp/fk/docker <<'EOF'"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": 23,
+       "line": null,
+       "quote": "$P cli version; echo rc=$?;"
+      }
+     ],
+     "V6": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": 37,
+       "line": null,
+       "quote": ".venv/bin/python -m py_compile appctl.py && echo compiled"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": 35,
+       "line": null,
+       "quote": "=== DIFF: cli alias"
+      }
+     ]
+    }
+   },
+   "summary": "Replaced cli info/update and maybe_upgrade bodies, added requirement checks, first-run bootstrap and self-uninstall; tested with fake docker, a local HTTP server and pty runs, then diffed old commands against a saved original."
+  }
+ ],
+ "failures": [
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error",
+    ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected"
+   ],
+   "first_ck": 1,
+   "regression": false,
+   "code": "F2",
+   "why": "Agent invented the command set; its site create makes --type optional with default 'standard'. Spec names site create but never says --type is required.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_1/appctl.py",
+     "ck": 1,
+     "step": null,
+     "line": 1103,
+     "quote": "\"<site-name> [--type=<type>] [--title=<title>] [--email=<email>] [--porcelain]\","
+    },
+    {
+     "src": "trace",
+     "ck": 1,
+     "step": null,
+     "line": 21,
+     "quote": "**The command set is my own invention.**"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command"
+   ],
+   "first_ck": 2,
+   "regression": false,
+   "code": "F2",
+   "why": "Pre-command joined with '; ' and quoted args, test expects '&&' and unquoted args; spec only says it runs before the remote command.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_2.md",
+     "ck": 2,
+     "step": null,
+     "line": 140,
+     "quote": "`APPCTL_SSH_PRE_CMD` injects a shell command that runs before the main remote command."
+    },
+    {
+     "src": "code/checkpoint_2/appctl.py",
+     "ck": 2,
+     "step": null,
+     "line": 2071,
+     "quote": "pre_cmd = pre_cmd.rstrip().rstrip(\";\") + \"; \""
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_json_stdin_error",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_json_stdin_supplies_missing_positional_argument"
+   ],
+   "first_ck": 3,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests use site create --format=json; agent's site create has no --format parameter. Spec describes STDIN JSON fallback without naming which commands take --format.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": 3,
+     "step": null,
+     "line": 102,
+     "quote": "When `--format=json` is active for that fallback path, STDIN must be parsed as JSON."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_serializes_complex_values_as_json_strings"
+   ],
+   "first_ck": 3,
+   "regression": false,
+   "code": "F2",
+   "why": "Test requests a tags field from site list; agent's invented sample site data has no complex fields, so it reports an invalid field.",
+   "evidence": [
+    {
+     "src": "results/checkpoint_3.md",
+     "ck": 3,
+     "step": null,
+     "line": null,
+     "quote": "Invalid field: tags"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_blank_response_cancels",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_suppresses_cancellation_warning"
+   ],
+   "first_ck": 3,
+   "regression": false,
+   "code": "F2",
+   "why": "After a cancelled confirmation the command exits 0; tests expect 1. Spec says abort, warn and return false but gives no exit code.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": 3,
+     "step": null,
+     "line": 98,
+     "quote": "must abort the operation, print `Warning: Operation cancelled.` to STDERR, and return false."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_4.py::TestCore::test_detailed_execution_captures_all_fields",
+    ".evaluation_tests/test_checkpoint_4.py::TestErrors::test_exit_code_negative_1_warning"
+   ],
+   "first_ck": 4,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests expect --debug help or site list to launch an external command; agent's commands are simulated and never call out. Spec does not tie the process API to these commands.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_4/appctl.py",
+     "ck": 4,
+     "step": null,
+     "line": 1627,
+     "quote": "    render_items(assoc, SAMPLE_SITES, [\"name\", \"url\", \"type\", \"status\"])"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_non_writable_nested_archive_entry_warns_with_relative_path"
+   ],
+   "first_ck": 4,
+   "regression": false,
+   "code": "F4",
+   "why": "Extraction strips a single top-level directory, so nested/config.yml lands as config.yml, never hits the non-writable file and emits no warning.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_4/appctl.py",
+     "ck": 4,
+     "step": null,
+     "line": 2496,
+     "quote": "    \"\"\"Strip a single top-level directory wrapping the whole archive.\"\"\""
+    },
+    {
+     "src": "spec/checkpoint_4.md",
+     "ck": 4,
+     "step": null,
+     "line": 96,
+     "quote": "3. Existing non-writable files must produce a warning for each file on STDERR."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::TestCore::test_option_write_insert_then_read",
+    ".evaluation_tests/test_checkpoint_5.py::TestCore::test_option_upsert_overwrites",
+    ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_all_values_stored_as_strings",
+    ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_empty_string_value_is_not_treated_as_missing",
+    ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_parameterized_queries",
+    ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_existing_db_opens_without_recreating"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests insert option rows without modified_on; agent declared the column NOT NULL. Spec only gives modified_on's format, not nullability.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_5/appctl.py",
+     "ck": 5,
+     "step": null,
+     "line": 2479,
+     "quote": "        modified_on VARCHAR NOT NULL,"
+    },
+    {
+     "src": "results/checkpoint_5.md",
+     "ck": 5,
+     "step": null,
+     "line": 47,
+     "quote": "E       sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_running",
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_exited",
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_false_not_exists",
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_compose_merge_base_always_first",
+    ".evaluation_tests/test_checkpoint_6.py::TestErrors::test_container_runtime_not_installed_error",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_exited_starts",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_running_noop",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_configured_custom_compose_applies_after_base",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_compose_directory_ignores_non_compose_files_in_call_order",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_missing_custom_compose_warns_and_falls_back_to_base",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_skip_tty_string_truthy_disables_tty",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_skip_tty_flag_passed"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests drive container behaviour through site list and expect docker calls; agent's site list renders sample data and never invokes docker. Spec does not say which command boots containers.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_6/appctl.py",
+     "ck": 6,
+     "step": null,
+     "line": 1649,
+     "quote": "    render_items(assoc, SAMPLE_SITES, [\"name\", \"url\", \"type\", \"status\"])"
+    },
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": null,
+     "quote": "docker_calls.log"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_project_naming_prefix",
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_volume_creation_with_labels",
+    ".evaluation_tests/test_checkpoint_6.py::TestErrors::test_network_connect_failure_raises",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_not_exists_creates",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_volume_existing_is_silently_skipped",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_network_create_with_label",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_network_disconnect_failure_warning",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_site_delete_tears_down_containers_networks_and_volumes"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F5",
+   "why": "create_volumes/create_network exist but no command calls them: site create only prints success and site delete never tears down. Spec requires project creation to create volumes and a network.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 60,
+     "quote": "Project creation must create persistent volumes with tool-scoped metadata and platform-aware symlink behavior."
+    },
+    {
+     "src": "code/checkpoint_6/appctl.py",
+     "ck": 6,
+     "step": null,
+     "line": 1639,
+     "quote": "    success(\"Created site '%s' (%s).\" % (name, describe(type=assoc.get(\"type\"), title=title)))"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_service_inspection_lists_names"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "site config looks for a compose file from the cwd upward; test places it elsewhere. Spec does not say where the compose configuration lives.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 56,
+     "quote": "must list all service names from the compose configuration, one per line, in the order they appear in that configuration."
+    },
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": null,
+     "quote": "No compose file found in '/workspace'."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_7.py::TestCore::test_migration_discovery_and_ascending_sort",
+    ".evaluation_tests/test_checkpoint_7.py::TestCore::test_migration_execution_creates_record",
+    ".evaluation_tests/test_checkpoint_7.py::TestCore::test_migration_failure_triggers_batch_rollback",
+    ".evaluation_tests/test_checkpoint_7.py::TestErrors::test_migration_rollback_deletes_records",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_disk_space_exact_threshold_allows_upgrade",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_runtime_disk_space_failure_blocks_upgrade_mutations",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_rollback_strict_reverse_order",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_rollback_undo_failure_logged_continues",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_rollback_no_undo_skipped",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_no_pending_migrations_do_not_duplicate_history",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_container_migrations_after_db_migrations",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_container_migration_failure_blocks_image_pulls"
+   ],
+   "first_ck": 7,
+   "regression": false,
+   "code": "F2",
+   "why": "Agent discovers migrations beside the script with source-prefixed names; tests place them under the root dir's migrations/db with bare names. Spec only asks for a deterministic convention.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_7.md",
+     "ck": 7,
+     "step": null,
+     "line": 23,
+     "quote": "Migration artifacts must be discovered from the tool and any installed extensions using a deterministic convention"
+    },
+    {
+     "src": "code/checkpoint_7/appctl.py",
+     "ck": 7,
+     "step": null,
+     "line": 3205,
+     "quote": "            or os.path.join(os.path.dirname(script_path()), MIGRATIONS_DIR_NAME))"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_7.py::TestErrors::test_image_pull_failure_error",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_image_pulls_sequential"
+   ],
+   "first_ck": 7,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests expect image pulls on a fresh invocation; agent only reconciles images on a detected version change, as the spec phrases it.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_7.md",
+     "ck": 7,
+     "step": null,
+     "line": 44,
+     "quote": "When the tool detects a version change, it must compare observed runtime image state with the target versions managed by the tool."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_missing_required_positional_shows_usage",
+    ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_excess_positional_args_error",
+    ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_with_suggestion",
+    ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_no_suggestion",
+    ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_multiple_parameter_errors_collected",
+    ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unrecognized_subcommand_error",
+    ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_parent_command_no_handler_shows_subcommands",
+    ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_subcommand_synonym_example_allows_optional_delete_suggestion",
+    ".evaluation_tests/test_checkpoint_2.py::TestCore::test_disabled_command_error",
+    ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority_overrides_project_disabled_command",
+    ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_search_stops_at_first_matching_directory",
+    ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_appended",
+    ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_not_deduplicated",
+    ".evaluation_tests/test_checkpoint_3.py::TestCore::test_table_format_default",
+    ".evaluation_tests/test_checkpoint_3.py::TestCore::test_json_format_4_space_indent",
+    ".evaluation_tests/test_checkpoint_3.py::TestCore::test_field_single_value_raw_output",
+    ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_field_name_error",
+    ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_confirmation_prompt_non_y_aborts",
+    ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_fields_plural_error",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_formats_preserve_same_underlying_values",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_format_quoting",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_yaml_format_output",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_count_format_integer",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_ids_format_space_separated",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_restricts_and_orders_columns",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_case_insensitive",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_complex_values_json_serialized_in_table",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_compose_legacy_custom_appended_last"
+   ],
+   "first_ck": 8,
+   "regression": true,
+   "code": "F2",
+   "why": "New requirement check gates non-exempt commands (site, post, ...) on a responsive docker; the test environment has none, so earlier-checkpoint tests now exit 1. Spec mandates the check; earlier tests assume no docker.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": 12,
+     "quote": "Before most commands, the tool must validate the host environment. The `cli`, `config`, and `help` command families are exempt."
+    },
+    {
+     "src": "results/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": null,
+     "quote": "Error: Container runtime (docker) is either not installed or not running."
+    },
+    {
+     "src": "trace",
+     "ck": 8,
+     "step": null,
+     "line": 361,
+     "quote": "Now the requirement checks, HTTP/update logic, self-uninstall and the bootstrap"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite",
+    ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite_for_multi_level_command"
+   ],
+   "first_ck": 8,
+   "regression": true,
+   "code": "F2",
+   "why": "First-run success message is printed to stdout on the first help invocation, so the two compared help outputs differ. Spec requires the message and only allows suppressing it for machine-readable commands.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": 29,
+     "quote": "3. On success, the tool must print a success message to STDOUT."
+    },
+    {
+     "src": "results/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": null,
+     "quote": "Success: appctl has been set up successfully."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_8.py::TestCore::test_sysreq_exponential_backoff_retries"
+   ],
+   "first_ck": 8,
+   "regression": false,
+   "code": "F2",
+   "why": "Agent also checks the compose tool version; the test's fake compose reports none, so it errors on compose rather than exercising runtime retries. Spec lists only the container runtime check.",
+   "evidence": [
+    {
+     "src": "results/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": null,
+     "quote": "Error: Unable to determine the version of the compose tool `'docker-compose'`."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_8.py::TestCore::test_version_newer_binary_triggers_migration",
+    ".evaluation_tests/test_checkpoint_8.py::TestErrors::test_older_binary_non_cli_error",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_older_binary_cli_warning"
+   ],
+   "first_ck": 8,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests seed the stored version by inserting into options without modified_on, which the agent's NOT NULL schema rejects. Spec does not fix the schema.",
+   "evidence": [
+    {
+     "src": "results/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": null,
+     "quote": "sqlite3.IntegrityError: NOT NULL constraint failed: options.modified_on"
+    },
+    {
+     "src": "code/checkpoint_5/appctl.py",
+     "ck": 8,
+     "step": null,
+     "line": 2479,
+     "quote": "        modified_on VARCHAR NOT NULL,"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_runtime_binary_resolution_precedence",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_info_list_format_field_order",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_info_json_format_keys"
+   ],
+   "first_ck": 8,
+   "regression": false,
+   "code": "F2",
+   "why": "cli info uses keys like python_binary and appctl_version (plus a first-run 'success' line); tests look for runtime/version keys. Spec says exact key names are not prescribed.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": 73,
+     "quote": "2. The JSON format must expose the same semantic information, but the exact key names are not prescribed."
+    },
+    {
+     "src": "results/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": null,
+     "quote": "'appctl_version', 'python_binary'"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_check_update_last_filter_wins",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_check_update_no_updates_success",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_check_update_table_format_no_updates_success",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_check_update_filtered_no_updates_mentions_filter",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_update_requires_confirmation"
+   ],
+   "first_ck": 8,
+   "regression": false,
+   "code": "F6",
+   "why": "check-update and update query the remote releases API (api.github.com); the test environment has no network, giving HTTP code 0 and an error before any output or prompt.",
+   "evidence": [
+    {
+     "src": "results/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": null,
+     "quote": "Error: Failed to get latest version (HTTP code 0)."
+    },
+    {
+     "src": "code/checkpoint_8/appctl.py",
+     "ck": 8,
+     "step": null,
+     "line": 4004,
+     "quote": "RELEASES_URL = \"https://api.github.com/repos/appctl/appctl/releases?per_page=100\""
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_param_dump_with_values_reflects_runtime_config",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_param_dump_var_export_output",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_cmd_dump_alphabetical"
+   ],
+   "first_ck": 8,
+   "regression": false,
+   "code": "F2",
+   "why": "Dump shapes differ from tests: current value stored under 'current' not 'value', var_export emits PHP 'array (' not '{', cmd-dump is a nested tree not a path-keyed dict. Spec does not fix these shapes.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_8/appctl.py",
+     "ck": 8,
+     "step": null,
+     "line": 1801,
+     "quote": "            entry[\"current\"] = Runtime.config.get(name)"
+    },
+    {
+     "src": "spec/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": 115,
+     "quote": "This command must output the registered command tree as JSON."
+    }
+   ]
+  }
+ ],
+ "observations": "In this run we observed the agent work in one growing file, appctl.py, adding each feature as a new labelled section built in a /tmp file and spliced in by a Python string-replace script (ck4 step 9, ck5 step 7, ck6 step 19, ck7 steps 16-18). From ck3 on, each session began by grepping the def/class list and then reading wide sed ranges (ck3 step 2, ck4 steps 2-3, ck6 steps 2-3, ck8 steps 2-4); ck2 instead read the whole file with cat (ck2 step 2). In ck1 the agent stated it invented the command set (ck1 step 8 SAY), and later failures trace to those invented commands: sample-data site list never calls docker (ck4, ck6) and site create never creates volumes or networks even though helpers existed (ck6 step 19). Checking was manual throughout: scratch scripts, fake docker or ssh binaries, and CLI runs in temp dirs (ck2 step 18, ck6 step 21, ck7 step 20, ck8 step 24); no test files were added (ck4 SAY). Regression checks against a saved original copy appear in ck2 step 22 and ck8 step 35, but ck8's new docker requirement check and first-run message still broke 31 earlier tests in an environment without docker. Placement errors were found by running: a NameError forced moving the ck4 section above build_registry (ck4 steps 11-12), and a YAML traceback led to editing the parser (ck6 steps 14-17)."
+}

@@ -1,0 +1,1383 @@
+{
+ "packet": "P84",
+ "checkpoints": [
+  {
+   "ck": 1,
+   "V": {
+    "present": [
+     "V2",
+     "V3"
+    ],
+    "primary": "V3",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": "1.13",
+       "line": 32,
+       "quote": "r site create x --url=foo.test"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": "1.15",
+       "line": 38,
+       "quote": "cat > tests/test_synopsis.py"
+      },
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": "1.15",
+       "line": 39,
+       "quote": "Ran 45 tests in 4.597s OK"
+      }
+     ]
+    }
+   },
+   "summary": "Built the CLI from scratch with heredoc-written modules, ran the CLI end to end on example commands, then wrote and ran a 45-test unittest suite."
+  },
+  {
+   "ck": 2,
+   "V": {
+    "present": [
+     "V2",
+     "V7",
+     "V3"
+    ],
+    "primary": "V3",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": "2.17",
+       "line": 85,
+       "quote": "export T=$(mktemp -d); export APPCTL_ROOT_DIR=$T/root"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": "2.16",
+       "line": 84,
+       "quote": "Ran 45 tests in 5.991s OK"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": "2.21",
+       "line": 94,
+       "quote": "Write /workspace/tests/test_config.py"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": "2.22",
+       "line": 97,
+       "quote": "Ran 64 tests"
+      }
+     ]
+    }
+   },
+   "summary": "Read nearly the whole package, rewrote runtime_config.py and app.py, added config_loader.py and remote.py; checked existing tests, ran manual config scenarios, added test_config.py.",
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "appctl_cli/app.py, runtime_config.py",
+      "code": "L3",
+      "evidence": {
+       "src": "trace",
+       "ck": 2,
+       "step": "2.2",
+       "line": 51,
+       "quote": "cat appctl.py appctl_cli/__init__.py appctl_cli/app.py appctl_cli/runtime_config.py"
+      }
+     },
+     {
+      "place": "commands/cli.py (GLOBAL_PARAMETERS users)",
+      "code": "L1",
+      "evidence": {
+       "src": "trace",
+       "ck": 2,
+       "step": "2.8",
+       "line": 63,
+       "quote": "grep -rn \"runtime\\|is_global_parameter\\|GLOBAL_PARAMETERS\" appctl_cli tests"
+      }
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "no",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": {
+      "src": "trace",
+      "ck": 2,
+      "step": "2.13",
+      "line": 74,
+      "quote": "Write /workspace/appctl_cli/app.py (6362 chars, 170 lines)"
+     },
+     "cross_internal": {
+      "src": "trace",
+      "ck": 2,
+      "step": "2.9",
+      "line": 65,
+      "quote": "Write /workspace/appctl_cli/runtime_config.py"
+     },
+     "interface_change": {
+      "src": "trace",
+      "ck": 2,
+      "step": "2.9",
+      "line": 65,
+      "quote": "Write /workspace/appctl_cli/runtime_config.py"
+     },
+     "read_internals": {
+      "src": "trace",
+      "ck": 2,
+      "step": "2.3",
+      "line": 53,
+      "quote": "cat appctl_cli/arguments.py appctl_cli/rewrites.py appctl_cli/resolver.py appctl_cli/registry.py"
+     }
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "app.py reuses existing arguments.parse_argv/is_assoc_token and suggest.get_suggestion",
+      "evidence": {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": 2,
+       "step": null,
+       "line": 13,
+       "quote": "+from .arguments import END_OF_OPTIONS, is_assoc_token, parse_argv"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "ck": 3,
+   "V": {
+    "present": [
+     "V2",
+     "V7",
+     "V3"
+    ],
+    "primary": "V3",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": "3.18",
+       "line": 152,
+       "quote": "export APPCTL_ROOT_DIR=$(mktemp -d); A=\"python appctl.py\""
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": "3.9",
+       "line": 127,
+       "quote": "Ran 64 tests in 11.957s"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": "3.22",
+       "line": 163,
+       "quote": "Write /workspace/tests/test_output.py"
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": "3.23",
+       "line": 165,
+       "quote": "python -m unittest"
+      }
+     ]
+    }
+   },
+   "summary": "Read every module after judging the codebase small, then rewrote output.py/formatter.py/_listing.py, added logger.py, and adjusted validator, site, app and cli; verified by manual runs and new test_output.py.",
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "appctl_cli/*.py",
+      "code": "L3",
+      "evidence": {
+       "src": "trace",
+       "ck": 3,
+       "step": "3.3",
+       "line": 113,
+       "quote": "for f in appctl_cli/*.py; do echo \"=== $f\"; cat -n $f; done"
+      }
+     },
+     {
+      "place": "appctl_cli/commands/*.py",
+      "code": "L3",
+      "evidence": {
+       "src": "trace",
+       "ck": 3,
+       "step": "3.5",
+       "line": 117,
+       "quote": "for f in appctl_cli/commands/*.py; do echo \"=== $f\"; cat $f; done"
+      }
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "no",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": {
+      "src": "trace",
+      "ck": 3,
+      "step": "3.12",
+      "line": 135,
+      "quote": "Write /workspace/appctl_cli/output.py"
+     },
+     "cross_internal": {
+      "src": "diffs/checkpoint_3.patch",
+      "ck": 3,
+      "step": null,
+      "line": 103,
+      "quote": "+from ..formatter import format_item, format_items, format_value, resolve_field, select_fields"
+     },
+     "interface_change": {
+      "src": "trace",
+      "ck": 3,
+      "step": "3.12",
+      "line": 135,
+      "quote": "Write /workspace/appctl_cli/output.py"
+     },
+     "read_internals": {
+      "src": "trace",
+      "ck": 3,
+      "step": "3.2",
+      "line": 112,
+      "quote": "Small enough to read fully."
+     }
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "_listing.py reuses formatter.format_items/select_fields for every list command",
+      "evidence": {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 103,
+       "quote": "+from ..formatter import format_item, format_items, format_value, resolve_field, select_fields"
+      }
+     },
+     {
+      "code": "R3",
+      "what": "confirm() placed in commands/_listing.py and imported by several command modules",
+      "evidence": {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 352,
+       "quote": "+from ._listing import LIST_OPTIONS, confirm, render_list"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "ck": 4,
+   "V": {
+    "present": [
+     "V7",
+     "V1",
+     "V3"
+    ],
+    "primary": "V3",
+    "evidence": {
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": "4.13",
+       "line": 201,
+       "quote": "Ran 92 tests in 30.584s OK"
+      }
+     ],
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": "4.14",
+       "line": 203,
+       "quote": "mkdir -p /tmp/t && cd /tmp/t && rm -rf * && export APPCTL_ROOT_DIR=/tmp/t/root"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": "4.19",
+       "line": 215,
+       "quote": "rm -rf /tmp/t2; mkdir /tmp/t2"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": "4.21",
+       "line": 220,
+       "quote": "Write /workspace/tests/test_process_cache_extract.py"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": "4.22",
+       "line": 223,
+       "quote": "Ran 15 tests in 2.217s OK"
+      }
+     ]
+    }
+   },
+   "summary": "Read most modules, added new process.py, file_cache.py and extract.py, wired cli update and cache cleanup into existing files; probed APIs in /tmp and added 15 unit tests.",
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "commands/cli.py",
+      "code": "L3",
+      "evidence": {
+       "src": "trace",
+       "ck": 4,
+       "step": "4.2",
+       "line": 177,
+       "quote": "cat appctl_cli/commands/cli.py appctl_cli/commands/cache.py appctl_cli/commands/__init__.py"
+      }
+     },
+     {
+      "place": "app.py, remote.py",
+      "code": "L3",
+      "evidence": {
+       "src": "trace",
+       "ck": 4,
+       "step": "4.3",
+       "line": 179,
+       "quote": "cat appctl_cli/app.py appctl_cli/logger.py appctl_cli/errors.py appctl_cli/runtime_config.py"
+      }
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": {
+      "src": "trace",
+      "ck": 4,
+      "step": "4.6",
+      "line": 186,
+      "quote": "Write /workspace/appctl_cli/process.py"
+     },
+     "cross_internal": {
+      "src": "trace",
+      "ck": 4,
+      "step": "4.23",
+      "line": 225,
+      "quote": "warn_sig"
+     },
+     "interface_change": {
+      "src": "trace",
+      "ck": 4,
+      "step": "4.10",
+      "line": 194,
+      "quote": "from ..extract import extract_archive, validate_a"
+     },
+     "read_internals": {
+      "src": "trace",
+      "ck": 4,
+      "step": "4.3",
+      "line": 179,
+      "quote": "cat appctl_cli/app.py appctl_cli/logger.py"
+     }
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "extract.py reuses process.run_command; remote.py reuses process.warn_signal_exit",
+      "evidence": {
+       "src": "diffs/checkpoint_4.patch",
+       "ck": 4,
+       "step": null,
+       "line": 766,
+       "quote": "+from .process import warn_signal_exit"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "ck": 5,
+   "V": {
+    "present": [
+     "V2",
+     "V7"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": "5.10",
+       "line": 254,
+       "quote": "T=$(mktemp -d); export APPCTL_ROOT_DIR=$T/r python appctl.py cli version"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": "5.11",
+       "line": 258,
+       "quote": "Ran 107 tests in 32.756s OK"
+      }
+     ]
+    }
+   },
+   "summary": "Grepped for storage/option hooks, read app, config_loader and the option/db commands, added a new database.py and opened/closed it from app.py; checked by hand and with the existing suite, no new tests.",
+   "L": {
+    "primary": "L1",
+    "places": [
+     {
+      "place": "app.py start()",
+      "code": "L1",
+      "evidence": {
+       "src": "trace",
+       "ck": 5,
+       "step": "5.2",
+       "line": 236,
+       "quote": "grep -rn \"ROOT_DIR\\|sqlite\\|db/\\|get_option\\|set_option\\|migration\""
+      }
+     },
+     {
+      "place": "app.py, config_loader.py",
+      "code": "L3",
+      "evidence": {
+       "src": "trace",
+       "ck": 5,
+       "step": "5.3",
+       "line": 238,
+       "quote": "cat appctl_cli/app.py appctl_cli/config_loader.py appctl_cli/commands/option.py"
+      }
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": {
+      "src": "trace",
+      "ck": 5,
+      "step": "5.8",
+      "line": 249,
+      "quote": "Write /workspace/appctl_cli/database.py"
+     },
+     "cross_internal": {
+      "src": "diffs/checkpoint_5.patch",
+      "ck": 5,
+      "step": null,
+      "line": 44,
+      "quote": "+from .config_loader import root_dir"
+     },
+     "interface_change": {
+      "src": "trace",
+      "ck": 5,
+      "step": "5.9",
+      "line": 252,
+      "quote": "from . import config_loader, database"
+     },
+     "read_internals": {
+      "src": "trace",
+      "ck": 5,
+      "step": "5.3",
+      "line": 238,
+      "quote": "cat appctl_cli/app.py appctl_cli/config_loader.py"
+     }
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "database.py reuses config_loader.root_dir for the db location",
+      "evidence": {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": 5,
+       "step": null,
+       "line": 44,
+       "quote": "+from .config_loader import root_dir"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "ck": 6,
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V3",
+     "V7"
+    ],
+    "primary": "V3",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": "6.9",
+       "line": 283,
+       "quote": "mkdir -p /tmp/ct && cd /tmp/ct && cat > docker-compose.yml"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": "6.14",
+       "line": 296,
+       "quote": "cd /tmp/ct; $P /workspace/appctl.py site config --services"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": "6.15",
+       "line": 299,
+       "quote": "Write /workspace/tests/test_container.py"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": "6.17",
+       "line": 304,
+       "quote": "python -m unittest discover -s tests"
+      }
+     ]
+    }
+   },
+   "summary": "Read app/site/process/remote, inspected the docker binaries, wrote a new container.py reusing process helpers, added a cwd field to the context and a site config command; tested in /tmp and with test_container.py.",
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "commands/site.py, app.py",
+      "code": "L3",
+      "evidence": {
+       "src": "trace",
+       "ck": 6,
+       "step": "6.3",
+       "line": 271,
+       "quote": "cat appctl_cli/app.py appctl_cli/commands/site.py appctl_cli/commands/__init__.py"
+      }
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": {
+      "src": "trace",
+      "ck": 6,
+      "step": "6.11",
+      "line": 288,
+      "quote": "Write /workspace/appctl_cli/container.py"
+     },
+     "cross_internal": {
+      "src": "diffs/checkpoint_6.patch",
+      "ck": 6,
+      "step": null,
+      "line": 118,
+      "quote": "+from .process import exec_command, run_command"
+     },
+     "interface_change": {
+      "src": "trace",
+      "ck": 6,
+      "step": "6.12",
+      "line": 292,
+      "quote": "def __init__(self, argv, parsed, environ, output, strict, loaded, cwd=None)"
+     },
+     "read_internals": {
+      "src": "trace",
+      "ck": 6,
+      "step": "6.3",
+      "line": 271,
+      "quote": "cat appctl_cli/app.py appctl_cli/commands/site.py"
+     }
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "container.py runs docker through process.exec_command/run_command",
+      "evidence": {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": 6,
+       "step": null,
+       "line": 118,
+       "quote": "+from .process import exec_command, run_command"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "ck": 7,
+   "V": {
+    "present": [
+     "V7",
+     "V3",
+     "V1"
+    ],
+    "primary": "V3",
+    "evidence": {
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 7,
+       "step": "7.21",
+       "line": 364,
+       "quote": "Ran 146 tests in 52.350s OK"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 7,
+       "step": "7.17",
+       "line": 353,
+       "quote": "Write /workspace/tests/test_upgrade.py"
+      }
+     ],
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 7,
+       "step": "7.22",
+       "line": 366,
+       "quote": "T=$(mktemp -d); mkdir -p $T/bin"
+      }
+     ]
+    }
+   },
+   "summary": "Read container, database, process and app, added revertable.py and a 780-line upgrade.py, added a projects table to database.py and wired automatic upgrade plus cli migrate; tested with test_upgrade.py and a fake docker.",
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "database.py, app.py",
+      "code": "L3",
+      "evidence": {
+       "src": "trace",
+       "ck": 7,
+       "step": "7.2",
+       "line": 318,
+       "quote": "cat appctl_cli/container.py appctl_cli/database.py appctl_cli/process.py"
+      }
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": {
+      "src": "trace",
+      "ck": 7,
+      "step": "7.13",
+      "line": 342,
+      "quote": "Write /workspace/appctl_cli/upgrade.py"
+     },
+     "cross_internal": {
+      "src": "diffs/checkpoint_7.patch",
+      "ck": 7,
+      "step": null,
+      "line": 290,
+      "quote": "+from .process import exec_command, run_command"
+     },
+     "interface_change": {
+      "src": "diffs/checkpoint_7.patch",
+      "ck": 7,
+      "step": null,
+      "line": 9,
+      "quote": "+from . import config_loader, database, upgrade"
+     },
+     "read_internals": {
+      "src": "trace",
+      "ck": 7,
+      "step": "7.2",
+      "line": 318,
+      "quote": "cat appctl_cli/container.py appctl_cli/database.py"
+     }
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "upgrade.py reuses container, database and process helpers",
+      "evidence": {
+       "src": "diffs/checkpoint_7.patch",
+       "ck": 7,
+       "step": null,
+       "line": 286,
+       "quote": "+from . import PROGRAM_NAME, __version__, container, database"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "ck": 8,
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V7",
+     "V3",
+     "V8"
+    ],
+    "primary": "V3",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": "8.36",
+       "line": 462,
+       "quote": "rm -rf /tmp/arch && mkdir -p /tmp/arch"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": "8.33",
+       "line": 454,
+       "quote": "APPCTL_ROOT_DIR=/tmp/t1 $P appctl.py $a"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": "8.40",
+       "line": 471,
+       "quote": "timeout 900 .venv/bin/python -m unittest"
+      },
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": "8.47",
+       "line": 487,
+       "quote": "# test_cli: isolated root, fake runtime, initialized once"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": "8.53",
+       "line": 501,
+       "quote": "Write /workspace/tests/test_self_management.py"
+      },
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": "8.61",
+       "line": 522,
+       "quote": "All 208 tests pass"
+      }
+     ],
+     "V8": [
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": "8.58",
+       "line": 514,
+       "quote": "Write /tmp/agent_home/.claude/projects/-workspace/memory/test-env-docker.md"
+      },
+      {
+       "src": "trace",
+       "ck": 8,
+       "step": "8.59",
+       "line": 516,
+       "quote": "real docker daemon down + compose 2.26.1"
+      }
+     ]
+    }
+   },
+   "summary": "Read the whole package, added system, self_update and startup modules, rewrote commands/cli.py, wired requirement checks into app.py, changed format_items and run_command signatures, updated old test fixtures, added 62 tests and a memory note.",
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "app.py, command.py, registry.py",
+      "code": "L3",
+      "evidence": {
+       "src": "trace",
+       "ck": 8,
+       "step": "8.4",
+       "line": 386,
+       "quote": "cat __init__.py app.py command.py registry.py context.py arguments.py errors.py"
+      }
+     },
+     {
+      "place": "formatter.py, _listing.py",
+      "code": "L3",
+      "evidence": {
+       "src": "trace",
+       "ck": 8,
+       "step": "8.12",
+       "line": 402,
+       "quote": "cat formatter.py commands/_listing.py help.py synopsis.py"
+      }
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "yes",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": {
+      "src": "trace",
+      "ck": 8,
+      "step": "8.31",
+      "line": 449,
+      "quote": "Write /workspace/appctl_cli/commands/cli.py (20610 chars, 536 lines)"
+     },
+     "cross_internal": {
+      "src": "diffs/checkpoint_8.patch",
+      "ck": 8,
+      "step": null,
+      "line": 994,
+      "quote": "+from .output import _isatty"
+     },
+     "interface_change": {
+      "src": "trace",
+      "ck": 8,
+      "step": "8.30",
+      "line": 447,
+      "quote": "def format_items(items, fields, fmt=\"table\", id_field=\"id\"):"
+     },
+     "read_internals": {
+      "src": "trace",
+      "ck": 8,
+      "step": "8.12",
+      "line": 402,
+      "quote": "cat formatter.py commands/_listing.py"
+     }
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "system.py reuses upgrade's compose minimum and semver helpers",
+      "evidence": {
+       "src": "trace",
+       "ck": 8,
+       "step": "8.21",
+       "line": 422,
+       "quote": "tidy `system.py` to reuse upgrade's compose minimum and semver helpers"
+      }
+     },
+     {
+      "code": "R1",
+      "what": "self_update.py reuses upgrade semver helpers and process.run_command",
+      "evidence": {
+       "src": "diffs/checkpoint_8.patch",
+       "ck": 8,
+       "step": null,
+       "line": 997,
+       "quote": "+from .upgrade import _SEMVER_RE, compare_semver, is_nightly, parse_semver"
+      }
+     }
+    ]
+   }
+  }
+ ],
+ "failures": [
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error",
+    ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected"
+   ],
+   "first_ck": 1,
+   "regression": false,
+   "code": "F2",
+   "why": "Spec never defines site create's synopsis; agent made --type optional and added a site-name pattern, so the tests' required-arg and dotted-name assumptions fail.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_1/appctl_cli/commands/site.py",
+     "ck": 1,
+     "step": null,
+     "line": 92,
+     "quote": "synopsis=\"<site-name> [--type=<type>]"
+    },
+    {
+     "src": "code/checkpoint_1/appctl_cli/commands/site.py",
+     "ck": 1,
+     "step": null,
+     "line": 14,
+     "quote": "SITE_NAME_RE = re.compile(r\"^[a-z0-9][a-z0-9-]*$\")"
+    },
+    {
+     "src": "spec/checkpoint_1.md",
+     "ck": 1,
+     "step": null,
+     "line": 67,
+     "quote": "All required associative arguments must be present with non-empty values."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_unknown_alias_error",
+    ".evaluation_tests/test_checkpoint_2.py::TestErrors::test_all_no_aliases_error"
+   ],
+   "first_ck": 2,
+   "regression": false,
+   "code": "F4",
+   "why": "Config writer appends 'key: value' lines to existing file text; a file holding '{}' becomes invalid YAML and loading crashes.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_2/appctl_cli/config_loader.py",
+     "ck": 2,
+     "step": null,
+     "line": 104,
+     "quote": "text += \"\".join(f\"{key}: {value}\\n\" for key, value in missing)"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command"
+   ],
+   "first_ck": 2,
+   "regression": false,
+   "code": "F2",
+   "why": "Spec only says the pre-command runs before the remote command; agent joined with ';' while the test expects '&&'.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_2/appctl_cli/remote.py",
+     "ck": 2,
+     "step": null,
+     "line": 53,
+     "quote": "prefix = pre_cmd + \"; \""
+    },
+    {
+     "src": "spec/checkpoint_2.md",
+     "ck": 2,
+     "step": null,
+     "line": 140,
+     "quote": "injects a shell command that runs before the main remote command"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_confirmation_prompt_non_y_aborts",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_blank_response_cancels",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_serializes_complex_values_as_json_strings",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_json_stdin_supplies_missing_positional_argument"
+   ],
+   "first_ck": 3,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests assume simulated site data (existing example.test, tags field, --format on site create) that the spec never defines; agent's simulated commands differ.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_1/appctl_cli/commands/site.py",
+     "ck": 1,
+     "step": null,
+     "line": 92,
+     "quote": "synopsis=\"<site-name> [--type=<type>]"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_4.py::TestCore::test_detailed_execution_captures_all_fields",
+    ".evaluation_tests/test_checkpoint_4.py::TestErrors::test_exit_code_negative_1_warning"
+   ],
+   "first_ck": 4,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests expect help or site list to launch external processes; spec does not say these commands run subprocesses, so the agent's versions run none.",
+   "evidence": [
+    {
+     "src": "trace",
+     "ck": 4,
+     "step": "4.6",
+     "line": 186,
+     "quote": "Write /workspace/appctl_cli/process.py"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::TestCore::test_option_write_insert_then_read",
+    ".evaluation_tests/test_checkpoint_5.py::TestCore::test_option_upsert_overwrites",
+    ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_all_values_stored_as_strings",
+    ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_empty_string_value_is_not_treated_as_missing",
+    ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_parameterized_queries",
+    ".evaluation_tests/test_checkpoint_5.py::TestFunctionality::test_existing_db_opens_without_recreating"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests insert options rows directly; agent's unspecified schema has modified_on NOT NULL with no default, so inserts fail. Spec does not fix the schema.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_5/appctl_cli/database.py",
+     "ck": 5,
+     "step": null,
+     "line": 23,
+     "quote": "' modified_on TEXT NOT NULL'"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_running",
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_exited",
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_container_status_false_not_exists",
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_compose_merge_base_always_first",
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_project_naming_prefix",
+    ".evaluation_tests/test_checkpoint_6.py::TestCore::test_volume_creation_with_labels",
+    ".evaluation_tests/test_checkpoint_6.py::TestErrors::test_container_runtime_not_installed_error",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_exited_starts",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_running_noop",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_boot_container_not_exists_creates",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_configured_custom_compose_applies_after_base",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_compose_directory_ignores_non_compose_files_in_call_order",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_missing_custom_compose_warns_and_falls_back_to_base",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_skip_tty_string_truthy_disables_tty",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_skip_tty_flag_passed",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_service_inspection_lists_names"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests drive container behaviour through site list and a base compose in the runtime layout; spec names neither, and the agent exposed container.py only via a new site config command.",
+   "evidence": [
+    {
+     "src": "trace",
+     "ck": 6,
+     "step": "6.13",
+     "line": 293,
+     "quote": "from .. import container"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_volume_existing_is_silently_skipped",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_network_create_with_label",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_network_disconnect_failure_warning",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_site_delete_tears_down_containers_networks_and_volumes"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F5",
+   "why": "Spec requires project creation to create volumes and a network; create_project exists in container.py but site create/delete never call it, so the requirement is left unwired.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_6/appctl_cli/container.py",
+     "ck": 6,
+     "step": null,
+     "line": 461,
+     "quote": "def create_project(name, volumes=(), output=None, platform_name=None):"
+    },
+    {
+     "src": "spec/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 80,
+     "quote": "Creating a project must create a network with tool-scoped metadata."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_7.py::TestCore::test_migration_discovery_and_ascending_sort",
+    ".evaluation_tests/test_checkpoint_7.py::TestCore::test_migration_execution_creates_record",
+    ".evaluation_tests/test_checkpoint_7.py::TestCore::test_migration_failure_triggers_batch_rollback",
+    ".evaluation_tests/test_checkpoint_7.py::TestCore::test_disk_space_check_blocks_upgrade",
+    ".evaluation_tests/test_checkpoint_7.py::TestErrors::test_migration_rollback_deletes_records",
+    ".evaluation_tests/test_checkpoint_7.py::TestErrors::test_image_pull_failure_error",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_disk_space_exact_threshold_allows_upgrade",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_disk_space_failure_blocks_upgrade_mutations",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_runtime_disk_space_failure_blocks_upgrade_mutations",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_rollback_strict_reverse_order",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_rollback_undo_failure_logged_continues",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_rollback_no_undo_skipped",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_no_pending_migrations_do_not_duplicate_history",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_container_migrations_after_db_migrations",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_image_pulls_sequential",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_post_upgrade_saves_versions",
+    ".evaluation_tests/test_checkpoint_7.py::TestFunctionality::test_container_migration_failure_blocks_image_pulls"
+   ],
+   "first_ck": 7,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests place migrations under the root dir and expect a fresh install to upgrade; spec leaves discovery location and fresh-install behaviour open; agent reads package migrations and skips installs with no stored version.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_7/appctl_cli/upgrade.py",
+     "ck": 7,
+     "step": null,
+     "line": 38,
+     "quote": "CORE_MIGRATIONS_DIR = os.path.join(PACKAGE_DIR, \"migrations\")"
+    },
+    {
+     "src": "code/checkpoint_7/appctl_cli/upgrade.py",
+     "ck": 7,
+     "step": null,
+     "line": 664,
+     "quote": "return stored is not False and stored != __version__"
+    },
+    {
+     "src": "spec/checkpoint_7.md",
+     "ck": 7,
+     "step": null,
+     "line": 19,
+     "quote": "run automatically when the tool version changes"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_missing_required_positional_shows_usage",
+    ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_excess_positional_args_error",
+    ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_with_suggestion",
+    ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_no_suggestion",
+    ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_multiple_parameter_errors_collected",
+    ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_parent_command_no_handler_shows_subcommands",
+    ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority_overrides_project_disabled_command",
+    ".evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_search_stops_at_first_matching_directory",
+    ".evaluation_tests/test_checkpoint_3.py::TestCore::test_table_format_default",
+    ".evaluation_tests/test_checkpoint_3.py::TestCore::test_json_format_4_space_indent",
+    ".evaluation_tests/test_checkpoint_3.py::TestCore::test_field_single_value_raw_output",
+    ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_field_name_error",
+    ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_json_stdin_error",
+    ".evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_fields_plural_error",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_formats_preserve_same_underlying_values",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_format_quoting",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_yaml_format_output",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_count_format_integer",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_ids_format_space_separated",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_restricts_and_orders_columns",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_case_insensitive",
+    ".evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_complex_values_json_serialized_in_table",
+    ".evaluation_tests/test_checkpoint_6.py::TestFunctionality::test_compose_legacy_custom_appended_last"
+   ],
+   "first_ck": 8,
+   "regression": true,
+   "code": "F2",
+   "why": "New ck8 host-requirement check runs before non-exempt commands; grader host has docker down and old compose, so earlier commands now error. Spec mandates the check but not test-host behaviour.",
+   "evidence": [
+    {
+     "src": "diffs/checkpoint_8.patch",
+     "ck": 8,
+     "step": null,
+     "line": 63,
+     "quote": "+        system.ensure_requirements(self.environ, self.output)"
+    },
+    {
+     "src": "spec/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": 12,
+     "quote": "Before most commands, the tool must validate the host environment."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite",
+    ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite_for_multi_level_command"
+   ],
+   "first_ck": 8,
+   "regression": true,
+   "code": "F2",
+   "why": "Spec requires a first-run success message on STDOUT; it is prepended to the first help output, breaking old exact-output comparisons. Spec silent on interaction.",
+   "evidence": [
+    {
+     "src": "diffs/checkpoint_8.patch",
+     "ck": 8,
+     "step": null,
+     "line": 1448,
+     "quote": "+FIRST_RUN_SUCCESS = f\"{PRODUCT_NAME} has been set up successfully.\""
+    },
+    {
+     "src": "spec/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": 29,
+     "quote": "On success, the tool must print a success message to STDOUT."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_8.py::TestCore::test_sysreq_exponential_backoff_retries"
+   ],
+   "first_ck": 8,
+   "regression": false,
+   "code": "F2",
+   "why": "Test's fake docker-compose prints no version; agent treats an unknown compose version as an error. Spec does not say how an unparseable version is handled.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_8/appctl_cli/system.py",
+     "ck": 8,
+     "step": null,
+     "line": 175,
+     "quote": "return [\"Unable to determine the version of the compose tool.\"]"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_8.py::TestCore::test_version_newer_binary_triggers_migration",
+    ".evaluation_tests/test_checkpoint_8.py::TestErrors::test_older_binary_non_cli_error",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_older_binary_cli_warning"
+   ],
+   "first_ck": 8,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests write the stored version straight into the options table; the ck5 schema's modified_on NOT NULL column (unspecified schema) rejects the insert.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_5/appctl_cli/database.py",
+     "ck": 5,
+     "step": null,
+     "line": 23,
+     "quote": "' modified_on TEXT NOT NULL'"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_check_update_last_filter_wins",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_check_update_no_updates_success",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_check_update_table_format_no_updates_success",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_check_update_filtered_no_updates_mentions_filter",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_update_requires_confirmation"
+   ],
+   "first_ck": 8,
+   "regression": false,
+   "code": "F2",
+   "why": "Grader blocks the releases API; tests expect check-update to report up to date, agent reports a fetch error. Spec does not say what happens when the release source is unreachable.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_8/appctl_cli/self_update.py",
+     "ck": 8,
+     "step": null,
+     "line": 30,
+     "quote": "RELEASES_URL = f\"https://api.github.com/repos/"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_info_list_format_field_order",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_param_dump_with_values_reflects_runtime_config",
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_cmd_dump_alphabetical"
+   ],
+   "first_ck": 8,
+   "regression": false,
+   "code": "F2",
+   "why": "Tests assume specific key names/ordering (a 'version' info key, a 'value' entry in param-dump, sorted entry keys) that the spec leaves open; agent chose other labels.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_8/appctl_cli/commands/cli.py",
+     "ck": 8,
+     "step": null,
+     "line": 199,
+     "quote": "entry[\"current\"] = ctx.runtime.get(name)"
+    },
+    {
+     "src": "spec/checkpoint_8.md",
+     "ck": 8,
+     "step": null,
+     "line": 73,
+     "quote": "the exact key names are not prescribed"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_8.py::TestFunctionality::test_cli_info_packages_path_null_when_missing"
+   ],
+   "first_ck": 8,
+   "regression": false,
+   "code": "F4",
+   "why": "cli info emits the packages path under two keys, so diagnostics contain two packages entries instead of one null value.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_8/appctl_cli/commands/cli.py",
+     "ck": 8,
+     "step": null,
+     "line": 81,
+     "quote": "\"appctl_packages_dir_path\": packages,"
+    },
+    {
+     "src": "code/checkpoint_8/appctl_cli/commands/cli.py",
+     "ck": 8,
+     "step": null,
+     "line": 82,
+     "quote": "\"packages_dir\": packages,"
+    }
+   ]
+  }
+ ],
+ "observations": "In this run we observed the agent read nearly the whole package before each change (ck2 2.2-2.4; ck3 3.2 'Small enough to read fully'; ck8 8.4-8.13) and mostly add new modules wired in through app.py (ck4 4.6-4.9; ck5 5.8; ck6 6.11; ck7 7.13; ck8 8.20-8.29). It verified every checkpoint with the unittest suite and, from ck2 on, added its own test file except ck5 (5.11). Most failures trace to choices the spec leaves open: simulated site data (ck1, ck3), the options schema with modified_on NOT NULL (ck5 5.8, carried into ck8), and the migrations directory and fresh-install skip (ck7 7.13). In ck6 container.py's create_project was written but never called from site create/delete (6.11, 6.13). In ck8 the new host-requirement check and first-run message (8.32) broke 25 earlier tests in the grader environment; the agent had seen docker down (8.16), switched its own tests to a fake docker (8.46-8.47), and recorded that in memory (8.58-8.59). It also changed shared interfaces in ck8: format_items gained a parameter (8.30), run_command gained timeout (8.21), and self_update imported output's private _isatty (8.26)."
+}

@@ -1,0 +1,26 @@
+From 52e6b4f614ac91ad95b45471589f0a60981450f7 Mon Sep 17 00:00:00 2001
+From: anon <anon@example.com>
+Date: Mon, 9 Nov 2026 12:59:33 -0500
+Subject: [PATCH 3/5] Parnas: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+ (identical skill list every checkpoint)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ configs/agents/claude_code_parnas.yaml | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/configs/agents/claude_code_parnas.yaml b/configs/agents/claude_code_parnas.yaml
+index 3de633c..b424198 100644
+--- a/configs/agents/claude_code_parnas.yaml
++++ b/configs/agents/claude_code_parnas.yaml
+@@ -17,3 +17,7 @@ extra_args:
+   - --strict-mcp-config
+   - --mcp-config
+   - "'{\"mcpServers\":{}}'"
++# User 2026-11-09: block claude.ai account sync (anthropic-skills:*, synced plugins) so every checkpoint starts with the
++# identical skill list (17 built-ins; this also drops design/design-sync + DesignSync/PushNotification + telemetry plugin).
++env:
++  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+-- 
+2.43.0
+

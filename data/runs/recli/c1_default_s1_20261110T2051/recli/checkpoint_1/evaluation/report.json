@@ -1,0 +1,1141 @@
+{
+  "created": 1794362254.2645721,
+  "duration": 4.9712653160095215,
+  "exitcode": 1,
+  "root": "/workspace",
+  "environment": {},
+  "summary": {
+    "passed": 32,
+    "failed": 2,
+    "total": 34,
+    "collected": 34
+  },
+  "collectors": [
+    {
+      "nodeid": "",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests",
+          "type": "Dir"
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_no_args_shows_help_text",
+          "type": "Function",
+          "lineno": 42
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_command_dispatch_top_level",
+          "type": "Function",
+          "lineno": 60
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_subcommand_dispatch",
+          "type": "Function",
+          "lineno": 68
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite",
+          "type": "Function",
+          "lineno": 78
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite_for_multi_level_command",
+          "type": "Function",
+          "lineno": 93
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_version_rewrite",
+          "type": "Function",
+          "lineno": 109
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_positional_arg_parsing",
+          "type": "Function",
+          "lineno": 120
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_unrecognized_command_error",
+          "type": "Function",
+          "lineno": 130
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_missing_required_positional_shows_usage",
+          "type": "Function",
+          "lineno": 149
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_excess_positional_args_error",
+          "type": "Function",
+          "lineno": 163
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_with_suggestion",
+          "type": "Function",
+          "lineno": 173
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_no_suggestion",
+          "type": "Function",
+          "lineno": 184
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_multiple_parameter_errors_collected",
+          "type": "Function",
+          "lineno": 195
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unrecognized_subcommand_error",
+          "type": "Function",
+          "lineno": 216
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_alphabetical_ordering_case_insensitive",
+          "type": "Function",
+          "lineno": 236
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_column_alignment",
+          "type": "Function",
+          "lineno": 250
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_parent_command_no_handler_shows_subcommands",
+          "type": "Function",
+          "lineno": 270
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_suggestion_trash_to_delete",
+          "type": "Function",
+          "lineno": 282
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_subcommand_synonym_example_allows_optional_delete_suggestion",
+          "type": "Function",
+          "lineno": 293
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_checked_before_levenshtein",
+          "type": "Function",
+          "lineno": 311
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_only_when_target_registered",
+          "type": "Function",
+          "lineno": 323
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_suggestion_within_distance_2",
+          "type": "Function",
+          "lineno": 334
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_no_suggestion_beyond_distance_2",
+          "type": "Function",
+          "lineno": 343
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_tiebreaker_sort_order",
+          "type": "Function",
+          "lineno": 353
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_optional_modifier",
+          "type": "Function",
+          "lineno": 367
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_repeating_modifier_accepts_multiple",
+          "type": "Function",
+          "lineno": 378
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_no_flag_sets_false",
+          "type": "Function",
+          "lineno": 388
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error",
+          "type": "Function",
+          "lineno": 398
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected",
+          "type": "Function",
+          "lineno": 411
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_error_messages_to_stderr",
+          "type": "Function",
+          "lineno": 426
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_exit_code_1_on_error",
+          "type": "Function",
+          "lineno": 437
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_for_specific_command",
+          "type": "Function",
+          "lineno": 445
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_generic_token_classification",
+          "type": "Function",
+          "lineno": 455
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_default_value_for_optional_arg",
+          "type": "Function",
+          "lineno": 467
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors",
+          "type": "Class"
+        },
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality",
+          "type": "Class"
+        }
+      ]
+    },
+    {
+      "nodeid": ".evaluation_tests",
+      "outcome": "passed",
+      "result": [
+        {
+          "nodeid": ".evaluation_tests/test_checkpoint_1.py",
+          "type": "Module"
+        }
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_no_args_shows_help_text",
+      "lineno": 42,
+      "outcome": "passed",
+      "keywords": [
+        "test_no_args_shows_help_text",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.00855682700057514,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.30205750800087117,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00020618698908947408,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_command_dispatch_top_level",
+      "lineno": 60,
+      "outcome": "passed",
+      "keywords": [
+        "test_command_dispatch_top_level",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0031177260098047554,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.10443540899723303,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00021441199351102114,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_subcommand_dispatch",
+      "lineno": 68,
+      "outcome": "passed",
+      "keywords": [
+        "test_subcommand_dispatch",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0023306310031330213,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.1023850269994,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001637800014577806,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite",
+      "lineno": 78,
+      "outcome": "passed",
+      "keywords": [
+        "test_help_rewrite",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0058517709985608235,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.22903621899604332,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00020132299687247723,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite_for_multi_level_command",
+      "lineno": 93,
+      "outcome": "passed",
+      "keywords": [
+        "test_help_rewrite_for_multi_level_command",
+        "functionality",
+        "pytestmark",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0029831989959347993,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.20874860799813177,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016286999743897468,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_version_rewrite",
+      "lineno": 109,
+      "outcome": "passed",
+      "keywords": [
+        "test_version_rewrite",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005113664999953471,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.20825304499885533,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016605199198238552,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_positional_arg_parsing",
+      "lineno": 120,
+      "outcome": "passed",
+      "keywords": [
+        "test_positional_arg_parsing",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.002456513000652194,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.12637418000667822,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016721899737603962,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestCore::test_unrecognized_command_error",
+      "lineno": 130,
+      "outcome": "passed",
+      "keywords": [
+        "test_unrecognized_command_error",
+        "TestCore",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0031734850053908303,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.10932328300259542,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00017489799938630313,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_missing_required_positional_shows_usage",
+      "lineno": 149,
+      "outcome": "passed",
+      "keywords": [
+        "test_missing_required_positional_shows_usage",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004450540000107139,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.09973080699273851,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00028127401310484856,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_excess_positional_args_error",
+      "lineno": 163,
+      "outcome": "passed",
+      "keywords": [
+        "test_excess_positional_args_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.009976251996704377,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.10307354199176189,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00021227900288067758,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_with_suggestion",
+      "lineno": 173,
+      "outcome": "passed",
+      "keywords": [
+        "test_unknown_associative_with_suggestion",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0026178179978160188,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.10701839200919494,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00015912301023490727,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_no_suggestion",
+      "lineno": 184,
+      "outcome": "passed",
+      "keywords": [
+        "test_unknown_associative_no_suggestion",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003273779002483934,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.1006302180030616,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001664360024733469,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_multiple_parameter_errors_collected",
+      "lineno": 195,
+      "outcome": "passed",
+      "keywords": [
+        "test_multiple_parameter_errors_collected",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004708365013357252,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.1027031849953346,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00015976499707903713,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestErrors::test_unrecognized_subcommand_error",
+      "lineno": 216,
+      "outcome": "passed",
+      "keywords": [
+        "test_unrecognized_subcommand_error",
+        "error",
+        "pytestmark",
+        "TestErrors",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004091725000762381,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.10567872200044803,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016987700655590743,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_alphabetical_ordering_case_insensitive",
+      "lineno": 236,
+      "outcome": "passed",
+      "keywords": [
+        "test_help_alphabetical_ordering_case_insensitive",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0050068109994754195,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.12441838700033259,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00024393400235567242,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_column_alignment",
+      "lineno": 250,
+      "outcome": "passed",
+      "keywords": [
+        "test_help_column_alignment",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.00439006500528194,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.1191795469931094,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0004409910034155473,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_parent_command_no_handler_shows_subcommands",
+      "lineno": 270,
+      "outcome": "passed",
+      "keywords": [
+        "test_parent_command_no_handler_shows_subcommands",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.003242228995077312,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.1232700569962617,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016399000014644116,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_suggestion_trash_to_delete",
+      "lineno": 282,
+      "outcome": "passed",
+      "keywords": [
+        "test_synonym_suggestion_trash_to_delete",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0030704389937454835,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.10539525099738967,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00018169799295719713,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_subcommand_synonym_example_allows_optional_delete_suggestion",
+      "lineno": 293,
+      "outcome": "passed",
+      "keywords": [
+        "test_subcommand_synonym_example_allows_optional_delete_suggestion",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0038903860113350675,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.10163462300261017,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016609100566711277,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_checked_before_levenshtein",
+      "lineno": 311,
+      "outcome": "passed",
+      "keywords": [
+        "test_synonym_checked_before_levenshtein",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0024804790009511635,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.28455977598787285,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0003334339999128133,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_only_when_target_registered",
+      "lineno": 323,
+      "outcome": "passed",
+      "keywords": [
+        "test_synonym_only_when_target_registered",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0028890039975522086,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.12152524398698006,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002672039991011843,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_suggestion_within_distance_2",
+      "lineno": 334,
+      "outcome": "passed",
+      "keywords": [
+        "test_levenshtein_suggestion_within_distance_2",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0028483659989433363,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.10683413299557287,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016870899708010256,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_no_suggestion_beyond_distance_2",
+      "lineno": 343,
+      "outcome": "passed",
+      "keywords": [
+        "test_levenshtein_no_suggestion_beyond_distance_2",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0031620070076314732,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.10820187299395911,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016326199693139642,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_tiebreaker_sort_order",
+      "lineno": 353,
+      "outcome": "passed",
+      "keywords": [
+        "test_levenshtein_tiebreaker_sort_order",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0023735029972158372,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.11358149099396542,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00016637401131447405,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_optional_modifier",
+      "lineno": 367,
+      "outcome": "passed",
+      "keywords": [
+        "test_optional_modifier",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0030013170035090297,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.10847599399858154,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002892499906010926,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_repeating_modifier_accepts_multiple",
+      "lineno": 378,
+      "outcome": "passed",
+      "keywords": [
+        "test_repeating_modifier_accepts_multiple",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.004670207999879494,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.1160644399933517,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00028627700521610677,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_no_flag_sets_false",
+      "lineno": 388,
+      "outcome": "passed",
+      "keywords": [
+        "test_no_flag_sets_false",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.00629221300187055,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.15162391199555714,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0004215299995848909,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error",
+      "lineno": 398,
+      "outcome": "failed",
+      "keywords": [
+        "test_required_associative_missing_error",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.007660970994038507,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.16566200199304149,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/conftest.py",
+          "lineno": 314,
+          "message": "AssertionError: Expected exit code 1, got 0.\n  stdout: \"Success: Created site 'example.test' (type: standard, title: example.test).\\n\"\n  stderr: ''\nassert 0 == 1\n +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout=\"Success: Created site 'example.test' (type: standard, title: example.test).\\n\", stderr='').returncode"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_1.py",
+            "lineno": 406,
+            "message": ""
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 314,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_1.TestFunctionality object at 0x777e17be06e0>\ncli = <function cli.<locals>._run at 0x777e1717fe20>\n\n    @pytest.mark.functionality\n    def test_required_associative_missing_error(self, cli):\n        \"\"\"Missing required ``--type=<type>`` \u2192 error.\n    \n        Spec: Error Summary table.\n        \"\"\"\n        result = cli([\"site\", \"create\", \"example.test\"])\n>       assert_exit_code(result, 1)\n\n.evaluation_tests/test_checkpoint_1.py:406: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nresult = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout=\"Success: Created site 'example.test' (type: standard, title: example.test).\\n\", stderr='')\ncode = 1\n\n    def assert_exit_code(\n        result: subprocess.CompletedProcess[str], code: int\n    ) -> None:\n        \"\"\"Assert the process exited with *code*.\"\"\"\n>       assert result.returncode == code, (\n            f\"Expected exit code {code}, got {result.returncode}.\\n\"\n            f\"stdout: {result.stdout!r}\\nstderr: {result.stderr!r}\"\n        )\nE       AssertionError: Expected exit code 1, got 0.\nE         stdout: \"Success: Created site 'example.test' (type: standard, title: example.test).\\n\"\nE         stderr: ''\nE       assert 0 == 1\nE        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout=\"Success: Created site 'example.test' (type: standard, title: example.test).\\n\", stderr='').returncode\n\n.evaluation_tests/conftest.py:314: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.00021320900123100728,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected",
+      "lineno": 411,
+      "outcome": "failed",
+      "keywords": [
+        "test_required_associative_empty_value_is_rejected",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.00660736599820666,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.15743234199180733,
+        "outcome": "failed",
+        "crash": {
+          "path": "/workspace/.evaluation_tests/conftest.py",
+          "lineno": 314,
+          "message": "AssertionError: Expected exit code 1, got 0.\n  stdout: \"Success: Created site 'example.test' (type: , title: example.test).\\n\"\n  stderr: ''\nassert 0 == 1\n +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=0, stdout=\"Success: Created site 'example.test' (type: , title: example.test).\\n\", stderr='').returncode"
+        },
+        "traceback": [
+          {
+            "path": ".evaluation_tests/test_checkpoint_1.py",
+            "lineno": 420,
+            "message": ""
+          },
+          {
+            "path": ".evaluation_tests/conftest.py",
+            "lineno": 314,
+            "message": "AssertionError"
+          }
+        ],
+        "longrepr": "self = <test_checkpoint_1.TestFunctionality object at 0x777e17d95070>\ncli = <function cli.<locals>._run at 0x777e16ea49a0>\n\n    @pytest.mark.functionality\n    def test_required_associative_empty_value_is_rejected(self, cli):\n        \"\"\"Required associative args must have non-empty values.\n    \n        Spec: \"All required associative arguments must be present with\n        non-empty values.\"\n        \"\"\"\n        result = cli([\"site\", \"create\", \"example.test\", \"--type=\"])\n>       assert_exit_code(result, 1)\n\n.evaluation_tests/test_checkpoint_1.py:420: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nresult = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=0, stdout=\"Success: Created site 'example.test' (type: , title: example.test).\\n\", stderr='')\ncode = 1\n\n    def assert_exit_code(\n        result: subprocess.CompletedProcess[str], code: int\n    ) -> None:\n        \"\"\"Assert the process exited with *code*.\"\"\"\n>       assert result.returncode == code, (\n            f\"Expected exit code {code}, got {result.returncode}.\\n\"\n            f\"stdout: {result.stdout!r}\\nstderr: {result.stderr!r}\"\n        )\nE       AssertionError: Expected exit code 1, got 0.\nE         stdout: \"Success: Created site 'example.test' (type: , title: example.test).\\n\"\nE         stderr: ''\nE       assert 0 == 1\nE        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=0, stdout=\"Success: Created site 'example.test' (type: , title: example.test).\\n\", stderr='').returncode\n\n.evaluation_tests/conftest.py:314: AssertionError"
+      },
+      "teardown": {
+        "duration": 0.0001887179969344288,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_error_messages_to_stderr",
+      "lineno": 426,
+      "outcome": "passed",
+      "keywords": [
+        "test_error_messages_to_stderr",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.005950738996034488,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.15161232199170627,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00019396599964238703,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_exit_code_1_on_error",
+      "lineno": 437,
+      "outcome": "passed",
+      "keywords": [
+        "test_exit_code_1_on_error",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0030281600047601387,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.14477380200696643,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.00032891699811443686,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_for_specific_command",
+      "lineno": 445,
+      "outcome": "passed",
+      "keywords": [
+        "test_help_for_specific_command",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0065077010076493025,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.1534552109951619,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0002063430001726374,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_generic_token_classification",
+      "lineno": 455,
+      "outcome": "passed",
+      "keywords": [
+        "test_generic_token_classification",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0075297199946362525,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.1076879350002855,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0001631479972274974,
+        "outcome": "passed"
+      }
+    },
+    {
+      "nodeid": ".evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_default_value_for_optional_arg",
+      "lineno": 467,
+      "outcome": "passed",
+      "keywords": [
+        "test_default_value_for_optional_arg",
+        "functionality",
+        "pytestmark",
+        "TestFunctionality",
+        "test_checkpoint_1.py",
+        ".evaluation_tests",
+        ""
+      ],
+      "setup": {
+        "duration": 0.0031318340043071657,
+        "outcome": "passed"
+      },
+      "call": {
+        "duration": 0.11631944199325517,
+        "outcome": "passed"
+      },
+      "teardown": {
+        "duration": 0.0003001440054504201,
+        "outcome": "passed"
+      }
+    }
+  ]
+}

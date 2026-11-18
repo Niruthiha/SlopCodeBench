@@ -1,0 +1,226 @@
+{
+ "run": "runs/eve_industry/c1_default_s1_20261110T1535",
+ "checkpoints": {
+  "checkpoint_1": {
+   "pass_counts": {
+    "Core": 3,
+    "Functionality": 6,
+    "Regression": 0,
+    "Error": 3
+   },
+   "total_counts": {
+    "Core": 3,
+    "Functionality": 6,
+    "Regression": 0,
+    "Error": 3
+   },
+   "failed": {},
+   "agent_final_message": "I've written `industry.py` in `/workspace`. It reproduces all three spec examples (Naga, Barrage L Blueprint, Fernite Carbide) exactly \u2014 same item lines, recipe values, materials and Yes/No buildable flags. A venv (`.venv/`) and `requirements.txt` (`PyYAML>=6.0`) are set up.\n\n```\n.venv/bin/python industry.py recipe \"Barrage L Blueprint\" --sde sde\n```\n\n**How it works:**\n- **Finding the recipe:** you can give a product or a blueprint name; matching is exact and case-sensitive, and only published items count. A blueprint name uses its own recipe. A product name looks up the blueprint (Manufacturing) or reaction formula (Reactions) that makes it.\n- **Buildable:** `Yes` only if a published blueprint or formula makes that material. About 200 published items, such as Taipan and Echo, are only made by unpublished blueprints, so they show as `No`.\n- **Tech level** comes from `invMetaTypes`, and anything else defaults to `Tech I`. Loki comes out as `Tech III` and Barrage L as `Tech II`.\n- **Volume** always has at least two decimals, with any further trailing zeros dropped. This was the one rule that fits all three examples: `15000.00`, `0.025`, `0.01`. A 5 m\u00b3 item therefore prints as `5.00`.\n- **Table:** materials are sorted case-insensitively. The table uses the `|:-:|:---:|---:|` alignment row from the spec template; the examples' padded columns differ from row to row, so I didn't copy them.\n- **Errors:** an unknown name, or an item with no recipe (e.g. `Tritanium`), prints an error to stderr and exits non-zero.\n\n**Decision for you:** `ship_volumes.yaml` has no entry for 11 ship groups. Most are newer in-game names for groups it lists under older names, e.g. `Combat Battlecruiser` and `Heavy Assault Cruiser` (the file has `Heavy Assault Ship`). Following the spec literally, those ships fall back to the `invTypes.volume` value, which is unpackaged. So Drake shows `252000.00` instead of its real packaged 15000. If you'd rather have the real packaged sizes, I can map these groups to the matching YAML entries."
+  },
+  "checkpoint_2": {
+   "pass_counts": {
+    "Core": 7,
+    "Functionality": 10,
+    "Regression": 12,
+    "Error": 3
+   },
+   "total_counts": {
+    "Core": 7,
+    "Functionality": 11,
+    "Regression": 12,
+    "Error": 3
+   },
+   "failed": {
+    "checkpoint_2-Functionality": [
+     {
+      "test": "test_invention_functionality[jackdaw-5]",
+      "reason": "E                           KeyError: 'Invented From'"
+     }
+    ]
+   },
+   "agent_final_message": "I've added `python industry.py invention <name> --sde <dir> [--skill 1-5]` to `industry.py`. For all three examples in the spec (`Barrage L` at skill 5 and 3, and `Proteus` at skill 5), the output matches the expected block exactly when diffed. `Barrage L Blueprint` also resolves to the same report as `Barrage L`.\n\nI also ran it on all 1,092 inventable products in the SDE. None crashed: 1,036 came out as Tech II and 56 as Tech III. The existing `recipe` command still works. No new dependencies were needed, so `requirements.txt` is unchanged.\n\nThings you might not expect:\n\n- **Exact order of the probability calculation:** the expected output only matched for one way of adding up the formula. I start at 1, add `level/30` once for each science skill, then add `encryption/40`, and round with Python's `round(p*100, 2)`. Other orders and other rounding methods gave numbers that differed by 0.01 in a few rows. For example, the spec wants `55.12` for Malfunctioning + Attainment but `34.13` for Intact + Optimized Augmentation, even though both sit exactly halfway between two values.\n- **Tech III uses activity 8 in this SDE:** the Proteus relics are listed under Invention (8), not Reverse Engineering (7). The code accepts either.\n- **Tactical destroyers:** Confessor, Hecate, Jackdaw and Svipul are Tech III, but they're invented from Tech I blueprints rather than relics. For these four I print `Tech Level: Tech III` with the Tech II-style table (including the `Base:` line), since there is no relic to list under \"Invented From\". The spec doesn't cover this case.\n- **None row first:** the spec says to sort decryptors by name, but the examples put `None` first and the rest alphabetically after it. I followed the examples.\n- **Choosing a skill as encryption:** a skill counts as the encryption skill if its name contains \"Encryption\"; every other required skill counts as a science skill.\n- **Invalid input:** `--skill` outside 1\u20135 is rejected with exit code 2. An item that can't be invented or reverse-engineered gives an error and exit code 1."
+  },
+  "checkpoint_3": {
+   "pass_counts": {
+    "Core": 5,
+    "Functionality": 6,
+    "Regression": 32,
+    "Error": 5
+   },
+   "total_counts": {
+    "Core": 5,
+    "Functionality": 7,
+    "Regression": 33,
+    "Error": 5
+   },
+   "failed": {
+    "checkpoint_2-Regression": [
+     {
+      "test": "test_invention_functionality[jackdaw-5]",
+      "reason": "E                           KeyError: 'Invented From'"
+     }
+    ],
+    "checkpoint_3-Functionality": [
+     {
+      "test": "test_fernite_carbide_te10",
+      "reason": "E       AssertionError:"
+     }
+    ]
+   },
+   "agent_final_message": "The `recipe` command now takes the three new optional flags, and its output matches every Naga example in the spec. I checked ME=10, ME=5 with the waste column, TE=20 alone, and ME=10 with TE=20 together.\n\n- **`--material-efficiency`/`-me`** accepts an integer from 0 to 10 (default 0). Each quantity is calculated with your formula, `ceil(max(1, qty \u00d7 (1 \u2212 ME/100) \u00d7 runs))`, with one run per recipe. I used exact fractions instead of floating point, so a result like 100 \u00d7 0.9 can't round up to 91 by mistake.\n- **`--time-efficiency`/`-te`** accepts an even integer from 0 to 20 (default 0). It reduces the job's seconds before they're converted to minutes, so Naga goes from 250 to 200 at TE=20.\n- **`--display-waste`/`-waste`** adds a `Waste` column. Waste is the amount needed at your ME minus the amount needed at ME=10.\n- **Bad values** (an ME over 10, or an odd or out-of-range TE) are rejected with a usage message and exit code 2.\n- **Reactions** keep their base quantities and time, and show 0 waste.\n\n**Decision for you:** the spec only says ME skips reactions; it doesn't say whether TE does. I assumed TE also skips them, since it's described as similar to ME and that's how the game works. If reactions should get the time reduction, it's a one-line change in `render` in `industry.py`.\n\nThe tables use the same compact markdown as the existing output, not the padded columns in your examples; the cell values are the same. `requirements.txt` is unchanged because nothing new was needed."
+  },
+  "checkpoint_4": {
+   "pass_counts": {
+    "Core": 2,
+    "Functionality": 4,
+    "Regression": 48,
+    "Error": 2
+   },
+   "total_counts": {
+    "Core": 2,
+    "Functionality": 5,
+    "Regression": 50,
+    "Error": 2
+   },
+   "failed": {
+    "checkpoint_2-Regression": [
+     {
+      "test": "test_invention_functionality[jackdaw-5]",
+      "reason": "E                           KeyError: 'Invented From'"
+     }
+    ],
+    "checkpoint_3-Regression": [
+     {
+      "test": "test_fernite_carbide_te10",
+      "reason": "E       AssertionError:"
+     }
+    ],
+    "checkpoint_4-Functionality": [
+     {
+      "test": "test_functionality[svipul_l1-1]",
+      "reason": "E       AssertionError: Command failed: Error: No published item named 'Svipul 1 Accelerant Decryptor Small Malfunctioning Hull Section' found in SDE"
+     }
+    ]
+   },
+   "agent_final_message": "I added the `plan` command to `industry.py`, and both examples from the spec now produce exactly the expected `materials.csv` and `jobs.csv`. I also ran it on a few other cases (shown below), but there are no expected outputs for those to compare against. `requirements.txt` didn't need changes because PyYAML was already listed.\n\n**What it does:**\n- **Build strings:** all four forms are recognised, including multi-word decryptor and relic names (e.g. `Legion 5 Parity Decryptor Malfunctioning Hull Section x3`). `x{N}` defaults to 1, and runs default to 1 in the plain item form.\n- **Materials:** each job needs `max(runs, ceil(qty \u00d7 runs \u00d7 (1 \u2212 ME/100)))` of each input. That is why R.A.M. comes out at 100 rather than 90 in the ME 10 example. Only the target item is built; everything else is listed as bought, as in the examples.\n- **Invention:** an invented blueprint starts at ME 2 / TE 4 plus the decryptor's modifiers, and its maximum runs are the base runs plus the decryptor's runs. One invented blueprint covers several jobs when they fit within its runs. The number of attempts is `ceil(blueprints needed / success chance)`, using the config's `invention_skill`. Datacores are multiplied by the attempts.\n- **Job time:** `days = BP time \u00d7 runs \u00d7 (1 \u2212 TE) \u00d7 (1 \u2212 te_bonus) / 86400`, rounded to 2 decimals.\n- **Errors:** an invalid config, an unknown item or an ME/TE out of range gives a message and exit code 1.\n- **Refactor:** I moved the code that picks the invention source into a helper (`invention_sources`) so the `invention` command and `plan` share it. The `invention` command's output looks unchanged, but I didn't compare it against a saved copy.\n\n**Decisions the spec didn't settle:**\n- **Decryptors and relics are added to `materials.csv`**, one per invention attempt, because they're used up. The T1 blueprint copy used for T2 invention is not added.\n- **Jobs longer than a blueprint's max runs:** if a job needs more runs than one invented blueprint has, it is costed as several blueprints per job. Jobs are not split.\n- **Reactions:** ME/TE don't apply to them, but `te_bonus` still shortens their time.\n- **Invention jobs are not listed in `jobs.csv`**, matching the examples.\n- **`start_amount` and `end_amount` are always 0** because nothing in the spec feeds them yet.\n\nOther runs I checked by hand:\n- **`Legion 5 Parity Decryptor Malfunctioning Hull Section x3`:** 5 relics and 5 decryptors.\n- **`Fernite Carbide 5 x2`:** gives a reaction job.\n- **`Barrage L`:** the plain item form, with runs and job count defaulting to 1."
+  },
+  "checkpoint_5": {
+   "pass_counts": {
+    "Core": 3,
+    "Functionality": 5,
+    "Regression": 56,
+    "Error": 2
+   },
+   "total_counts": {
+    "Core": 3,
+    "Functionality": 8,
+    "Regression": 59,
+    "Error": 3
+   },
+   "failed": {
+    "checkpoint_2-Regression": [
+     {
+      "test": "test_invention_functionality[jackdaw-5]",
+      "reason": "E                           KeyError: 'Invented From'"
+     }
+    ],
+    "checkpoint_3-Regression": [
+     {
+      "test": "test_fernite_carbide_te10",
+      "reason": "E       AssertionError:"
+     }
+    ],
+    "checkpoint_4-Regression": [
+     {
+      "test": "test_functionality[svipul_l1-1]",
+      "reason": "E       AssertionError: Command failed: Error: No published item named 'Svipul 1 Accelerant Decryptor Small Malfunctioning Hull Section' found in SDE"
+     }
+    ],
+    "checkpoint_5-Functionality": [
+     {
+      "test": "test_build_all_functionality[kronos_invent]",
+      "reason": "E       AssertionError: Jobs mismatch for kronos_invent"
+     },
+     {
+      "test": "test_build_all_functionality[loki_l1_1d]",
+      "reason": "E       AssertionError: Jobs mismatch for loki_l1_1d"
+     },
+     {
+      "test": "test_build_all_functionality[revelation_10_3d]",
+      "reason": "E       AssertionError: Jobs mismatch for revelation_10_3d"
+     }
+    ],
+    "checkpoint_5-Error": [
+     {
+      "test": "test_split_days_over_thirty_fails",
+      "reason": "E       AssertionError: Expected error for split_days=31"
+     }
+    ]
+   },
+   "agent_final_message": "`plan --build-all` is implemented in `industry.py`, job splitting is in place, and all six expected outputs from your examples (`jobs.csv` and `materials.csv` for both Barrage L runs and the Megathron run) match exactly.\n\n**What it does**\n- **`--build-all`:** builds every buildable item in the tree instead of buying it. Each component is built in one go for its total demand across the whole tree, then that job is split if it's too long. Built items appear in `materials.csv` only when there's leftover output (shown in `end_amount`); the final product is never listed there.\n- **Component ME/TE:** components use `component_bpo_defaults`, reactions use 0/0, and T1 capital ships use 0/0. A ship counts as a T1 capital if it is a Tech I ship whose market path starts with \"Ships > Capital Ships\" (or whose group is a capital group).\n- **Splitting:** this applies to every job, including the top-level item and runs without `--build-all`. The top-level item is split one job at a time, then multiplied by the job count.\n- **New config fields:** `split_days` (default 3) and `component_bpo_defaults` (default ME 10 / TE 20), both validated.\n\n**Where I went beyond or against the spec**\n- **Jobs exactly at the limit are split.** The spec says split when a job takes *more than* `split_days`, but your 3-day example splits Fernite Carbide, which takes exactly 3.0 days. So a job may only run up to *strictly less than* the limit; with that rule all three examples match.\n- **The duration includes `te_bonus`.** The examples only work if the split check counts `te_bonus` as well as the blueprint's TE. Without it, Carbon Fiber (27 runs per job, 108 total) would be split differently.\n- **`split_days` above 30 is capped at 30, not rejected.** I did this because the spec computes `min(30, split_days)`. Zero, negative or non-numeric values are rejected.\n- **Recipes that consume their own product:** about 40 items do this, such as some structures and siphon units. That self-demand is bought rather than built. No other loops exist in the data.\n\nI also ran a Jump Freighter (Ark), a dreadnought, a plan without `--build-all`, and invalid configs; all behaved as expected. No new dependencies, so `requirements.txt` is unchanged."
+  },
+  "checkpoint_6": {
+   "pass_counts": {
+    "Core": 2,
+    "Functionality": 1,
+    "Regression": 66,
+    "Error": 2
+   },
+   "total_counts": {
+    "Core": 2,
+    "Functionality": 3,
+    "Regression": 73,
+    "Error": 2
+   },
+   "failed": {
+    "checkpoint_2-Regression": [
+     {
+      "test": "test_invention_functionality[jackdaw-5]",
+      "reason": "E                           KeyError: 'Invented From'"
+     }
+    ],
+    "checkpoint_3-Regression": [
+     {
+      "test": "test_fernite_carbide_te10",
+      "reason": "E       AssertionError:"
+     }
+    ],
+    "checkpoint_4-Regression": [
+     {
+      "test": "test_functionality[svipul_l1-1]",
+      "reason": "E       AssertionError: Command failed: Error: No published item named 'Svipul 1 Accelerant Decryptor Small Malfunctioning Hull Section' found in SDE"
+     }
+    ],
+    "checkpoint_5-Regression": [
+     {
+      "test": "test_build_all_functionality[kronos_invent]",
+      "reason": "E       AssertionError: Jobs mismatch for kronos_invent"
+     },
+     {
+      "test": "test_build_all_functionality[loki_l1_1d]",
+      "reason": "E       AssertionError: Jobs mismatch for loki_l1_1d"
+     },
+     {
+      "test": "test_build_all_functionality[revelation_10_3d]",
+      "reason": "E       AssertionError: Jobs mismatch for revelation_10_3d"
+     },
+     {
+      "test": "test_split_days_over_thirty_fails",
+      "reason": "E       AssertionError: Expected error for split_days=31"
+     }
+    ],
+    "checkpoint_6-Functionality": [
+     {
+      "test": "test_build_all_with_stocks_functionality[ion_siege_real]",
+      "reason": "E       AssertionError: Materials mismatch for ion_siege_real"
+     },
+     {
+      "test": "test_build_all_with_stocks_functionality[kronos]",
+      "reason": "E       AssertionError: Jobs mismatch for kronos"
+     }
+    ]
+   },
+   "agent_final_message": "I've added `--stocks` and `--targets` to the `plan` command. With `--build-all`, the spec example's `jobs.csv` matches exactly, and `materials.csv` matches on every row except one: **Nitrogen Fuel Block** ends at **35**, but the example says **34**.\n\n**The mismatch:** we build 2 runs of 40 blocks (80 total). The jobs that use them are Fulleride (6 runs \u00d7 5 = 30) and Platinum Technite (3 runs \u00d7 5 = 15), which comes to 45, leaving 35. Every other row in the example follows the same rule I used, so I think the 34 is an error in the example. If that number is checked exactly, this row will fail.\n\n**What the planner does now:**\n- **For each item:** it needs `amount consumed + target \u2212 stock`. If that's more than zero, it builds the item if it's buildable and either `--build-all` is on or the item is a target. Otherwise it buys it. Stock is always used first.\n- **Building targets:**\n  - Items that can be built normally use the component ME/TE from the config.\n  - T2/T3 items are invented with no decryptor and the config's `invention_skill`. Their builds are split into jobs no larger than the invented blueprint's run limit.\n- **Without `--build-all`:** target items are still built, but their inputs are bought.\n- **`materials.csv`:**\n  - `start_amount` is the stock and `end_amount` is what's left at the end.\n  - Stock that's never used and isn't topped up (like the Rifters in the example) isn't listed.\n  - Intermediate items that are fully used up and had no stock stay hidden, as before.\n- **File format:** each line must start with the item name and a whole-number quantity. Anything after that is ignored. Blank lines and lines starting with `#` are skipped. Commas in quantities (`1,000`) and lowercase names are accepted. An unknown item name, a line with no quantity, or a missing file prints an error and exits with code 1.\n\n**Choices the spec didn't settle:**\n- **Requested item in stock or targets:** the item you asked to build doesn't count toward stock or targets. If it's also a target, the target amount is built as a separate job.\n- **Item both used and targeted:** a T2/T3 item that's a target and also used inside the plan is built entirely through invention.\n\n**Checks:**\n- **No change to old plans:** without the new flags, output is identical to the previous version for 10 test plans. These covered T1 and T2 items, a T3 item invented from a relic, a capital ship, and a decryptor, each with and without `--build-all`.\n- **Edge cases:** I also ran T2 and T3 targets, a target that can only be bought, and badly formatted lines.\n\nAll changes are in `industry.py`. No new dependencies were needed, so `requirements.txt` is unchanged."
+  }
+ }
+}

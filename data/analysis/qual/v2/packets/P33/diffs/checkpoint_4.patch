@@ -1,0 +1,1892 @@
+### mtl.py (modified)
+--- mtl.py
++++ mtl.py
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env python3
+ """MTL: run a small pipeline DSL (schemas, params, calcs, filter/apply/group_by/window/aggregate) over sales events
+-read from CSV, TSV (optionally gzipped) and Parquet files."""
++read from CSV, TSV (optionally gzipped) and Parquet files, either from --input paths or from multiple named sources
++declared in an ingest config (YAML/JSON) and combined with joins."""
+ 
+ import argparse
+ import csv
+@@ -22,7 +23,7 @@
+     ZoneInfo = None
+     ZoneInfoNotFoundError = Exception
+ 
+-EXIT_CODES = {"bad_dsl": 1, "type_error": 2, "bad_io": 3, "runtime_error": 4}
++EXIT_CODES = {"bad_dsl": 1, "type_error": 2, "bad_io": 3, "runtime_error": 4, "config_error": 5}
+ 
+ 
+ class MTLError(Exception):
+@@ -46,6 +47,10 @@
+ 
+ def runtime_error(msg):
+     return MTLError("runtime_error", msg)
++
++
++def config_error(msg):
++    return MTLError("config_error", msg)
+ 
+ 
+ # --------------------------------------------------------------------------- types
+@@ -80,7 +85,7 @@
+   | (?P<num>(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)
+   | (?P<str>'[^'\n]*'|"[^"\n]*")
+   | (?P<ident>[A-Za-z_][A-Za-z0-9_]*)
+-  | (?P<op><=|>=|==|!=|<|>|!|&|\||\+|-|\*|/|%|\(|\)|\[|\]|,|\{|\}|:|=|@)
++  | (?P<op><=|>=|==|!=|<|>|!|&|\||\+|-|\*|/|%|\(|\)|\[|\]|,|\{|\}|:|=|@|\.)
+     """,
+     re.VERBOSE,
+ )
+@@ -336,6 +341,9 @@
+                 return Lit(False, BOOL)
+             if tok.value == "in":
+                 raise dsl_error("unexpected keyword 'in'")
++            if self.at_op(".") and self.peek(1).kind == "ident":
++                self.next()
++                return Col(f"{tok.value}.{self.next().value}")
+             if self.at_op("("):
+                 if tok.value == "cast":
+                     return self.parse_cast()
+@@ -380,6 +388,13 @@
+     def skip_nl(self):
+         while self.at("nl"):
+             self.next()
++
++    def peek_after_nl(self, offset):
++        """The first non-newline token at or after position i + offset."""
++        j = min(self.i + offset, len(self.tokens) - 1)
++        while self.tokens[j].kind == "nl":
++            j += 1
++        return self.tokens[j]
+ 
+     def peek_past_nl(self):
+         j = self.i
+@@ -468,6 +483,23 @@
+         self.post_calcs = []  # CalcDecl with stage post_agg
+         self.order = None  # execution order of row-level steps
+         self.deferred_errors = []  # type errors found while resolving schemas
++        # multi-source additions
++        self.sources = None  # [(source_name, alias)] from a 'sources { ... }' block
++        self.with_blocks = []  # [(alias, [("filter", expr) | ("calc", CalcDecl)])]
++        self.with_errors = []  # type errors found in alias-scoped 'with' blocks
++        self.joins = []  # [JoinDecl]
++        self.resolved_schemas = {}  # schema name -> (fields, calc order)
++
++
++class JoinDecl:
++    def __init__(self, left, right):
++        self.left = left
++        self.right = right
++        self.on = None
++        self.within = None  # band width in microseconds
++        self.jtype = None
++        self.project = None  # [(expr, name)]
++        self.alias = None
+ 
+ 
+ class CalcDecl:
+@@ -827,6 +859,7 @@
+     program.schema_name = r.expect_ident("schema name")
+     parse_block_header_open(r)
+     params_seen = False
++    statements_seen = False
+     while True:
+         r.skip_nl()
+         tok = r.peek()
+@@ -843,11 +876,278 @@
+             r.next()
+             with_line(tok, parse_params_block, r, program, with_line)
+             continue
++        if tok.kind == "ident" and tok.value == "sources" and r.peek_after_nl(1).kind == "op" and r.peek_after_nl(1).value == "{":
++            if program.sources is not None:
++                with_line(tok, fail, dsl_error("at most one 'sources' block is allowed"))
++            if statements_seen:
++                with_line(tok, fail, dsl_error("'sources { ... }' must appear before any other statements"))
++            with_line(tok, parse_sources_block, r, program)
++            continue
++        statements_seen = True
++        if tok.kind == "ident" and tok.value == "with" and nxt.kind == "ident":
++            with_line(tok, parse_with_block, r, program, with_line)
++            continue
++        if tok.kind == "ident" and tok.value == "join":
++            with_line(tok, parse_join, r, program)
++            continue
+         toks = r.collect_statement()
+         with_line(toks[0], parse_pipeline_statement, program, Parser(tokens=toks))
+     if program.aggregates is None:
+         raise dsl_error("exactly one 'aggregate' statement is required")
+     return program
++
++
++def fail(err):
++    raise err
++
++
++def expect_line_end(r):
++    tok = r.peek()
++    if not (tok.kind in ("nl", "eof") or (tok.kind == "op" and tok.value == "}")):
++        raise dsl_error(f"unexpected {describe(tok)}")
++
++
++def parse_sources_block(r, program):
++    r.next()  # 'sources'
++    parse_block_header_open(r)
++    entries = []
++    while True:
++        r.skip_nl()
++        if r.at_op("}"):
++            r.next()
++            break
++        if r.at("eof"):
++            raise dsl_error("sources block is missing a closing '}'")
++        name = r.expect_ident("source name")
++        alias = name
++        if r.at("ident", "as"):
++            r.next()
++            alias = r.expect_ident("source alias")
++        if alias in RESERVED_WORDS or alias == "_":
++            raise dsl_error(f"'{alias}' cannot be used as a source alias")
++        if any(a == alias for _, a in entries):
++            raise dsl_error(f"source alias '{alias}' is bound more than once")
++        entries.append((name, alias))
++        r.skip_nl()
++        if r.at_op(","):
++            r.next()
++        elif not r.at_op("}") and not r.at("ident"):
++            raise dsl_error(f"expected ',' or '}}' in sources block but found {describe(r.peek())}")
++    expect_line_end(r)
++    if not entries:
++        raise dsl_error("sources block must bind at least one source")
++    program.sources = entries
++
++
++WITH_FORBIDDEN = ("group_by", "window", "aggregate", "apply", "join", "with", "sources", "params")
++
++
++def parse_with_block(r, program, with_line):
++    r.next()  # 'with'
++    alias = r.expect_ident("source alias")
++    parse_block_header_open(r)
++    steps = []
++    while True:
++        r.skip_nl()
++        if r.at_op("}"):
++            r.next()
++            break
++        if r.at("eof"):
++            raise dsl_error(f"'with {alias}' block is missing a closing '}}'")
++        toks = r.collect_statement()
++        with_line(toks[0], parse_with_statement, program, alias, steps, Parser(tokens=toks))
++    expect_line_end(r)
++    program.with_blocks.append((alias, steps))
++
++
++def parse_with_statement(program, alias, steps, p):
++    head = p.peek()
++    if head.kind == "ident" and head.value == "calc":
++        calc = parse_calc(p, "pre")
++        if calc.stage != "pre":
++            program.with_errors.append(type_error(
++                f"calc '{calc.name}' in 'with {alias}' must be @stage(pre); post-aggregation calcs are not allowed in 'with' blocks"))
++            return
++        steps.append(("calc", calc))
++        return
++    if head.kind == "ident" and head.value == "filter":
++        p.next()
++        p.expect_op("(")
++        expr = p.parse_expr()
++        p.expect_op(")")
++        p.expect_eof()
++        steps.append(("filter", expr))
++        return
++    if head.kind == "ident" and head.value in WITH_FORBIDDEN:
++        raise dsl_error(f"'{head.value}' is not allowed inside 'with {alias}'; only pre-stage calcs and filters are")
++    raise dsl_error(f"unknown statement starting with {describe(head)} in 'with {alias}'")
++
++
++JOIN_TYPES = ("inner", "left", "right", "full")
++JOIN_CLAUSES = ("on", "within", "type", "project")
++WITHIN_UNITS = {"s": 1, "sec": 1, "m": 60, "min": 60, "h": 3600, "hr": 3600, "d": 86400}
++
++
++def parse_join_operand(r):
++    r.skip_nl()
++    if r.at_op("("):
++        r.next()
++        name = r.expect_ident("relation alias")
++        r.expect_op(")")
++        return name
++    return r.expect_ident("relation alias")
++
++
++def parse_join(r, program):
++    r.next()  # 'join'
++    decl = JoinDecl(parse_join_operand(r), None)
++    r.skip_nl()
++    if not r.at("ident", "with"):
++        raise dsl_error(f"expected 'with' in join but found {describe(r.peek())}")
++    r.next()
++    decl.right = parse_join_operand(r)
++    while True:
++        r.skip_nl()
++        tok = r.peek()
++        if tok.kind == "ident" and tok.value == "on":
++            if decl.on is not None:
++                raise dsl_error("join has more than one 'on' clause")
++            r.next()
++            decl.on = parse_join_on(r)
++        elif (tok.kind == "ident" and tok.value == "within") or (tok.kind == "op" and tok.value == "["):
++            if decl.within is not None:
++                raise dsl_error("join has more than one 'within' clause")
++            bracketed = tok.kind == "op"
++            r.next()
++            if bracketed:
++                r.skip_nl()
++                if not r.at("ident", "within"):
++                    raise dsl_error(f"expected 'within' but found {describe(r.peek())}")
++                r.next()
++            decl.within = parse_within_duration(r)
++            if bracketed:
++                r.skip_nl()
++                r.expect_op("]")
++        elif tok.kind == "ident" and tok.value == "type":
++            if decl.jtype is not None:
++                raise dsl_error("join has more than one 'type' clause")
++            r.next()
++            jt = r.expect_ident("join type")
++            if jt not in JOIN_TYPES:
++                raise dsl_error(f"unknown join type '{jt}'; expected one of {', '.join(JOIN_TYPES)}")
++            if jt != "inner" and r.at("ident", "outer"):
++                r.next()
++            decl.jtype = jt
++        elif tok.kind == "ident" and tok.value == "project":
++            r.next()
++            decl.project = parse_project(r)
++            if r.peek_after_nl(0).kind == "ident" and r.peek_after_nl(0).value == "as":
++                r.skip_nl()
++                r.next()
++                decl.alias = r.expect_ident("join alias")
++                if decl.alias in RESERVED_WORDS or decl.alias == "_":
++                    raise dsl_error(f"'{decl.alias}' cannot be used as a join alias")
++            expect_line_end(r)
++            break
++        else:
++            raise dsl_error(f"join is missing 'project {{ ... }}' (found {describe(tok)})")
++    if decl.on is None:
++        raise dsl_error("join requires an 'on (...)' predicate")
++    if decl.jtype is None:
++        decl.jtype = "inner"
++    program.joins.append(decl)
++
++
++def parse_join_on(r):
++    toks = []
++    depth = 0
++    while True:
++        tok = r.peek()
++        if tok.kind == "eof":
++            break
++        if tok.kind == "nl":
++            r.next()
++            continue
++        if depth <= 0:
++            if tok.kind == "op" and tok.value in ("[", "}"):
++                break
++            if (tok.kind == "ident" and tok.value in ("within", "type", "project")
++                    and not (toks and toks[-1].kind == "op" and toks[-1].value == ".")):
++                break
++        if tok.kind == "op" and tok.value in "([":
++            depth += 1
++        elif tok.kind == "op" and tok.value in ")]":
++            depth -= 1
++        toks.append(r.next())
++    if not toks:
++        raise dsl_error("join 'on' requires a predicate")
++    end = toks[-1].end
++    p = Parser(tokens=toks + [Token("eof", None, end, end)])
++    expr = p.parse_expr()
++    p.expect_eof()
++    return expr
++
++
++def parse_within_duration(r):
++    num = r.next()
++    unit = r.next()
++    if (
++        num.kind != "num"
++        or not re.fullmatch(r"\d+", num.value)
++        or unit.kind != "ident"
++        or unit.value not in WITHIN_UNITS
++    ):
++        raise dsl_error("invalid 'within' duration; expected e.g. 30s, 10m, 1h, 1d")
++    return int(num.value) * WITHIN_UNITS[unit.value] * 1_000_000
++
++
++def parse_project(r):
++    r.skip_nl()
++    r.expect_op("{")
++    entries = [[]]
++    depth = 0
++    while True:
++        tok = r.next()
++        if tok.kind == "eof":
++            raise dsl_error("project block is missing a closing '}'")
++        if tok.kind == "nl":
++            continue
++        if tok.kind == "op":
++            if tok.value == "}" and depth == 0:
++                break
++            if tok.value in "([{":
++                depth += 1
++            elif tok.value in ")]}":
++                depth -= 1
++            elif tok.value == "," and depth == 0:
++                entries.append([])
++                continue
++        entries[-1].append(tok)
++    if not entries[-1]:
++        entries.pop()
++    if not entries:
++        raise dsl_error("project block must define at least one column")
++    project = []
++    for toks in entries:
++        if not toks:
++            raise dsl_error("empty entry in project block")
++        end = toks[-1].end
++        p = Parser(tokens=toks + [Token("eof", None, end, end)])
++        expr = p.parse_expr()
++        if p.at("ident", "as"):
++            p.next()
++            name = p.expect_name("column name")
++        elif isinstance(expr, Col):
++            name = expr.name.rsplit(".", 1)[-1]
++        else:
++            raise dsl_error(f"project entry needs 'as <name>', found {describe(p.peek())}")
++        p.expect_eof()
++        if name in RESERVED_WORDS or "." in name:
++            raise dsl_error(f"'{name}' cannot be used as a column name")
++        if any(n == name for _, n in project):
++            raise dsl_error(f"duplicate column name '{name}' in project; disambiguate with 'as'")
++        project.append((expr, name))
++    return project
+ 
+ 
+ def parse_params_block(r, program, with_line):
+@@ -888,27 +1188,31 @@
+         return
+ 
+ 
++def parse_calc(p, default_stage):
++    p.next()  # 'calc'
++    name = p.expect_ident("calc name")
++    if name in RESERVED_WORDS:
++        raise dsl_error(f"'{name}' is a reserved word and cannot be a field name")
++    p.expect_op("=")
++    expr = p.parse_expr()
++    p.expect_op(":")
++    typ = parse_type(p)
++    stage = parse_stage(p) if p.at_op("@") else default_stage
++    p.expect_eof()
++    return CalcDecl(name, expr, typ, stage)
++
++
+ def parse_pipeline_statement(program, p):
+     if p.at("ident", "calc"):
+-        p.next()
+-        name = p.expect_ident("calc name")
+-        if name in RESERVED_WORDS:
+-            raise dsl_error(f"'{name}' is a reserved word and cannot be a field name")
+-        p.expect_op("=")
+-        expr = p.parse_expr()
+-        p.expect_op(":")
+-        typ = parse_type(p)
+-        if p.at_op("@"):
+-            stage = parse_stage(p)
+-        else:
+-            stage = "post_agg" if program.aggregates is not None else "pre"
+-        p.expect_eof()
+-        calc = CalcDecl(name, expr, typ, stage)
+-        if stage == "pre":
++        calc = parse_calc(p, "post_agg" if program.aggregates is not None else "pre")
++        if calc.stage == "pre":
+             program.steps.append(("calc", calc))
+         else:
+             program.post_calcs.append(calc)
+         return
++    head = p.peek()
++    if head.kind == "ident" and head.value == "sources":
++        raise dsl_error("'sources { ... }' must appear before any other statements")
+     parse_statement(program, p)
+ 
+ 
+@@ -1004,14 +1308,61 @@
+                     raise dsl_error(f"{n.name}() offset must be a positive integer literal or an int param")
+ 
+ 
++def validate_multi_source(program):
++    """Structural checks of sources / with / join statements (DSL errors)."""
++    if program.sources is None:
++        if program.joins:
++            raise dsl_error("join requires a 'sources { ... }' block declaring the joined sources")
++        if program.with_blocks:
++            raise dsl_error("'with' blocks require a 'sources { ... }' block")
++        return
++    if not program.joins:
++        raise dsl_error("multi-source pipelines must combine their sources with 'join'")
++    aliases = [a for _, a in program.sources]
++    for alias, _ in program.with_blocks:
++        if alias not in aliases:
++            raise dsl_error(f"'with {alias}' refers to an unknown source alias")
++    join_aliases = {}
++    used = set()
++    for i, j in enumerate(program.joins):
++        keys = []
++        for side in (j.left, j.right):
++            if side == "_":
++                if i == 0:
++                    raise dsl_error("'_' refers to the previous join result, but no join precedes it")
++                key = i - 1
++            elif side in aliases:
++                key = side
++            elif side in join_aliases:
++                key = join_aliases[side]
++            else:
++                raise dsl_error(f"join refers to unknown source or join alias '{side}'")
++            keys.append(key)
++            used.add(key)
++        if keys[0] == keys[1]:
++            raise dsl_error(f"cannot join '{j.left}' with itself; bind the source twice under different aliases")
++        if j.alias is not None:
++            if j.alias in aliases or j.alias in join_aliases:
++                raise dsl_error(f"join alias '{j.alias}' is already in use")
++            join_aliases[j.alias] = i
++    for alias in aliases:
++        if alias not in used:
++            raise dsl_error(f"source alias '{alias}' is never joined; multi-source pipelines must combine all sources")
++    for i in range(len(program.joins) - 1):
++        if i not in used:
++            raise dsl_error(f"the result of join #{i + 1} is never used by a later join")
++
++
+ def finalize_block_program(program, schemas, cli_params):
+     if program.schema_name not in schemas:
+         raise dsl_error(f"pipeline uses unknown schema '{program.schema_name}'")
+     resolved = resolve_schemas(schemas, program.deferred_errors)
++    program.resolved_schemas = resolved
+     fields, order = resolved[program.schema_name]
+     program.schema_fields = fields
+     program.schema_calc_order = order
+     params = program.params
++    validate_multi_source(program)
+ 
+     for decl in params.values():
+         if decl.default is None and decl.name not in cli_params:
+@@ -1025,9 +1376,20 @@
+         check_expr_structure(expr, params, post=False)
+     for calc in program.post_calcs:
+         check_expr_structure(calc.expr, params, post=True)
++    for _, steps in program.with_blocks:
++        for step in steps:
++            check_expr_structure(step[1].expr if step[0] == "calc" else step[1], params, post=False)
++    for j in program.joins:
++        check_expr_structure(j.on, params, post=False)
++        for expr, _ in j.project:
++            check_expr_structure(expr, params, post=False)
+     if program.window_param is not None and program.window_param not in params:
+         raise dsl_error(f"unknown parameter '{program.window_param}'")
+ 
++    if program.joins:
++        # the working schema after the final join is defined by its project block
++        fields = {name: None for _, name in program.joins[-1].project}
++        fields.setdefault("timestamp", None)
+     pre_calcs = [s[1] for s in program.steps if s[0] == "calc"]
+     apply_names = {s[2] for s in program.steps if s[0] == "apply"}
+     aliases = {a[2] for a in program.aggregates}
+@@ -1305,6 +1667,16 @@
+             except RowError as e:
+                 yield line, n, None, e, rec
+ 
++    def raw_records(self, opts):
++        """Records as {column: ("text", raw)} cells; missing trailing fields are simply absent."""
++        width = len(self.header)
++        for n, (line, rec) in enumerate(self.body, 1):
++            if len(rec) > width:
++                yield line, n, None, RowError(PARSE_TYPE_MISMATCH, f"record has {len(rec)} fields, expected {width}"), rec
++                continue
++            cells = {name: ("text", rec[i]) for name, i in self.index.items() if i < len(rec)}
++            yield line, n, cells, None, rec
++
+     def context(self, rec):
+         record = {}
+         for i, value in enumerate(rec):
+@@ -1454,8 +1826,20 @@
+         decoded, i = ctx
+         return {name: col[1][i] for name, col in decoded.items()}
+ 
+-    def decode_column(self, name, typ, opts):
+-        """Return (values, display) lists; a value is a Python value, None, or a RowError."""
++    def raw_records(self, opts):
++        """Records as {column: ("pq", kind, arrow_type, value)} cells."""
++        columns = {}
++        display = {}
++        for name in self.table.column_names:
++            kind, t, items = self.column_items(name, opts)
++            columns[name] = (kind, t, items)
++            display[name] = (None, [jsonable(v) for v in items])
++        for i in range(self.num_rows):
++            cells = {name: ("pq", kind, t, items[i]) for name, (kind, t, items) in columns.items()}
++            yield None, i + 1, cells, None, (display, i)
++
++    def column_items(self, name, opts):
++        """(kind, arrow type, Python values) of a column; timestamps become aware UTC datetimes."""
+         pa = require_pyarrow()
+         col = self.table.column(name)
+         t = col.type
+@@ -1486,7 +1870,11 @@
+             except Exception:  # e.g. dates outside Python's range
+                 items = [None if v is None else str(v) for v in col.cast(pa.string()).to_pylist()]
+                 kind = "unreadable"
+-
++        return kind, t, items
++
++    def decode_column(self, name, typ, opts):
++        """Return (values, display) lists; a value is a Python value, None, or a RowError."""
++        kind, t, items = self.column_items(name, opts)
+         display = [jsonable(v) for v in items]
+         values = []
+         for v, shown in zip(items, display):
+@@ -1494,73 +1882,73 @@
+                 values.append(None)
+                 continue
+             try:
+-                values.append(self.convert(v, kind, t, typ, name, opts))
++                values.append(convert_parquet_value(v, kind, t, typ, name, opts))
+             except RowError as e:
+                 e.value = shown
+                 values.append(e)
+         return values, display
+ 
+-    def convert(self, v, kind, t, typ, name, opts):
+-        def mismatch():
+-            return RowError(
+-                PARQUET_TYPE_MISMATCH,
+-                f"column '{name}' has Parquet type {t} which cannot be read as {typ}",
+-                name,
+-            )
+-
+-        if kind == "binary" and typ in (STR, TS):
+-            if isinstance(v, str):
+-                raise mismatch()
+-            try:
+-                v = v.decode("utf-8")
+-            except UnicodeDecodeError:
+-                raise mismatch()
+-            kind = STR
+-        if kind == STR and (v.strip() == "" or v in opts.nulls or v.strip() in opts.nulls):
+-            return None
+-        if typ == STR:
+-            if kind == STR:
+-                return v
+-            if opts.legacy and kind in (INT, FLOAT, BOOL, "decimal", TS, "date"):
+-                if kind == BOOL:
+-                    return "true" if v else "false"
+-                if kind == TS:
+-                    return format_ts(v)
+-                if kind == FLOAT:
+-                    return repr(v)
+-                return str(v)
++def convert_parquet_value(v, kind, t, typ, name, opts):
++    def mismatch():
++        return RowError(
++            PARQUET_TYPE_MISMATCH,
++            f"column '{name}' has Parquet type {t} which cannot be read as {typ}",
++            name,
++        )
++
++    if kind == "binary" and typ in (STR, TS):
++        if isinstance(v, str):
+             raise mismatch()
+-        if typ == INT:
+-            if kind == INT:
+-                return v
+-            if kind == "decimal" and t.scale <= 0:
+-                return int(v)
++        try:
++            v = v.decode("utf-8")
++        except UnicodeDecodeError:
+             raise mismatch()
+-        if typ == FLOAT:
+-            if kind in (INT, FLOAT, "decimal"):
+-                x = float(v)
+-                return None if math.isnan(x) else x
+-            raise mismatch()
+-        if typ == BOOL:
++        kind = STR
++    if kind == STR and (v.strip() == "" or v in opts.nulls or v.strip() in opts.nulls):
++        return None
++    if typ == STR:
++        if kind == STR:
++            return v
++        if opts.legacy and kind in (INT, FLOAT, BOOL, "decimal", TS, "date"):
+             if kind == BOOL:
+-                return v
+-            raise mismatch()
+-        # timestamp
+-        if kind == TS:
+-            if isinstance(v, str):
+-                raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has out-of-range timestamp {v}", name)
++                return "true" if v else "false"
++            if kind == TS:
++                return format_ts(v)
++            if kind == FLOAT:
++                return repr(v)
++            return str(v)
++        raise mismatch()
++    if typ == INT:
++        if kind == INT:
+             return v
+-        if kind == "date":
+-            try:
+-                return datetime(v.year, v.month, v.day, tzinfo=opts.tz).astimezone(timezone.utc)
+-            except (OverflowError, ValueError):
+-                raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has out-of-range date {v}", name)
+-        if kind == STR:
+-            try:
+-                return opts.parse_iso(v)
+-            except (ValueError, OverflowError):
+-                raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has invalid timestamp value {v!r}", name)
++        if kind == "decimal" and t.scale <= 0:
++            return int(v)
+         raise mismatch()
++    if typ == FLOAT:
++        if kind in (INT, FLOAT, "decimal"):
++            x = float(v)
++            return None if math.isnan(x) else x
++        raise mismatch()
++    if typ == BOOL:
++        if kind == BOOL:
++            return v
++        raise mismatch()
++    # timestamp
++    if kind == TS:
++        if isinstance(v, str):
++            raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has out-of-range timestamp {v}", name)
++        return v
++    if kind == "date":
++        try:
++            return datetime(v.year, v.month, v.day, tzinfo=opts.tz).astimezone(timezone.utc)
++        except (OverflowError, ValueError):
++            raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has out-of-range date {v}", name)
++    if kind == STR:
++        try:
++            return opts.parse_iso(v)
++        except (ValueError, OverflowError):
++            raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has invalid timestamp value {v!r}", name)
++    raise mismatch()
+ 
+ 
+ def load_sources(files):
+@@ -2346,7 +2734,8 @@
+ def write_bad_records(path, bad):
+     if not path or not bad:
+         return
+-    entries = sorted(bad, key=lambda b: (b["file"], b["line"] if b["line"] is not None else 0, b["row"]))
++    entries = sorted(bad, key=lambda b: (b["file"] is None, b["file"] or "", b.get("source") or "",
++                                         b["line"] if b["line"] is not None else 0, b["row"]))
+     text = "".join(json.dumps(b, sort_keys=True, ensure_ascii=False) + "\n" for b in entries)
+     try:
+         parent = os.path.dirname(path)
+@@ -2419,6 +2808,1129 @@
+     return result
+ 
+ 
++# --------------------------------------------------------------------------- ingest config
++
++SOURCE_KEYS = ("name", "inputs", "recursive", "format", "schema", "precedence", "tz", "nulls", "mapping", "required")
++MAPPING_KEYS = ("drop", "rename", "cast", "defaults")
++YAML_NULL_MARKERS = ("null", "NULL", "Null", "~")
++
++
++class SourceConfig:
++    def __init__(self, name):
++        self.name = name
++        self.inputs = []
++        self.recursive = None
++        self.format = None
++        self.schema = None
++        self.precedence = 0
++        self.tz = None
++        self.nulls = None
++        self.drop = []
++        self.rename = {}
++        self.cast = {}
++        self.defaults = {}
++        self.required = []
++
++
++def read_config_text(path):
++    try:
++        with open(path, "rb") as f:
++            data = f.read()
++    except FileNotFoundError:
++        raise io_error(f"ingest config not found: {path}")
++    except IsADirectoryError:
++        raise io_error(f"ingest config path is a directory: {path}")
++    except OSError as e:
++        raise io_error(f"cannot read ingest config {path}: {e.strerror or e}")
++    try:
++        return data.decode("utf-8-sig")
++    except UnicodeDecodeError:
++        raise config_error(f"ingest config is not valid UTF-8: {path}")
++
++
++def parse_config_document(text, path):
++    ext = os.path.splitext(path)[1].lower()
++    stripped = text.strip()
++    if not stripped:
++        raise config_error(f"ingest config {path} is empty")
++    if ext == ".json" or (stripped[0] in "{[" and ext not in (".yaml", ".yml")):
++        try:
++            return json.loads(text)
++        except ValueError as e:
++            if ext == ".json":
++                raise config_error(f"malformed JSON in ingest config {path}: {e}")
++    try:
++        import yaml
++    except ImportError:
++        try:
++            return MiniYaml(text).load()
++        except ValueError as e:
++            raise config_error(f"malformed YAML in ingest config {path}: {e}")
++    try:
++        return yaml.safe_load(text)
++    except Exception as e:  # yaml.YAMLError, or ValueError from e.g. impossible dates
++        first = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
++        raise config_error(f"malformed YAML in ingest config {path}: {first}")
++
++
++class MiniYaml:
++    """Fallback parser for the YAML subset used by ingest configs (block/flow collections, scalars)."""
++
++    def __init__(self, text):
++        self.lines = []
++        for lineno, raw in enumerate(text.splitlines(), 1):
++            line = self.strip_comment(raw).rstrip()
++            if not line.strip() or line.strip() in ("---", "..."):
++                continue
++            body = line.lstrip(" ")
++            if body.startswith("\t"):
++                raise ValueError(f"line {lineno}: tabs are not allowed for indentation")
++            self.lines.append([len(line) - len(body), body, lineno])
++
++    @staticmethod
++    def strip_comment(line):
++        quote = None
++        for i, ch in enumerate(line):
++            if quote:
++                if ch == quote:
++                    quote = None
++            elif ch in "'\"":
++                quote = ch
++            elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
++                return line[:i]
++        return line
++
++    def load(self):
++        if not self.lines:
++            return None
++        value, i = self.node(0, self.lines[0][0])
++        if i < len(self.lines):
++            raise ValueError(f"line {self.lines[i][2]}: unexpected content")
++        return value
++
++    def node(self, i, indent):
++        body = self.lines[i][1]
++        if body == "-" or body.startswith("- "):
++            return self.sequence(i, indent)
++        if self.split_key(body) is not None:
++            return self.mapping(i, indent)
++        text, i = self.flow_text(i)
++        return self.scalar_or_flow(text, self.lines[i - 1][2]), i
++
++    def flow_text(self, i):
++        text = self.lines[i][1]
++        i += 1
++        while self.unbalanced(text) and i < len(self.lines):
++            text += " " + self.lines[i][1]
++            i += 1
++        return text, i
++
++    @staticmethod
++    def unbalanced(text):
++        depth = 0
++        quote = None
++        for ch in text:
++            if quote:
++                if ch == quote:
++                    quote = None
++            elif ch in "'\"":
++                quote = ch
++            elif ch in "[{":
++                depth += 1
++            elif ch in "]}":
++                depth -= 1
++        return depth > 0
++
++    @staticmethod
++    def split_key(body):
++        if body[:1] in "[{":
++            return None
++        quote = None
++        for i, ch in enumerate(body):
++            if quote:
++                if ch == quote:
++                    quote = None
++            elif ch in "'\"" and i == 0:
++                quote = ch
++            elif ch == ":" and (i + 1 == len(body) or body[i + 1] == " "):
++                return body[:i].strip(), body[i + 1:].strip()
++        return None
++
++    def child(self, i, indent, lineno):
++        """Value of a key or '-' whose inline part is empty: an indented block (or null)."""
++        if i < len(self.lines):
++            nxt_indent, nxt_body = self.lines[i][0], self.lines[i][1]
++            if nxt_indent > indent or (nxt_indent == indent and (nxt_body == "-" or nxt_body.startswith("- "))):
++                return self.node(i, nxt_indent)
++        return None, i
++
++    def mapping(self, i, indent):
++        result = {}
++        while i < len(self.lines) and self.lines[i][0] == indent:
++            _, body, lineno = self.lines[i]
++            kv = self.split_key(body)
++            if kv is None:
++                raise ValueError(f"line {lineno}: expected 'key: value'")
++            key = self.scalar_or_flow(kv[0], lineno)
++            if not isinstance(key, (str, int, float, bool)) and key is not None:
++                raise ValueError(f"line {lineno}: invalid mapping key")
++            if key in result:
++                raise ValueError(f"line {lineno}: duplicate key {key!r}")
++            if kv[1]:
++                self.lines[i][1] = kv[1]
++                text, i = self.flow_text(i)
++                result[key] = self.scalar_or_flow(text, lineno)
++            else:
++                result[key], i = self.child(i + 1, indent, lineno)
++        if i < len(self.lines) and self.lines[i][0] > indent:
++            raise ValueError(f"line {self.lines[i][2]}: bad indentation")
++        return result, i
++
++    def sequence(self, i, indent):
++        result = []
++        while i < len(self.lines) and self.lines[i][0] == indent:
++            _, body, lineno = self.lines[i]
++            if not (body == "-" or body.startswith("- ")):
++                break
++            rest = body[1:].lstrip(" ")
++            if not rest:
++                value, i = self.child(i + 1, indent + 1, lineno)
++                result.append(value)
++                continue
++            self.lines[i] = [indent + len(body) - len(rest), rest, lineno]
++            value, i = self.node(i, self.lines[i][0])
++            result.append(value)
++        if i < len(self.lines) and self.lines[i][0] > indent:
++            raise ValueError(f"line {self.lines[i][2]}: bad indentation")
++        return result, i
++
++    def scalar_or_flow(self, text, lineno):
++        if text[:1] in "[{":
++            value, pos = self.flow(text, 0, lineno)
++            if text[pos:].strip():
++                raise ValueError(f"line {lineno}: unexpected content after flow collection")
++            return value
++        return self.scalar(text, lineno)
++
++    def flow(self, text, pos, lineno):
++        def skip(p):
++            while p < len(text) and text[p] in " \t":
++                p += 1
++            return p
++
++        pos = skip(pos)
++        if pos >= len(text):
++            raise ValueError(f"line {lineno}: unexpected end of flow collection")
++        ch = text[pos]
++        if ch in "[{":
++            close = "]" if ch == "[" else "}"
++            result = [] if ch == "[" else {}
++            pos = skip(pos + 1)
++            while True:
++                if pos >= len(text):
++                    raise ValueError(f"line {lineno}: unterminated flow collection")
++                if text[pos] == close:
++                    return result, pos + 1
++                if ch == "[":
++                    value, pos = self.flow(text, pos, lineno)
++                    result.append(value)
++                else:
++                    key, pos = self.flow_scalar(text, pos, lineno, ":,}")
++                    pos = skip(pos)
++                    if pos < len(text) and text[pos] == ":":
++                        value, pos = self.flow(text, pos + 1, lineno)
++                    else:
++                        value = None
++                    result[key] = value
++                pos = skip(pos)
++                if pos < len(text) and text[pos] == ",":
++                    pos = skip(pos + 1)
++                elif pos >= len(text) or text[pos] != close:
++                    raise ValueError(f"line {lineno}: expected ',' or '{close}' in flow collection")
++        return self.flow_scalar(text, pos, lineno, ",]}")
++
++    def flow_scalar(self, text, pos, lineno, stops):
++        if text[pos] in "'\"":
++            q = text[pos]
++            end = pos + 1
++            while True:
++                end = text.find(q, end)
++                if end < 0:
++                    raise ValueError(f"line {lineno}: unterminated quoted string")
++                if q == "'" and text[end + 1:end + 2] == "'":
++                    end += 2
++                    continue
++                if q == '"' and text[end - 1] == "\\":
++                    end += 1
++                    continue
++                break
++            return self.scalar(text[pos:end + 1], lineno), end + 1
++        end = pos
++        while end < len(text) and text[end] not in stops:
++            if text[end] == ":" and ":" in stops and not (end + 1 == len(text) or text[end + 1] in " ,}"):
++                end += 1
++                continue
++            end += 1
++        return self.scalar(text[pos:end].strip(), lineno), end
++
++    @staticmethod
++    def scalar(text, lineno):
++        if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
++            inner = text[1:-1]
++            if text[0] == "'":
++                return inner.replace("''", "'")
++            try:
++                return json.loads(text)
++            except ValueError:
++                raise ValueError(f"line {lineno}: invalid double-quoted string")
++        if text[:1] in "'\"":
++            raise ValueError(f"line {lineno}: unterminated quoted string")
++        if text in ("", "~", "null", "Null", "NULL"):
++            return None
++        if text in ("true", "True", "TRUE"):
++            return True
++        if text in ("false", "False", "FALSE"):
++            return False
++        if re.fullmatch(r"[-+]?\d+", text):
++            return int(text)
++        if re.fullmatch(r"[-+]?(\d+\.\d*|\.\d+|\d+)([eE][-+]?\d+)?", text):
++            return float(text)
++        return text
++
++
++def load_ingest_config(path):
++    doc = parse_config_document(read_config_text(path), path)
++    if isinstance(doc, dict):
++        if "sources" not in doc:
++            raise config_error("ingest config must define a 'sources' list")
++        entries = doc["sources"]
++    elif isinstance(doc, list):
++        entries = doc
++    else:
++        raise config_error("ingest config must be a mapping with a 'sources' list")
++    if not isinstance(entries, list) or not entries:
++        raise config_error("'sources' in the ingest config must be a non-empty list")
++    configs = []
++    for i, entry in enumerate(entries, 1):
++        sc = parse_source_config(entry, i)
++        if any(c.name == sc.name for c in configs):
++            raise config_error(f"source name '{sc.name}' is declared more than once")
++        configs.append(sc)
++    return configs
++
++
++def config_string_list(value, what, allow_single=True):
++    if isinstance(value, str) and allow_single:
++        value = [value]
++    if not isinstance(value, list):
++        raise config_error(f"{what} must be a list of strings")
++    for v in value:
++        if not isinstance(v, str) or not v.strip():
++            raise config_error(f"{what} must contain only non-empty strings")
++    return [v.strip() for v in value]
++
++
++def config_string_map(value, what):
++    if not isinstance(value, dict):
++        raise config_error(f"{what} must be a mapping")
++    for k in value:
++        if not isinstance(k, str) or not k.strip():
++            raise config_error(f"{what} has an invalid field name {k!r}")
++    return value
++
++
++def parse_source_config(entry, index):
++    where = f"sources[{index}]"
++    if not isinstance(entry, dict):
++        raise config_error(f"{where} must be a mapping")
++    for key in entry:
++        if key not in SOURCE_KEYS:
++            raise config_error(f"{where}: unknown key {key!r}")
++    name = entry.get("name")
++    if not isinstance(name, str) or not name.strip():
++        raise config_error(f"{where}: 'name' must be a non-empty string")
++    sc = SourceConfig(name.strip())
++    where = f"source '{sc.name}'"
++
++    if "inputs" not in entry or entry["inputs"] is None:
++        raise config_error(f"{where}: 'inputs' is required")
++    sc.inputs = config_string_list(entry["inputs"], f"{where}: 'inputs'")
++    if not sc.inputs:
++        raise config_error(f"{where}: 'inputs' must not be empty")
++
++    if entry.get("recursive") is not None:
++        if not isinstance(entry["recursive"], bool):
++            raise config_error(f"{where}: 'recursive' must be true or false")
++        sc.recursive = entry["recursive"]
++
++    if entry.get("format") is not None:
++        fmt = entry["format"]
++        if not isinstance(fmt, str) or fmt.strip().lower() not in ("auto",) + FORMATS:
++            raise config_error(f"{where}: invalid format {fmt!r}; expected auto, csv, tsv or parquet")
++        sc.format = fmt.strip().lower()
++
++    if entry.get("schema") is not None:
++        if not isinstance(entry["schema"], str) or not entry["schema"].strip():
++            raise config_error(f"{where}: 'schema' must be a schema name")
++        sc.schema = entry["schema"].strip()
++
++    if entry.get("precedence") is not None:
++        prec = entry["precedence"]
++        if isinstance(prec, float) and prec.is_integer():
++            prec = int(prec)
++        if isinstance(prec, bool) or not isinstance(prec, int):
++            raise config_error(f"{where}: 'precedence' must be an integer")
++        sc.precedence = prec
++
++    if entry.get("tz") is not None:
++        if not isinstance(entry["tz"], str) or not entry["tz"].strip():
++            raise config_error(f"{where}: 'tz' must be an IANA timezone name")
++        try:
++            sc.tz = resolve_tz(entry["tz"].strip())
++        except MTLError:
++            raise config_error(f"{where}: unknown timezone {entry['tz']!r}")
++
++    if "nulls" in entry:
++        nulls = entry["nulls"]
++        if nulls is None:
++            nulls = []
++        if isinstance(nulls, str):
++            nulls = nulls.split(",")
++        if not isinstance(nulls, list):
++            raise config_error(f"{where}: 'nulls' must be a list of strings")
++        markers = set()
++        for m in nulls:
++            if m is None:
++                markers.update(YAML_NULL_MARKERS)
++            elif isinstance(m, (str, int, float)) and not isinstance(m, bool):
++                markers.add(str(m))
++            else:
++                raise config_error(f"{where}: 'nulls' must be a list of strings")
++        sc.nulls = frozenset(markers)
++
++    mapping = entry.get("mapping")
++    if mapping is not None:
++        if not isinstance(mapping, dict):
++            raise config_error(f"{where}: 'mapping' must be a mapping")
++        for key in mapping:
++            if key not in MAPPING_KEYS:
++                raise config_error(f"{where}: unknown mapping directive {key!r}; expected drop, rename, cast or defaults")
++        if mapping.get("drop") is not None:
++            sc.drop = config_string_list(mapping["drop"], f"{where}: mapping.drop")
++        if mapping.get("rename") is not None:
++            rename = config_string_map(mapping["rename"], f"{where}: mapping.rename")
++            targets = set()
++            for old, new in rename.items():
++                if not isinstance(new, str) or not new.strip():
++                    raise config_error(f"{where}: mapping.rename target for '{old}' must be a non-empty string")
++                if new.strip() in targets:
++                    raise config_error(f"{where}: mapping.rename maps several fields to '{new.strip()}'")
++                targets.add(new.strip())
++                sc.rename[old.strip()] = new.strip()
++        if mapping.get("cast") is not None:
++            cast = config_string_map(mapping["cast"], f"{where}: mapping.cast")
++            for field, typ in cast.items():
++                if not isinstance(typ, str) or typ.strip() not in TYPES:
++                    raise config_error(
++                        f"{where}: mapping.cast of '{field}' to unknown type {typ!r}; expected one of {', '.join(TYPES)}")
++                sc.cast[field.strip()] = typ.strip()
++        if mapping.get("defaults") is not None:
++            defaults = config_string_map(mapping["defaults"], f"{where}: mapping.defaults")
++            for field, value in defaults.items():
++                if isinstance(value, (list, dict)):
++                    raise config_error(f"{where}: mapping.defaults value for '{field}' must be a scalar")
++                sc.defaults[field.strip()] = value
++
++    if entry.get("required") is not None:
++        sc.required = config_string_list(entry["required"], f"{where}: 'required'")
++    return sc
++
++
++def bind_config(program, configs):
++    """Cross-check the ingest config against the DSL (config errors)."""
++    by_name = {sc.name: sc for sc in configs}
++    for sc in configs:
++        sc.schema_name = sc.schema or program.schema_name
++        if sc.schema_name not in program.resolved_schemas:
++            raise config_error(f"source '{sc.name}' uses schema '{sc.schema_name}' which is not defined in the DSL")
++        fields = program.resolved_schemas[sc.schema_name][0]
++        for name in sc.cast:
++            if name in fields and fields[name].expr is not None:
++                raise config_error(f"source '{sc.name}': mapping.cast targets calculated field '{name}'")
++    if program.sources is not None:
++        for name, _ in program.sources:
++            if name not in by_name:
++                raise config_error(f"sources block refers to unknown source '{name}' (not declared in the ingest config)")
++    return by_name
++
++
++# --------------------------------------------------------------------------- file assignment
++
++def expand_source_inputs(sc, cfg_dir, cli_format, cli_recursive, needed):
++    """Files matched by a source's patterns: {realpath: (abspath, format)}."""
++    forced = sc.format or cli_format
++    recursive = cli_recursive if sc.recursive is None else sc.recursive
++    found = {}
++
++    def add(path, fmt):
++        real = os.path.realpath(path)
++        absp = os.path.abspath(path)
++        prev = found.get(real)
++        if prev is None or absp < prev[0]:
++            found[real] = (absp, fmt)
++
++    def add_dir(top):
++        for root, dirs, files in os.walk(top):
++            dirs[:] = sorted(d for d in dirs if not d.startswith(".")) if recursive else []
++            for name in sorted(files):
++                if name.startswith("."):
++                    continue
++                path = os.path.join(root, name)
++                fmt = scan_format(path, forced)
++                if fmt is not None and os.path.isfile(path):
++                    add(path, fmt)
++
++    def expand(pattern):
++        """True when the pattern resolved to something (possibly an empty directory)."""
++        if os.path.isdir(pattern):
++            add_dir(pattern)
++            return True
++        if os.path.exists(pattern):
++            fmt = detect_format(pattern, forced)
++            if fmt is None:
++                if needed:
++                    raise io_error(f"source '{sc.name}': cannot determine the format of input file {pattern}; set 'format'")
++                return True
++            add(pattern, fmt)
++            return True
++        if any(ch in pattern for ch in GLOB_CHARS):
++            matched = False
++            for match in sorted(glob.glob(pattern, recursive=True)):
++                if os.path.isdir(match):
++                    add_dir(match)
++                    matched = True
++                elif os.path.isfile(match):
++                    fmt = scan_format(match, forced)
++                    if fmt is not None:
++                        add(match, fmt)
++                        matched = True
++            return matched
++        return False
++
++    for pattern in sc.inputs:
++        pattern = os.path.expanduser(pattern)
++        candidates = [pattern]
++        if not os.path.isabs(pattern) and cfg_dir and os.path.abspath(cfg_dir) != os.getcwd():
++            candidates.append(os.path.join(cfg_dir, pattern))
++        if not any(expand(c) for c in candidates):
++            if needed and not any(ch in pattern for ch in GLOB_CHARS):
++                raise io_error(f"source '{sc.name}': input not found: {pattern}")
++    return found
++
++
++def assign_files(configs, needed, cfg_dir, cli_format, cli_recursive):
++    """Assign every matched file to exactly one source (lowest precedence wins)."""
++    owners = {}  # realpath -> [abspath, {config index: format}]
++    for idx, sc in enumerate(configs):
++        found = expand_source_inputs(sc, cfg_dir, cli_format, cli_recursive, sc.name in needed)
++        if not found and sc.name in needed:
++            raise io_error(f"source '{sc.name}': no input files matched {', '.join(sc.inputs)}")
++        for real, (absp, fmt) in found.items():
++            entry = owners.setdefault(real, [absp, {}])
++            entry[0] = min(entry[0], absp)
++            entry[1][idx] = fmt
++    assigned = {sc.name: [] for sc in configs}
++    for absp, cands in sorted(owners.values(), key=lambda e: e[0]):
++        best = min(configs[i].precedence for i in cands)
++        winners = [i for i in sorted(cands) if configs[i].precedence == best]
++        if len(winners) > 1:
++            names = ", ".join(f"'{configs[i].name}'" for i in winners)
++            raise config_error(f"file {absp} matches sources {names} with equal precedence {best}")
++        assigned[configs[winners[0]].name].append((absp, cands[winners[0]]))
++    for files in assigned.values():
++        files.sort()
++    return assigned
++
++
++# --------------------------------------------------------------------------- per-source mapping & validation
++
++def parse_ts_any(s, opts):
++    try:
++        return opts.parse_ts(s)
++    except (ValueError, OverflowError):
++        return opts.parse_iso(s)
++
++
++def cell_is_null(cell, opts):
++    if cell[0] == "text":
++        raw = cell[1]
++        s = raw.strip()
++        return s == "" or raw in opts.nulls or s in opts.nulls
++    if cell[0] == "pq":
++        v = cell[3]
++        if v is None:
++            return True
++        if isinstance(v, str) and cell[1] == STR:
++            return v.strip() == "" or v in opts.nulls or v.strip() in opts.nulls
++        return isinstance(v, float) and math.isnan(v)
++    return cell[2] is None
++
++
++def cell_display(cell):
++    if cell[0] == "text":
++        return cell[1]
++    return jsonable(cell[3] if cell[0] == "pq" else cell[2])
++
++
++def cell_value(cell, typ, name, opts):
++    """Convert a (possibly mapped) cell to the schema type `typ`; raises RowError."""
++    if cell[0] == "text":
++        return convert_text(cell[1], typ, name, opts)
++    if cell[0] == "pq":
++        _, kind, t, v = cell
++        if v is None:
++            return None
++        try:
++            return convert_parquet_value(v, kind, t, typ, name, opts)
++        except RowError as e:
++            e.value = jsonable(v)
++            raise
++    _, vt, v = cell
++    if v is None or vt == typ:
++        return v
++    if vt == INT and typ == FLOAT:
++        return float(v)
++    raise RowError(TYPE_ERROR, f"column '{name}' is {vt} after mapping but the schema requires {typ}", name, jsonable(v))
++
++
++def cast_cell(cell, typ, name, opts):
++    """Apply a mapping.cast directive; returns a ("typed", typ, value) cell."""
++    if cell_is_null(cell, opts):
++        return ("typed", typ, None)
++    if cell[0] == "text":
++        if typ == TS:
++            try:
++                return ("typed", typ, parse_ts_any(cell[1].strip(), opts))
++            except (ValueError, OverflowError):
++                raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has invalid timestamp value {cell[1]!r}", name, cell[1])
++        return ("typed", typ, convert_text(cell[1], typ, name, opts))
++    if cell[0] == "pq":
++        _, kind, t, v = cell
++        src = ARROW_KIND_TO_TYPE.get(kind)
++        if src is None:
++            raise RowError(PARQUET_TYPE_MISMATCH, f"column '{name}' has Parquet type {t} which cannot be cast to {typ}", name)
++        try:
++            v = convert_parquet_value(v, kind, t, src, name, opts)
++        except RowError as e:
++            e.value = jsonable(v)
++            raise
++    else:
++        _, src, v = cell
++    if src == STR and typ != STR:
++        try:
++            if typ == TS:
++                return ("typed", typ, parse_ts_any(v.strip(), opts))
++            return ("typed", typ, convert_text(v, typ, name, opts))
++        except (ValueError, OverflowError):
++            raise RowError(TIMESTAMP_PARSE_ERROR, f"column '{name}' has invalid timestamp value {v!r}", name, v)
++    if (src, typ) in ((BOOL, TS), (TS, BOOL)):
++        raise RowError(PARSE_TYPE_MISMATCH, f"column '{name}' cannot be cast from {src} to {typ}", name, jsonable(v))
++    try:
++        return ("typed", typ, cast_value(v, src, typ, None))
++    except (ValueError, OverflowError, TypeError, MTLError):
++        raise RowError(PARSE_TYPE_MISMATCH, f"column '{name}' value {jsonable(v)!r} cannot be cast to {typ}", name, jsonable(v))
++
++
++def convert_default(sc, name, value, typ, opts):
++    """Convert a mapping.defaults literal to `typ` (or its natural type); config error when impossible."""
++    def bad():
++        return config_error(f"source '{sc.name}': mapping.defaults value {value!r} for '{name}' is not a valid {typ}")
++
++    if value is None:
++        return typ, None
++    if isinstance(value, datetime):
++        v = value if value.tzinfo is not None else value.replace(tzinfo=opts.tz)
++        src, v = TS, v.astimezone(timezone.utc)
++    elif hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
++        src, v = TS, datetime(value.year, value.month, value.day, tzinfo=opts.tz).astimezone(timezone.utc)
++    elif isinstance(value, bool):
++        src, v = BOOL, value
++    elif isinstance(value, int):
++        src, v = INT, value
++    elif isinstance(value, float):
++        if not math.isfinite(value):
++            raise bad()
++        src, v = FLOAT, value
++    elif isinstance(value, str):
++        src, v = STR, value
++    else:
++        raise bad()
++    if typ is None or typ == src:
++        return src, v
++    if src == STR:
++        try:
++            if typ == TS:
++                return typ, parse_ts_any(v.strip(), opts)
++            converted = convert_text(v, typ, name, opts)
++        except (RowError, ValueError, OverflowError):
++            raise bad()
++        if converted is None:
++            raise bad()
++        return typ, converted
++    if typ == STR:
++        return typ, cast_value(v, src, typ, None)
++    if src == INT and typ == FLOAT:
++        return typ, float(v)
++    if src == FLOAT and typ == INT and v.is_integer():
++        return typ, int(v)
++    if src in NUMERIC and typ == TS:
++        try:
++            return typ, cast_value(v, src, typ, None)
++        except (OverflowError, ValueError):
++            raise bad()
++    raise bad()
++
++
++class SourceRuntime:
++    """Everything needed to ingest one configured source."""
++
++    def __init__(self, sc, program, args, ctx, with_calcs):
++        self.sc = sc
++        fields, order = program.resolved_schemas[sc.schema_name]
++        self.base = {n: f.typ for n, f in fields.items() if f.expr is None}
++        self.env = {n: f.typ for n, f in fields.items()} if with_calcs else dict(self.base)
++        self.calc_names = {n for n, f in fields.items() if f.expr is not None} if with_calcs else set()
++        tz = sc.tz or args.tz_obj
++        self.opts = LoadOptions(tz, make_ts_parser(tz, args.timestamp_format),
++                                sc.nulls if sc.nulls is not None else args.nulls_set, args.strict)
++        self.defaults = {}
++        for name, value in sc.defaults.items():
++            target = sc.cast.get(name) or self.base.get(name)
++            self.defaults[name] = convert_default(sc, name, value, target, self.opts)
++        self.plan = Plan()
++        if with_calcs:
++            for d in program.deferred_errors:
++                raise d
++            for name in order:
++                f = fields[name]
++                t, fn = compile_expr(f.expr, self.env, ctx)
++                self.plan.prelude.append((name, fn, declared_conv(f.typ, t, f"calculated field '{name}'")))
++
++    def map_record(self, cells):
++        sc, opts = self.sc, self.opts
++        for name in sc.drop:
++            cells.pop(name, None)
++        if sc.rename:
++            mapped = {k: v for k, v in cells.items() if k not in sc.rename}
++            for old, new in sc.rename.items():
++                if old in cells:
++                    mapped[new] = cells[old]
++            cells = mapped
++        for name, typ in sc.cast.items():
++            if name in cells:
++                cells[name] = cast_cell(cells[name], typ, name, opts)
++        for name, (typ, value) in self.defaults.items():
++            cell = cells.get(name)
++            if cell is None or cell_is_null(cell, opts):
++                cells[name] = ("typed", typ, value)
++        row = {}
++        for name, typ in self.base.items():
++            cell = cells.get(name)
++            row[name] = None if cell is None else cell_value(cell, typ, name, opts)
++        for name in sc.required:
++            if name in self.base:
++                missing = row[name] is None
++            elif name in self.calc_names:
++                continue
++            else:
++                missing = name not in cells or cell_is_null(cells[name], opts)
++            if missing:
++                raise RowError(MISSING_REQUIRED_FIELD, f"required field '{name}' is missing or null", name)
++        return row
++
++    def check_required_calcs(self, row):
++        for name in self.sc.required:
++            if name in self.calc_names and row.get(name) is None:
++                raise RowError(MISSING_REQUIRED_FIELD, f"required field '{name}' is missing or null", name)
++
++
++def reject(bad, record, err, where, strict):
++    bad.append(record)
++    if strict:
++        raise MTLError(STRICT_EXIT_KIND.get(err.kind, "type_error"), f"{where}: {err.kind}: {err.message}")
++
++
++def source_bad_record(name, src, line, rownum, err, raw):
++    record = bad_record(src, line, rownum, err, raw)
++    record["source"] = name
++    return record
++
++
++def ingest_source(rt, files, bad, strict):
++    """Read, map and validate every record of a source; returns [(row, meta)] in (file, line) order."""
++    out = []
++    for path, fmt in files:
++        src = ParquetSource(path) if fmt == "parquet" else TextSource(path, fmt)
++        for line, rownum, cells, err, raw in src.raw_records(rt.opts):
++            meta = (src, line, rownum, raw)
++            if err is None:
++                try:
++                    row = rt.map_record(cells)
++                    run_row(rt.plan, row)
++                    rt.check_required_calcs(row)
++                    out.append((row, meta))
++                    continue
++                except RowError as e:
++                    err = e
++            reject(bad, source_bad_record(rt.sc.name, src, line, rownum, err, raw), err, meta_where(meta), strict)
++    return out
++
++
++def meta_where(meta):
++    src, line, rownum, _ = meta
++    return f"{src.path}:{line}" if line is not None else f"{src.path} row {rownum}"
++
++
++# --------------------------------------------------------------------------- joins
++
++class PairRow:
++    """A (left, right) row pair addressed by canonical '<side>:<column>' keys; a missing side reads as nulls."""
++
++    __slots__ = ("left", "right")
++
++    def __init__(self, left, right):
++        self.left = left
++        self.right = right
++
++    def __getitem__(self, key):
++        row = self.left if key[0] == "0" else self.right
++        return None if row is None else row[key[2:]]
++
++
++class JoinPlan:
++    def __init__(self, decl, index):
++        self.decl = decl
++        self.index = index
++        self.label = decl.alias or f"join #{index + 1}"
++        self.left_key = None
++        self.right_key = None
++        self.on = None
++        self.keys = []  # [(left column, right column)] equality conjuncts usable for hashing
++        self.within = decl.within
++        self.jtype = decl.jtype
++        self.project = []  # [(name, evaluator)]
++        self.env = {}
++
++
++def bind_join_refs(expr, sides):
++    """Rewrite column references in a join expression to canonical '<side>:<column>' keys."""
++    for n in walk(expr):
++        if not isinstance(n, Col):
++            continue
++        name = n.name
++        if "." in name:
++            q, col = name.split(".", 1)
++            idx = [i for i, (_, quals, _) in enumerate(sides) if q in quals]
++            if not idx:
++                raise dsl_error(f"'{name}' refers to '{q}', which is not one of the joined relations")
++            if col not in sides[idx[0]][2]:
++                raise type_error(f"unknown column '{name}'")
++            n.name = f"{idx[0]}:{col}"
++            continue
++        present = [i for i, (_, _, env) in enumerate(sides) if name in env]
++        if not present:
++            raise type_error(f"unknown column '{name}'")
++        if len(present) > 1:
++            q = [sorted(sides[i][1] - {"_"} or sides[i][1])[0] for i in present]
++            raise dsl_error(f"column '{name}' exists on both sides of the join; qualify it as {q[0]}.{name} or {q[1]}.{name}")
++        n.name = f"{present[0]}:{name}"
++
++
++def conjuncts(node):
++    if isinstance(node, Binary) and node.op == "&":
++        return conjuncts(node.left) + conjuncts(node.right)
++    return [node]
++
++
++def compile_with_blocks(program, alias, env, ctx):
++    """Type-check the alias-scoped pre-stage calcs/filters; returns (plan, env with calc columns)."""
++    env = dict(env)
++    plan = Plan()
++    for block_alias, steps in program.with_blocks:
++        if block_alias != alias:
++            continue
++        for kind, item in steps:
++            expr = item.expr if kind == "calc" else item
++            for n in walk(expr):
++                if isinstance(n, Col) and "." in n.name:
++                    q, col = n.name.split(".", 1)
++                    if q != alias:
++                        raise dsl_error(f"'with {alias}' block cannot reference '{n.name}'")
++                    n.name = col
++            t, f = compile_expr(expr, env, ctx)
++            if kind == "filter":
++                if t != BOOL:
++                    raise type_error(f"filter expression in 'with {alias}' must be boolean, got {type_name(t)}")
++                plan.steps.append(("filter", f, None, None))
++            else:
++                if item.name in env:
++                    raise dsl_error(f"calc '{item.name}' in 'with {alias}' collides with an existing field")
++                conv = declared_conv(item.typ, t, f"calc '{item.name}'")
++                env[item.name] = item.typ
++                plan.steps.append(("set", f, item.name, conv))
++    return plan, env
++
++
++def compile_joins(program, alias_envs, ctx):
++    rel_envs = dict(alias_envs)
++    join_aliases = {}
++    plans = []
++    for i, decl in enumerate(program.joins):
++        jp = JoinPlan(decl, i)
++        sides = []
++        for name in (decl.left, decl.right):
++            if name == "_":
++                key = i - 1
++            elif name in alias_envs:
++                key = name
++            else:
++                key = join_aliases[name]
++            if isinstance(key, int):
++                quals = {"_"} if key == i - 1 else set()
++                if program.joins[key].alias:
++                    quals.add(program.joins[key].alias)
++            else:
++                quals = {key}
++            sides.append((key, quals, rel_envs[key]))
++        jp.left_key, jp.right_key = sides[0][0], sides[1][0]
++        schema = {f"{idx}:{col}": typ for idx, (_, _, env) in enumerate(sides) for col, typ in env.items()}
++
++        bind_join_refs(decl.on, sides)
++        t, jp.on = compile_expr(decl.on, schema, ctx)
++        if t != BOOL:
++            raise type_error(f"join 'on' predicate must be boolean, got {type_name(t)}")
++        for c in conjuncts(decl.on):
++            if isinstance(c, Binary) and c.op == "==" and isinstance(c.left, Col) and isinstance(c.right, Col):
++                a, b = c.left.name, c.right.name
++                if a[0] != b[0]:
++                    if a[0] == "1":
++                        a, b = b, a
++                    jp.keys.append((a[2:], b[2:]))
++
++        if decl.within is not None:
++            for idx, (_, quals, env) in enumerate(sides):
++                if "timestamp" not in env:
++                    side = "left" if idx == 0 else "right"
++                    raise dsl_error(f"'within' requires a 'timestamp' column on both sides of the join; the {side} side has none")
++                if env["timestamp"] != TS:
++                    raise type_error(f"'within' requires 'timestamp' to be a timestamp, got {type_name(env['timestamp'])}")
++
++        env = {}
++        for expr, name in decl.project:
++            bind_join_refs(expr, sides)
++            t, f = compile_expr(expr, schema, ctx)
++            env[name] = t
++            jp.project.append((name, f))
++        if "timestamp" in env:
++            if env["timestamp"] != TS:
++                raise type_error(f"projected 'timestamp' must be a timestamp, got {type_name(env['timestamp'])}")
++        else:
++            left_ts = "timestamp" in sides[0][2]
++            right_ts = "timestamp" in sides[1][2]
++            if left_ts and right_ts:
++                raise type_error("ambiguous timestamp after join: both sides have 'timestamp'; project one of them as 'timestamp'")
++            if not left_ts:
++                raise type_error("missing timestamp after join: project a timestamp column as 'timestamp'")
++            if sides[0][2]["timestamp"] != TS:
++                raise type_error("the left side's 'timestamp' is not a timestamp")
++            env["timestamp"] = TS
++            jp.project.append(("timestamp", lambda pair: pair["0:timestamp"]))
++        jp.env = env
++        rel_envs[i] = env
++        if decl.alias:
++            join_aliases[decl.alias] = i
++        plans.append(jp)
++    return plans
++
++
++def join_bad_record(label, n, err, record):
++    return {
++        "file": None,
++        "line": None,
++        "row": n,
++        "format": None,
++        "source": label,
++        "error_type": err.kind,
++        "classification": err.kind,
++        "message": err.message,
++        "column": err.column,
++        "value": err.value,
++        "context": {"record": {k: jsonable(v) for k, v in record.items()}},
++    }
++
++
++def row_error(e, label):
++    if isinstance(e, MTLError):
++        return RowError(TYPE_ERROR if e.kind == "type_error" else RUNTIME_ERROR, f"{label}: {e.message}")
++    if isinstance(e, TypeError):
++        return RowError(TYPE_ERROR, f"{label}: {e}")
++    return RowError(RUNTIME_ERROR, f"{label}: {type(e).__name__}: {e}")
++
++
++def run_join(jp, left_rows, right_rows, bad, strict):
++    out = []
++    index = None
++    if jp.keys:
++        index = {}
++        for ri, r in enumerate(right_rows):
++            key = tuple(r[c] for _, c in jp.keys)
++            if None not in key:
++                index.setdefault(key, []).append(ri)
++    matched = [False] * len(right_rows)
++    within = timedelta(microseconds=jp.within) if jp.within is not None else None
++
++    def emit(left, right):
++        pair = PairRow(left, right)
++        row = {}
++        try:
++            for name, f in jp.project:
++                row[name] = f(pair)
++        except (MTLError, TypeError, ArithmeticError, ValueError) as e:
++            err = row_error(e, f"project column '{name}'")
++            context = {f"left.{k}": v for k, v in (left or {}).items()}
++            context.update({f"right.{k}": v for k, v in (right or {}).items()})
++            reject(bad, join_bad_record(jp.label, len(out) + 1, err, context), err, jp.label, strict)
++            return
++        out.append(row)
++
++    def matches(left, right):
++        if within is not None:
++            a, b = left.get("timestamp"), right.get("timestamp")
++            if a is None or b is None or abs(a - b) > within:
++                return False
++        try:
++            return jp.on(PairRow(left, right)) is True
++        except (MTLError, TypeError, ArithmeticError, ValueError) as e:
++            if strict:
++                err = row_error(e, "join 'on' predicate")
++                raise MTLError(STRICT_EXIT_KIND.get(err.kind, "type_error"), f"{jp.label}: {err.kind}: {err.message}")
++            return False
++
++    for left in left_rows:
++        if index is not None:
++            key = tuple(left[c] for c, _ in jp.keys)
++            candidates = () if None in key else index.get(key, ())
++        else:
++            candidates = range(len(right_rows))
++        hit = False
++        for ri in candidates:
++            right = right_rows[ri]
++            if matches(left, right):
++                hit = True
++                matched[ri] = True
++                emit(left, right)
++        if not hit and jp.jtype in ("left", "full"):
++            emit(left, None)
++    if jp.jtype in ("right", "full"):
++        for ri, right in enumerate(right_rows):
++            if not matched[ri]:
++                emit(None, right)
++    return out
++
++
++# --------------------------------------------------------------------------- multi-source driver
++
++def run_ingest(args, program, cli_params, ctx):
++    configs = load_ingest_config(args.ingest_config)
++    by_name = bind_config(program, configs)
++    ctx.params = resolve_params(program, cli_params, ctx.parse_ts)
++    bad = []
++    if program.sources is None:
++        return run_union(args, program, configs, ctx, bad)
++
++    # type-check: per-alias environments, with-blocks, joins, then the post-join pipeline
++    for d in program.deferred_errors:
++        raise d
++    needed = []
++    for name, _ in program.sources:
++        if name not in needed:
++            needed.append(name)
++    runtimes = {name: SourceRuntime(by_name[name], program, args, ctx, True) for name in needed}
++    alias_plans = {}
++    alias_envs = {}
++    for name, alias in program.sources:
++        alias_plans[alias], alias_envs[alias] = compile_with_blocks(program, alias, runtimes[name].env, ctx)
++    join_plans = compile_joins(program, alias_envs, ctx)
++    program.schema_calc_order = []
++    plan = compile_plan(program, join_plans[-1].env, ctx)
++
++    assigned = assign_files(configs, set(needed), os.path.dirname(os.path.abspath(args.ingest_config)),
++                            args.format, args.recursive)
++    try:
++        source_rows = {}
++        for sc in configs:
++            if sc.name in runtimes:
++                source_rows[sc.name] = ingest_source(runtimes[sc.name], assigned[sc.name], bad, args.strict)
++        relations = {}
++        for name, alias in program.sources:
++            kept = []
++            for row, meta in source_rows[name]:
++                row = dict(row)
++                try:
++                    if run_row(alias_plans[alias], row):
++                        kept.append(row)
++                except RowError as e:
++                    reject(bad, source_bad_record(name, meta[0], meta[1], meta[2], e, meta[3]), e, meta_where(meta), args.strict)
++            relations[alias] = kept
++        for jp in join_plans:
++            relations[jp.index] = run_join(jp, relations[jp.left_key], relations[jp.right_key], bad, args.strict)
++        rows = []
++        label = join_plans[-1].label
++        for n, row in enumerate(relations[len(join_plans) - 1], 1):
++            try:
++                if plan.window is not None and row.get("timestamp") is None:
++                    raise RowError(MISSING_REQUIRED_FIELD, "row has a null 'timestamp' after the join and cannot be windowed",
++                                   "timestamp")
++                if run_row(plan, row):
++                    rows.append(row)
++            except RowError as e:
++                reject(bad, join_bad_record(label, n, e, row), e, f"{label} row {n}", args.strict)
++    finally:
++        write_bad_records(args.bad_records_out, bad)
++    return execute(plan, rows)
++
++
++def run_union(args, program, configs, ctx, bad):
++    """A single-input pipeline fed by every configured source, each mapped to the pipeline schema."""
++    env = {name: f.typ for name, f in program.schema_fields.items()}
++    base = {name: f.typ for name, f in program.schema_fields.items() if f.expr is None}
++    plan = compile_plan(program, env, ctx)
++    runtimes = [SourceRuntime(sc, program, args, ctx, False) for sc in configs]
++    for rt in runtimes:
++        for name, typ in base.items():
++            st = rt.base.get(name)
++            if st is not None and st != typ and not (st == INT and typ == FLOAT):
++                raise type_error(f"source '{rt.sc.name}' field '{name}' is {st} but pipeline schema "
++                                 f"'{program.schema_name}' requires {typ}")
++    assigned = assign_files(configs, {sc.name for sc in configs}, os.path.dirname(os.path.abspath(args.ingest_config)),
++                            args.format, args.recursive)
++    rows = []
++    try:
++        for rt in runtimes:
++            for row, meta in ingest_source(rt, assigned[rt.sc.name], bad, args.strict):
++                row = {name: (float(row[name]) if typ == FLOAT and isinstance(row.get(name), int) else row.get(name))
++                       for name, typ in base.items()}
++                try:
++                    if run_row(plan, row):
++                        rows.append(row)
++                except RowError as e:
++                    reject(bad, source_bad_record(rt.sc.name, meta[0], meta[1], meta[2], e, meta[3]), e,
++                           meta_where(meta), args.strict)
++    finally:
++        write_bad_records(args.bad_records_out, bad)
++    return execute(plan, rows)
++
++
+ # --------------------------------------------------------------------------- CLI
+ 
+ class ArgParser(argparse.ArgumentParser):
+@@ -2481,10 +3993,19 @@
+     parser.add_argument("--format", dest="format", default="auto", choices=("auto",) + FORMATS)
+     parser.add_argument("--nulls", default=None)
+     parser.add_argument("--bad-records-out", dest="bad_records_out", default=None)
++    parser.add_argument("--ingest-config", dest="ingest_config", default=None)
+     args = parser.parse_args(argv)
+     inputs = [p for group in args.input for p in group]
+-    if not inputs:
+-        raise io_error("invalid arguments: the following arguments are required: --input")
++    if not inputs and args.ingest_config is None:
++        has_sources = False
++        try:
++            program = parse_program(read_dsl(args.dsl), parse_cli_params(args.param))
++            has_sources = program.block and program.sources is not None
++        except MTLError:
++            pass
++        if has_sources:
++            raise config_error("--ingest-config is required for pipelines with a 'sources { ... }' block")
++        raise io_error("invalid arguments: the following arguments are required: --input or --ingest-config")
+ 
+     tz = resolve_tz(args.tz)
+     parse_ts = make_ts_parser(tz, args.timestamp_format)
+@@ -2492,6 +4013,18 @@
+     cli_params = parse_cli_params(args.param)
+     program = parse_program(read_dsl(args.dsl), cli_params)
+     ctx = Context(tz, parse_ts, {}, args.strict)
++    if program.with_errors:
++        raise program.with_errors[0]
++    if args.ingest_config is None and program.sources is not None:
++        raise config_error("--ingest-config is required for pipelines with a 'sources { ... }' block")
++    if args.ingest_config is not None:
++        if not program.block:
++            load_ingest_config(args.ingest_config)
++            raise config_error("--ingest-config requires a DSL with schema and pipeline blocks")
++        args.tz_obj = tz
++        args.nulls_set = opts.nulls
++        result = run_ingest(args, program, cli_params, ctx)
++        return write_result(args, result)
+     if program.block:
+         ctx.params = resolve_params(program, cli_params, parse_ts)
+         env = {name: f.typ for name, f in program.schema_fields.items()}
+@@ -2511,7 +4044,10 @@
+         rows = process_sources(plan, sources, fields, required, opts, bad)
+     finally:
+         write_bad_records(args.bad_records_out, bad)
+-    result = execute(plan, rows)
++    return write_result(args, execute(plan, rows))
++
++
++def write_result(args, result):
+     try:
+         text = json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+     except ValueError:
+
+### requirements.txt (modified)
+--- requirements.txt
++++ requirements.txt
+@@ -1,2 +1,3 @@
+ tzdata>=2024.1
+ pyarrow>=14.0
++PyYAML>=6.0
+

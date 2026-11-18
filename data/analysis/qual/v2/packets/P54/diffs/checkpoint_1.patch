@@ -1,0 +1,1953 @@
+### DESIGN.md (created)
+--- DESIGN.md
++++ DESIGN.md
+@@ -0,0 +1,49 @@
++# sith — design
++
++`python sith.py complete <file> <line> <col> [--fuzzy]` prints completions as JSON.
++Standard library only (`requirements.txt` lists no packages).
++
++## Decisions likely to change, and the module that hides each
++
++| Module | Secret (the decision it hides) |
++|---|---|
++| `sithlib/source.py` | How a file is read, decoded and split into lines, and how a (line, col) cursor is validated. |
++| `sithlib/parsing.py` | The repair strategy that turns broken source into a syntax tree without shifting line numbers. |
++| `sithlib/cursor.py` | How the text before the cursor is lexed into a context (name / attribute / none), the typed prefix, and the receiver expression. |
++| `sithlib/scopes.py` | How bindings are found in the tree, which scope owns them, and the (indentation-aware) rules for the scope at a cursor and for visibility. |
++| `sithlib/modules.py` | How an imported module is located: project source file/package first, otherwise a runtime import with side effects contained. |
++| `sithlib/introspect.py` | How live Python objects are classified and their attributes enumerated and fetched safely. |
++| `sithlib/vocabulary.py` | Where builtin names and keywords come from. |
++| `sithlib/inference.py` | How bindings and expressions map to values (module/class/function/instance), name resolution through scopes, star imports and builtins, and member enumeration. |
++| `sithlib/matching.py` | The prefix / fuzzy matching algorithm and the "text still to insert" rule. |
++| `sithlib/ranking.py` | The ordering rules (public, private, dunder, keywords; case-insensitive). |
++| `sithlib/presentation.py` | The wording of the `type` and `description` fields. |
++| `sithlib/output.py` | The wire format (compact, newline-terminated JSON). |
++| `sithlib/engine.py` | The completion policy: what each cursor context offers and how filtering, wording and ranking combine. |
++| `sith.py` | Command-line parsing, exit codes and error reporting. |
++
++## Interfaces between modules
++
++Modules talk only through small interfaces, never through each other's internal
++data structures:
++
++* `cursor.analyze(text_before) -> CursorContext(kind, prefix, receiver_text)`
++* `inference.Project(path, text).location(line, col)` returns a `Location` with
++  `visible_entities()` and `evaluate(expression_text)`.
++* A `Value` exposes `kind`, `type_name` and `members()`; an `Entity` exposes `name`,
++  `presentation() -> (kind, type_name)` and `value()`.
++* `matching.matches(name, query, fuzzy)` and `matching.remaining_text(name, query)`.
++* `ranking.rank(items, name_of, is_keyword)`.
++* `presentation.describe(name, kind, type_name) -> (type, description)`.
++* `output.write_completions([(name, complete, type, description), ...])`.
++
++## Behaviour choices where the specification is silent
++
++* Inside a comment or string literal, no completions are returned.
++* `True`, `False` and `None` are offered only as keywords, not also as builtins.
++* Class scopes are not visible from inside their methods, matching Python.
++* Literal receivers list every attribute of their builtin type, dunders included.
++  Module receivers list public names only.
++* Star imports bring in every public name. `__all__` is not consulted.
++* A trailing newline at the end of the file counts as an extra, empty last line, so
++  the cursor can sit on it.
+
+### requirements.txt (created)
+--- requirements.txt
++++ requirements.txt
+@@ -0,0 +1 @@
++# No third-party dependencies; standard library only.
+
+### sith.py (created)
+--- sith.py
++++ sith.py
+@@ -0,0 +1,43 @@
++"""sith - static Python code completion.
++
++Usage: python sith.py complete <file> <line> <col> [--fuzzy]
++"""
++
++import os
++import sys
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++
++from sithlib import engine, output  # noqa: E402
++from sithlib.source import SourceError  # noqa: E402
++
++USAGE = "usage: sith.py complete <file> <line> <col> [--fuzzy]"
++
++
++def _fail(message):
++    sys.stderr.write("error: %s\n" % message)
++    return 1
++
++
++def main(argv):
++    sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))
++    fuzzy = "--fuzzy" in argv
++    args = [a for a in argv if a != "--fuzzy"]
++    if len(args) != 4 or args[0] != "complete":
++        return _fail(USAGE)
++    try:
++        line, col = int(args[2]), int(args[3])
++    except ValueError:
++        return _fail("line and column must be integers")
++    try:
++        completions = engine.complete(args[1], line, col, fuzzy)
++    except SourceError as exc:
++        return _fail(str(exc))
++    except Exception:  # analysis must never crash on odd input; degrade to nothing
++        completions = []
++    output.write_completions(completions)
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv[1:]))
+
+### sithlib/__init__.py (created)
+--- sithlib/__init__.py
++++ sithlib/__init__.py
+@@ -0,0 +1 @@
++"""sith library: static Python completion components."""
+
+### sithlib/cursor.py (created)
+--- sithlib/cursor.py
++++ sithlib/cursor.py
+@@ -0,0 +1,187 @@
++"""Cursor context detection.
++
++Secret: how the text before the cursor is lexed to decide whether a bare
++name, an attribute, or nothing is being completed, what prefix has been
++typed, and which source text forms the receiver of an attribute access.
++"""
++
++NAME = "name"
++ATTRIBUTE = "attribute"
++NONE = "none"
++
++_CLOSERS = {")": "(", "]": "[", "}": "{"}
++_STRING_PREFIX_CHARS = set("rRbBuUfF")
++
++
++class CursorContext:
++    def __init__(self, kind, prefix="", receiver=None):
++        self.kind = kind
++        self.prefix = prefix
++        self.receiver = receiver
++
++
++def analyze(text_before):
++    """Classify the cursor at the end of ``text_before``."""
++    if _inside_string_or_comment(text_before):
++        return CursorContext(NONE)
++    end = len(text_before)
++    start = end
++    while start > 0 and _is_ident_char(text_before[start - 1]):
++        start -= 1
++    prefix = text_before[start:end]
++    if prefix and prefix[0].isdigit():
++        return CursorContext(NONE)
++    pos = _skip_space_back(text_before, start)
++    if pos > 0 and text_before[pos - 1] == ".":
++        dot = pos - 1
++        receiver = _receiver_before(text_before, dot)
++        if receiver is None:
++            return CursorContext(NONE)
++        return CursorContext(ATTRIBUTE, prefix, receiver)
++    return CursorContext(NAME, prefix)
++
++
++def _is_ident_char(ch):
++    return ch == "_" or ch.isalnum()
++
++
++def _skip_space_back(text, pos):
++    while pos > 0 and text[pos - 1] in " \t":
++        pos -= 1
++    return pos
++
++
++def _inside_string_or_comment(text):
++    i, n = 0, len(text)
++    while i < n:
++        ch = text[i]
++        if ch == "#":
++            newline = text.find("\n", i)
++            if newline < 0:
++                return True
++            i = newline + 1
++        elif ch in "'\"":
++            quote = text[i : i + 3] if text[i : i + 3] in ("'''", '"""') else ch
++            i += len(quote)
++            closed = False
++            while i < n:
++                if text[i] == "\\":
++                    i += 2
++                    continue
++                if text.startswith(quote, i):
++                    i += len(quote)
++                    closed = True
++                    break
++                if text[i] == "\n" and len(quote) == 1:
++                    break
++                i += 1
++            if not closed and i >= n:
++                return True
++        else:
++            i += 1
++    return False
++
++
++def _receiver_before(text, dot):
++    """Source text of the primary expression ending just before ``dot``."""
++    if dot > 0 and text[dot - 1] == ".":
++        return None
++    pos = _skip_space_back(text, dot)
++    begin = _scan_primary(text, pos)
++    if begin is None or begin == pos:
++        return None
++    receiver = text[begin:pos].strip()
++    if receiver and (receiver[0].isdigit() and receiver.replace("_", "").isdigit()):
++        return None
++    return receiver
++
++
++def _scan_primary(text, pos):
++    """Scan one primary (atom plus trailers) backwards; return its start."""
++    while True:
++        if pos == 0:
++            return None
++        ch = text[pos - 1]
++        if ch in _CLOSERS:
++            opener = _match_open(text, pos - 1)
++            if opener is None:
++                return None
++            pos = opener
++            if pos > 0 and (_is_ident_char(text[pos - 1]) or text[pos - 1] in _CLOSERS
++                            or text[pos - 1] in "'\""):
++                continue
++            return _after_dot_chain(text, pos)
++        if ch in "'\"":
++            start = _match_string_start(text, pos)
++            if start is None:
++                return None
++            return start
++        if _is_ident_char(ch):
++            while pos > 0 and _is_ident_char(text[pos - 1]):
++                pos -= 1
++            return _after_dot_chain(text, pos)
++        return None
++
++
++def _after_dot_chain(text, pos):
++    """If the atom starting at ``pos`` is preceded by a dot, keep scanning."""
++    before = _skip_space_back(text, pos)
++    if before > 0 and text[before - 1] == "." and not (before > 1 and text[before - 2] == "."):
++        inner = _scan_primary(text, _skip_space_back(text, before - 1))
++        return inner if inner is not None else pos
++    return pos
++
++
++def _match_open(text, close_index):
++    depth = 0
++    i = close_index
++    while i >= 0:
++        ch = text[i]
++        if ch in "'\"":
++            start = _match_string_start(text, i + 1)
++            if start is None:
++                return None
++            i = start - 1
++            continue
++        if ch in _CLOSERS:
++            depth += 1
++        elif ch in "([{":
++            depth -= 1
++            if depth == 0:
++                return i
++        i -= 1
++    return None
++
++
++def _match_string_start(text, end):
++    """Given ``text[end - 1]`` is a closing quote, find the literal's start."""
++    quote_char = text[end - 1]
++    triple = quote_char * 3
++    if end >= 3 and text[end - 3 : end] == triple:
++        found = text.rfind(triple, 0, end - 3)
++        start = found if found >= 0 else None
++    else:
++        i = end - 2
++        start = None
++        while i >= 0:
++            if text[i] == quote_char and not _escaped(text, i):
++                start = i
++                break
++            if text[i] == "\n":
++                break
++            i -= 1
++    if start is None:
++        return None
++    head = start
++    while head > 0 and start - head < 2 and text[head - 1] in _STRING_PREFIX_CHARS:
++        head -= 1
++    if head < start and not (head > 0 and _is_ident_char(text[head - 1])):
++        return head
++    return start
++
++
++def _escaped(text, i):
++    count = 0
++    while i - 1 - count >= 0 and text[i - 1 - count] == "\\":
++        count += 1
++    return count % 2 == 1
+
+### sithlib/engine.py (created)
+--- sithlib/engine.py
++++ sithlib/engine.py
+@@ -0,0 +1,44 @@
++"""Completion engine.
++
++Secret: the completion policy — which candidates each cursor context offers
++(visible names plus keywords, or public module members, or receiver
++attributes) and how filtering, wording and ranking are combined.
++"""
++
++from . import cursor, matching, presentation, ranking, vocabulary
++from .inference import MODULE, Project
++from .source import SourceFile
++
++
++def complete(path, line, col, fuzzy=False):
++    """Return completions as a list of (name, complete, type, description)."""
++    source = SourceFile(path)
++    source.check_position(line, col)
++    context = cursor.analyze(source.text_before(line, col))
++    if context.kind == cursor.NONE:
++        return []
++
++    location = Project(source.path, source.text()).location(line, col)
++    keywords = []
++    if context.kind == cursor.NAME:
++        entities = location.visible_entities()
++        keywords = vocabulary.keywords()
++    else:
++        receiver = location.evaluate(context.receiver)
++        entities = receiver.members()
++        if receiver.kind == MODULE:
++            entities = {n: e for n, e in entities.items() if not n.startswith("_")}
++
++    query = context.prefix
++    results = []
++    for name, entity in entities.items():
++        if matching.matches(name, query, fuzzy):
++            kind, type_name = entity.presentation()
++            results.append((name, False) + presentation.describe(name, kind, type_name))
++    for word in keywords:
++        if word not in entities and matching.matches(word, query, fuzzy):
++            results.append((word, True) + presentation.describe(word, presentation.KEYWORD))
++
++    ordered = ranking.rank(results, name_of=lambda r: r[0], is_keyword=lambda r: r[1])
++    return [(name, matching.remaining_text(name, query), kind, description)
++            for name, _, kind, description in ordered]
+
+### sithlib/inference.py (created)
+--- sithlib/inference.py
++++ sithlib/inference.py
+@@ -0,0 +1,630 @@
++"""Static inference.
++
++Secret: how bindings and expressions are mapped to values (modules, classes,
++functions, instances), how names are resolved through scopes, star imports
++and builtins, and how the members of a value are enumerated.
++
++Clients see three abstractions:
++  * ``Project``  - opens the main file and returns a ``Location`` for a cursor.
++  * ``Value``    - has ``kind``, ``type_name`` and ``members()``.
++  * ``Entity``   - a named member/visible name with ``presentation()`` giving
++                   ``(kind, type_name)`` and ``value()`` giving a ``Value``.
++"""
++
++import ast
++import os
++import types
++
++from . import introspect, scopes, vocabulary
++from .modules import DIRECTORY, RUNTIME, SOURCE, ModuleLocator
++
++MODULE = "module"
++CLASS = "class"
++FUNCTION = "function"
++INSTANCE = "instance"
++PARAM = "param"
++STATEMENT = "statement"
++UNKNOWN = "unknown"
++
++_LITERAL_TYPES = {
++    ast.JoinedStr: str,
++    ast.List: list, ast.ListComp: list,
++    ast.Tuple: tuple,
++    ast.Dict: dict, ast.DictComp: dict,
++    ast.Set: set, ast.SetComp: set,
++    ast.GeneratorExp: types.GeneratorType,
++    ast.Compare: bool,
++}
++_ARITHMETIC_TYPES = (int, float, complex, str, bytes, list, tuple)
++
++
++# ---------------------------------------------------------------------------
++# Values
++
++class Value:
++    kind = UNKNOWN
++    type_name = None
++
++    def members(self):
++        return {}
++
++    def attribute(self, name):
++        entity = self.members().get(name)
++        return entity.value() if entity is not None else UNKNOWN_VALUE
++
++    def call(self):
++        return UNKNOWN_VALUE
++
++    def instantiate(self):
++        return UNKNOWN_VALUE
++
++    def builtin_type(self):
++        """For instances of builtin types, the type object; else None."""
++        return None
++
++
++UNKNOWN_VALUE = Value()
++
++
++class RuntimeValue(Value):
++    """A live object obtained by importing a module."""
++
++    def __init__(self, project, obj):
++        self._project = project
++        self._obj = obj
++        self.kind = introspect.kind_of(obj)
++        if self.kind == INSTANCE:
++            self.type_name = introspect.type_name(obj)
++
++    def members(self):
++        return {name: RuntimeEntity(self._project, name, self._obj)
++                for name in introspect.attribute_names(self._obj)}
++
++    def attribute(self, name):
++        ok, value = introspect.get_attribute(self._obj, name)
++        if ok:
++            return RuntimeValue(self._project, value)
++        if self.kind == MODULE:
++            module_name = getattr(self._obj, "__name__", None)
++            if module_name:
++                found = self._project.module_value(module_name + "." + name)
++                if found is not None:
++                    return found
++        return UNKNOWN_VALUE
++
++    def call(self):
++        return self.instantiate()
++
++    def instantiate(self):
++        if self.kind == CLASS:
++            return RuntimeInstance(self._project, self._obj)
++        return UNKNOWN_VALUE
++
++    def builtin_type(self):
++        return type(self._obj) if self.kind == INSTANCE else None
++
++
++class RuntimeInstance(Value):
++    """An instance of a runtime class, known only by its class."""
++
++    kind = INSTANCE
++
++    def __init__(self, project, cls):
++        self._project = project
++        self._cls = cls
++        self._sample = introspect.sample_instance(cls)
++        self.type_name = introspect.class_name(cls)
++
++    def members(self):
++        return {name: RuntimeEntity(self._project, name, self._sample, from_class=self._cls)
++                for name in introspect.attribute_names(self._cls)}
++
++    def attribute(self, name):
++        return RuntimeEntity(self._project, name, self._sample, from_class=self._cls).value()
++
++    def builtin_type(self):
++        return self._cls
++
++
++class UnresolvedModule(Value):
++    kind = MODULE
++
++
++class DirectoryModule(Value):
++    """A package directory without ``__init__.py``."""
++
++    kind = MODULE
++
++    def __init__(self, project, directory):
++        self._project = project
++        self._directory = directory
++
++    def attribute(self, name):
++        found = self._project.submodule_value(self._directory, name)
++        return found if found is not None else UNKNOWN_VALUE
++
++
++class StaticModule(Value):
++    kind = MODULE
++
++    def __init__(self, analysis):
++        self._analysis = analysis
++
++    def members(self):
++        return self._analysis.module_members()
++
++    def attribute(self, name):
++        entity = self.members().get(name)
++        if entity is not None:
++            return entity.value()
++        package_dir = self._analysis.package_dir()
++        if package_dir:
++            found = self._analysis.project.submodule_value(package_dir, name)
++            if found is not None:
++                return found
++        return UNKNOWN_VALUE
++
++
++class StaticFunction(Value):
++    kind = FUNCTION
++
++    def __init__(self, analysis, scope):
++        self._analysis = analysis
++        self._scope = scope
++
++    def call(self):
++        if self._scope.is_async():
++            return UNKNOWN_VALUE
++        project = self._analysis.project
++        key = ("call", id(self._scope))
++        if not project.enter(key):
++            return UNKNOWN_VALUE
++        try:
++            view = _View(scope=self._scope, order=float("inf"))
++            for expr in self._scope.returned_expressions():
++                value = self._analysis.evaluate(expr, self._scope, view)
++                if value.kind != UNKNOWN:
++                    return value
++            return UNKNOWN_VALUE
++        finally:
++            project.leave(key)
++
++
++class StaticClass(Value):
++    kind = CLASS
++
++    def __init__(self, analysis, scope):
++        self._analysis = analysis
++        self._scope = scope
++        self.name = scope.name
++
++    def identity(self):
++        return id(self._scope)
++
++    def bases(self):
++        project = self._analysis.project
++        key = ("bases", id(self._scope))
++        if not project.enter(key):
++            return []
++        try:
++            parent = self._scope.parent
++            view = _View()
++            result = []
++            for expr in self._scope.base_expressions():
++                value = self._analysis.evaluate(expr, parent, view)
++                if isinstance(value, StaticClass) and value.identity() != self.identity():
++                    result.append(value)
++            return result
++        finally:
++            project.leave(key)
++
++    def mro(self):
++        return _linearize(self, set())
++
++    def members(self):
++        result = {}
++        for cls in reversed(self.mro()):
++            for event in cls._scope.all_events():
++                if event.name and event.form != scopes.STAR:
++                    result[event.name] = BindingEntity(cls._analysis, event)
++        return result
++
++    def instance_members(self):
++        result = self.members()
++        for cls in reversed(self.mro()):
++            for event in cls._scope.instance_attribute_events():
++                result[event.name] = BindingEntity(cls._analysis, event)
++        return result
++
++    def call(self):
++        return self.instantiate()
++
++    def instantiate(self):
++        return StaticInstance(self)
++
++
++class StaticInstance(Value):
++    kind = INSTANCE
++
++    def __init__(self, cls):
++        self._cls = cls
++        self.type_name = cls.name
++
++    def members(self):
++        return self._cls.instance_members()
++
++
++def _linearize(cls, seen):
++    """C3 linearization of statically known classes (DFS on conflict)."""
++    if cls.identity() in seen:
++        return [cls]
++    seen = seen | {cls.identity()}
++    bases = cls.bases()
++    sequences = [_linearize(base, seen) for base in bases] + [list(bases)]
++    result = [cls]
++    sequences = [list(s) for s in sequences if s]
++    while sequences:
++        for sequence in sequences:
++            head = sequence[0]
++            if not any(head.identity() in [c.identity() for c in s[1:]] for s in sequences):
++                break
++        else:
++            for sequence in sequences:
++                for item in sequence:
++                    if item.identity() not in [c.identity() for c in result]:
++                        result.append(item)
++            return result
++        result.append(head)
++        sequences = [[c for c in s if c.identity() != head.identity()] for s in sequences]
++        sequences = [s for s in sequences if s]
++    return result
++
++
++# ---------------------------------------------------------------------------
++# Entities
++
++class Entity:
++    name = None
++
++    def presentation(self):
++        return (STATEMENT, None)
++
++    def value(self):
++        return UNKNOWN_VALUE
++
++
++class RuntimeEntity(Entity):
++    """An attribute of a live object, or of a class standing in for an instance."""
++
++    def __init__(self, project, name, owner, from_class=None):
++        self._project = project
++        self.name = name
++        self._owner = owner
++        self._from_class = from_class
++
++    def _fetch(self):
++        if self._owner is not None:
++            return introspect.get_attribute(self._owner, self.name)
++        ok, obj = introspect.get_attribute(self._from_class, self.name)
++        if ok and introspect.is_data_descriptor(obj):
++            return False, None
++        return ok, obj
++
++    def presentation(self):
++        ok, obj = self._fetch()
++        if not ok:
++            return (STATEMENT, None)
++        kind = introspect.kind_of(obj)
++        if kind == INSTANCE:
++            return (INSTANCE, introspect.type_name(obj))
++        return (kind, None)
++
++    def value(self):
++        ok, obj = self._fetch()
++        return RuntimeValue(self._project, obj) if ok else UNKNOWN_VALUE
++
++
++class BindingEntity(Entity):
++    def __init__(self, analysis, binding):
++        self._analysis = analysis
++        self._binding = binding
++        self.name = binding.name
++        self._value = None
++
++    def presentation(self):
++        form = self._binding.form
++        if form == scopes.DEF:
++            return (FUNCTION, None)
++        if form == scopes.CLASS:
++            return (CLASS, None)
++        if form == scopes.PARAM:
++            return (PARAM, None)
++        if form == scopes.IMPORT:
++            return (MODULE, None)
++        if form in (scopes.IMPORT_FROM, scopes.ASSIGN, scopes.EXCEPT):
++            value = self.value()
++            if value.kind == INSTANCE:
++                return (INSTANCE, value.type_name)
++            if form == scopes.IMPORT_FROM and value.kind in (MODULE, CLASS, FUNCTION):
++                return (value.kind, None)
++        return (STATEMENT, None)
++
++    def value(self):
++        if self._value is None:
++            project = self._analysis.project
++            key = ("binding", id(self._binding))
++            if not project.enter(key):
++                return UNKNOWN_VALUE
++            try:
++                self._value = self._analysis.binding_value(self._binding)
++            finally:
++                project.leave(key)
++        return self._value
++
++
++# ---------------------------------------------------------------------------
++# Name resolution
++
++class _View:
++    """Which events of each scope are visible for a lookup."""
++
++    def __init__(self, line=None, scope=None, order=None):
++        self._line = line
++        self._scope = scope
++        self._order = order
++
++    def events(self, scope):
++        if self._line is not None:
++            return scope.events_until_line(self._line)
++        if scope is self._scope and self._order is not None:
++            return scope.events_before(self._order)
++        return scope.all_events()
++
++
++class Analysis:
++    """Inference over one source file."""
++
++    def __init__(self, project, path, text):
++        self.project = project
++        self.path = path
++        self._tree = scopes.ScopeTree(text)
++        self._scope_by_node = {}
++        self._index(self._tree.module)
++        self._module_members = None
++
++    def _index(self, scope):
++        for child in scope.children:
++            self._scope_by_node[id(child.node)] = child
++            self._index(child)
++
++    def package_dir(self):
++        if os.path.basename(self.path) == "__init__.py":
++            return os.path.dirname(self.path)
++        return None
++
++    def location(self, line, col):
++        return Location(self, self._tree.scope_at(line, col), line)
++
++    # -- members ---------------------------------------------------------
++    def module_members(self):
++        if self._module_members is None:
++            key = ("module", self.path)
++            if not self.project.enter(key):
++                return {}
++            try:
++                result = {}
++                for event in self._tree.module.all_events():
++                    self._apply(result, event)
++                self._module_members = result
++            finally:
++                self.project.leave(key)
++        return self._module_members
++
++    def _apply(self, result, event):
++        if event.form == scopes.STAR:
++            result.update(self.star_members(event))
++        elif event.name:
++            result[event.name] = BindingEntity(self, event)
++
++    def star_members(self, event):
++        module = self.project.module_value(event.details["module"], event.details["level"],
++                                           self.path)
++        if module is None:
++            return {}
++        return {name: entity for name, entity in module.members().items()
++                if not name.startswith("_")}
++
++    def visible(self, scope, view):
++        result = {name: RuntimeEntity(self.project, name, vocabulary.builtin_namespace())
++                  for name in vocabulary.builtin_names()}
++        for level in reversed(scope.chain()):
++            for event in view.events(level):
++                self._apply(result, event)
++        return result
++
++    def lookup(self, name, scope, view):
++        for level in scope.chain():
++            for event in reversed(view.events(level)):
++                if event.form == scopes.STAR:
++                    members = self.star_members(event)
++                    if name in members:
++                        return members[name]
++                elif event.name == name:
++                    return BindingEntity(self, event)
++        if name in vocabulary.builtin_names():
++            return RuntimeEntity(self.project, name, vocabulary.builtin_namespace())
++        return None
++
++    # -- bindings --------------------------------------------------------
++    def binding_value(self, binding):
++        form, details = binding.form, binding.details
++        view = _View(scope=binding.scope, order=binding.order)
++        if form == scopes.DEF:
++            return StaticFunction(self, self._scope_by_node[id(details["node"])])
++        if form == scopes.CLASS:
++            return StaticClass(self, self._scope_by_node[id(details["node"])])
++        if form == scopes.PARAM:
++            return self._param_value(binding, view)
++        if form == scopes.IMPORT:
++            found = self.project.module_value(details["module"], 0, self.path)
++            return found if found is not None else UnresolvedModule()
++        if form == scopes.IMPORT_FROM:
++            return self._import_from_value(details)
++        if form == scopes.ASSIGN:
++            value = UNKNOWN_VALUE
++            expr = _unpack(details["value"], details["path"])
++            if expr is not None:
++                value = self.evaluate(expr, binding.scope, view)
++            if value.kind != INSTANCE and details.get("annotation") is not None:
++                annotated = self.evaluate(details["annotation"], binding.scope, view)
++                if annotated.kind == CLASS:
++                    value = annotated.instantiate()
++            return value
++        if form == scopes.EXCEPT and details["type_expr"] is not None:
++            exc_type = self.evaluate(details["type_expr"], binding.scope, view)
++            if exc_type.kind == CLASS:
++                return exc_type.instantiate()
++        return UNKNOWN_VALUE
++
++    def _param_value(self, binding, view):
++        details = binding.details
++        function = details["function"]
++        owner = function.class_scope()
++        if details["index"] == 0 and owner is not None and not details["star"]:
++            decorators = function.decorator_names()
++            if "staticmethod" not in decorators:
++                cls = StaticClass(self, owner)
++                return cls if "classmethod" in decorators else cls.instantiate()
++        if details["star"] == "*":
++            return RuntimeInstance(self.project, tuple)
++        if details["star"] == "**":
++            return RuntimeInstance(self.project, dict)
++        if details["annotation"] is not None:
++            annotated = self.evaluate(details["annotation"], function.parent, _View())
++            if annotated.kind == CLASS:
++                return annotated.instantiate()
++        return UNKNOWN_VALUE
++
++    def _import_from_value(self, details):
++        module_name, level, attr = details["module"], details["level"], details["attr"]
++        module = self.project.module_value(module_name, level, self.path)
++        if module is not None:
++            value = module.attribute(attr)
++            if value.kind != UNKNOWN:
++                return value
++        dotted = module_name + "." + attr if module_name else attr
++        sub = self.project.module_value(dotted, level, self.path)
++        return sub if sub is not None else UNKNOWN_VALUE
++
++    # -- expressions -----------------------------------------------------
++    def evaluate(self, node, scope, view):
++        project = self.project
++        if isinstance(node, ast.Constant):
++            return RuntimeInstance(project, type(node.value))
++        literal = _LITERAL_TYPES.get(type(node))
++        if literal is not None:
++            return RuntimeInstance(project, literal)
++        if isinstance(node, ast.Name):
++            entity = self.lookup(node.id, scope, view)
++            return entity.value() if entity is not None else UNKNOWN_VALUE
++        if isinstance(node, ast.Attribute):
++            return self.evaluate(node.value, scope, view).attribute(node.attr)
++        if isinstance(node, ast.Call):
++            return self.evaluate(node.func, scope, view).call()
++        if isinstance(node, ast.UnaryOp):
++            if isinstance(node.op, ast.Not):
++                return RuntimeInstance(project, bool)
++            return self.evaluate(node.operand, scope, view)
++        if isinstance(node, ast.BinOp):
++            left = self.evaluate(node.left, scope, view)
++            left_type = left.builtin_type()
++            if left_type is str and isinstance(node.op, ast.Mod):
++                return left
++            right_type = self.evaluate(node.right, scope, view).builtin_type()
++            if left_type is not None and left_type is right_type \
++                    and left_type in _ARITHMETIC_TYPES:
++                return left
++        return UNKNOWN_VALUE
++
++
++def _unpack(expr, path):
++    for index in path:
++        if not isinstance(expr, (ast.Tuple, ast.List)):
++            return None
++        if any(isinstance(e, ast.Starred) for e in expr.elts) or index >= len(expr.elts):
++            return None
++        expr = expr.elts[index]
++    return expr
++
++
++class Location:
++    """A cursor position inside the main file."""
++
++    def __init__(self, analysis, scope, line):
++        self._analysis = analysis
++        self._scope = scope
++        self._view = _View(line=line)
++
++    def visible_entities(self):
++        return self._analysis.visible(self._scope, self._view)
++
++    def evaluate(self, expression_text):
++        try:
++            node = ast.parse(expression_text.strip(), mode="eval").body
++        except (SyntaxError, ValueError, RecursionError, MemoryError):
++            return UNKNOWN_VALUE
++        return self._analysis.evaluate(node, self._scope, self._view)
++
++
++# ---------------------------------------------------------------------------
++# Project
++
++class Project:
++    def __init__(self, main_path, main_text):
++        self._main_path = os.path.abspath(main_path)
++        self._locator = ModuleLocator(os.path.dirname(self._main_path))
++        self._analyses = {}
++        self._active = set()
++        self.main = Analysis(self, self._main_path, main_text)
++        self._analyses[self._main_path] = self.main
++
++    def enter(self, key):
++        if key in self._active:
++            return False
++        self._active.add(key)
++        return True
++
++    def leave(self, key):
++        self._active.discard(key)
++
++    def location(self, line, col):
++        return self.main.location(line, col)
++
++    def module_value(self, dotted, level=0, importer_path=None):
++        located = self._locator.locate(dotted, level, importer_path or self._main_path)
++        return self._wrap(located)
++
++    def submodule_value(self, directory, name):
++        return self._wrap(self._locator.locate_in_directory(directory, name))
++
++    def _wrap(self, located):
++        if located is None:
++            return None
++        if located.how == RUNTIME:
++            return RuntimeValue(self, located.module)
++        if located.how == DIRECTORY:
++            return DirectoryModule(self, located.path)
++        if located.how == SOURCE:
++            return StaticModule(self._analysis_for(located.path))
++        return None
++
++    def _analysis_for(self, path):
++        path = os.path.abspath(path)
++        if path not in self._analyses:
++            try:
++                with open(path, "rb") as handle:
++                    text = handle.read().decode("utf-8", errors="replace")
++            except OSError:
++                text = ""
++            self._analyses[path] = Analysis(self, path, text)
++        return self._analyses[path]
+
+### sithlib/introspect.py (created)
+--- sithlib/introspect.py
++++ sithlib/introspect.py
+@@ -0,0 +1,63 @@
++"""Runtime object introspection.
++
++Secret: how a live Python object is classified (module, class, function or
++instance) and how its attributes are enumerated and fetched safely.
++"""
++
++import inspect
++
++MODULE = "module"
++CLASS = "class"
++FUNCTION = "function"
++INSTANCE = "instance"
++
++
++def kind_of(obj):
++    if inspect.ismodule(obj):
++        return MODULE
++    if isinstance(obj, type):
++        return CLASS
++    if inspect.isroutine(obj):
++        return FUNCTION
++    return INSTANCE
++
++
++def type_name(obj):
++    """Name of the type of ``obj`` (for describing instances)."""
++    return type(obj).__name__
++
++
++def class_name(cls):
++    return getattr(cls, "__name__", type(cls).__name__)
++
++
++def attribute_names(obj):
++    try:
++        return [n for n in dir(obj) if isinstance(n, str)]
++    except Exception:
++        return []
++
++
++def get_attribute(obj, name):
++    """Return ``(True, value)`` or ``(False, None)`` if fetching fails."""
++    try:
++        return True, getattr(obj, name)
++    except BaseException:  # noqa: B902 - descriptors may raise anything
++        return False, None
++
++
++def is_data_descriptor(obj):
++    return inspect.isdatadescriptor(obj)
++
++
++_SAFE_SAMPLE_MODULES = ("builtins",)
++
++
++def sample_instance(cls):
++    """An instance of ``cls`` built without side effects, or None."""
++    if getattr(cls, "__module__", None) not in _SAFE_SAMPLE_MODULES:
++        return None
++    try:
++        return cls()
++    except BaseException:  # noqa: B902 - constructors may raise anything
++        return None
+
+### sithlib/matching.py (created)
+--- sithlib/matching.py
++++ sithlib/matching.py
+@@ -0,0 +1,26 @@
++"""Query matching.
++
++Secret: the algorithm deciding whether a typed query matches a candidate
++name (case-insensitive prefix, or case-insensitive in-order subsequence when
++fuzzy) and how much of the name remains to be inserted.
++"""
++
++
++def matches(name, query, fuzzy=False):
++    if not query:
++        return True
++    name, query = name.lower(), query.lower()
++    if not fuzzy:
++        return name.startswith(query)
++    position = 0
++    for ch in query:
++        position = name.find(ch, position)
++        if position < 0:
++            return False
++        position += 1
++    return True
++
++
++def remaining_text(name, query):
++    """Text to insert: the name minus as many characters as were typed."""
++    return name[len(query):]
+
+### sithlib/modules.py (created)
+--- sithlib/modules.py
++++ sithlib/modules.py
+@@ -0,0 +1,126 @@
++"""Module location.
++
++Secret: how an imported module name is found — first as a source file or
++package in the project directory, otherwise by importing an installed module
++at runtime (with its side effects contained).
++"""
++
++import contextlib
++import importlib
++import io
++import os
++import sys
++
++SOURCE = "source"
++RUNTIME = "runtime"
++DIRECTORY = "directory"
++
++
++class Located:
++    """Where a module lives: a source file, a bare directory, or a live module."""
++
++    def __init__(self, how, path=None, module=None):
++        self.how = how
++        self.path = path
++        self.module = module
++
++
++class ModuleLocator:
++    def __init__(self, project_dir):
++        self._project_dir = os.path.abspath(project_dir)
++        self._runtime_cache = {}
++
++    def locate(self, dotted, level=0, importer_path=None):
++        """Locate ``dotted`` (relative to ``importer_path`` when ``level`` > 0)."""
++        parts = [p for p in dotted.split(".") if p] if dotted else []
++        if level > 0:
++            base = os.path.dirname(os.path.abspath(importer_path or self._project_dir))
++            for _ in range(level - 1):
++                base = os.path.dirname(base)
++            return self._locate_in(base, parts)
++        if not parts:
++            return None
++        roots = [self._project_dir]
++        if importer_path:
++            own = os.path.dirname(os.path.abspath(importer_path))
++            if own not in roots:
++                roots.append(own)
++        namespace = None
++        for root in roots:
++            found = self._locate_in(root, parts)
++            if found is not None and found.how == SOURCE:
++                return found
++            namespace = namespace or found
++        module = self._import_runtime(".".join(parts))
++        if module is not None:
++            return Located(RUNTIME, module=module)
++        return namespace
++
++    def locate_in_directory(self, directory, name):
++        """Locate submodule ``name`` of the package stored in ``directory``."""
++        return self._locate_in(directory, [name])
++
++    def _locate_in(self, base, parts):
++        path = base
++        for index, part in enumerate(parts):
++            last = index == len(parts) - 1
++            package = os.path.join(path, part)
++            if os.path.isdir(package):
++                if last:
++                    return self._package(package)
++                path = package
++                continue
++            if last and os.path.isfile(package + ".py"):
++                return Located(SOURCE, path=package + ".py")
++            return None
++        return self._package(path)
++
++    @staticmethod
++    def _package(directory):
++        init = os.path.join(directory, "__init__.py")
++        if os.path.isfile(init):
++            return Located(SOURCE, path=init)
++        return Located(DIRECTORY, path=directory)
++
++    def _import_runtime(self, name):
++        if name in self._runtime_cache:
++            return self._runtime_cache[name]
++        module = None
++        saved_path = list(sys.path)
++        sys.path[:] = [p for p in sys.path
++                       if p and os.path.abspath(p) not in (self._project_dir, _TOOL_DIR)]
++        try:
++            with _silenced_descriptors(), contextlib.redirect_stdout(io.StringIO()), \
++                    contextlib.redirect_stderr(io.StringIO()):
++                module = importlib.import_module(name)
++        except BaseException:  # noqa: B902 - arbitrary import code may do anything
++            module = None
++        finally:
++            sys.path[:] = saved_path
++        self._runtime_cache[name] = module
++        return module
++
++
++@contextlib.contextmanager
++def _silenced_descriptors():
++    """Route OS-level stdout/stderr to the null device (for C extensions)."""
++    saved = []
++    try:
++        sys.stdout.flush()
++        sys.stderr.flush()
++        devnull = os.open(os.devnull, os.O_WRONLY)
++        for fd in (1, 2):
++            saved.append((fd, os.dup(fd)))
++            os.dup2(devnull, fd)
++        os.close(devnull)
++    except (OSError, ValueError, AttributeError):
++        pass
++    try:
++        yield
++    finally:
++        for fd, copy in saved:
++            os.dup2(copy, fd)
++            os.close(copy)
++
++
++_TOOL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+### sithlib/output.py (created)
+--- sithlib/output.py
++++ sithlib/output.py
+@@ -0,0 +1,25 @@
++"""Result serialization.
++
++Secret: the wire format of the result (compact JSON with a ``completions``
++array of name/complete/type/description objects, newline-terminated).
++"""
++
++import json
++import sys
++
++
++def write_completions(completions, stream=None):
++    """``completions``: iterable of (name, complete, type, description)."""
++    payload = {"completions": [
++        {"name": name, "complete": complete, "type": kind, "description": description}
++        for name, complete, kind, description in completions
++    ]}
++    text = json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n"
++    stream = stream or sys.stdout
++    if hasattr(stream, "buffer"):
++        stream.flush()
++        stream.buffer.write(text.encode("utf-8"))
++        stream.buffer.flush()
++    else:
++        stream.write(text)
++        stream.flush()
+
+### sithlib/parsing.py (created)
+--- sithlib/parsing.py
++++ sithlib/parsing.py
+@@ -0,0 +1,143 @@
++"""Error-tolerant parsing.
++
++Secret: the repair strategy used to turn syntactically broken source into a
++syntax tree. Lines keep their numbers, so positions in the returned tree
++match positions in the original text.
++"""
++
++import ast
++import keyword
++import re
++
++_ORIGINAL, _PASSED, _BLANKED = 0, 1, 2
++_HEADER_RE = re.compile(r"on line (\d+)")
++_DEF_RE = re.compile(r"^(\s*)(async\s+)?def\s+([^\W\d]\w*)")
++_CLASS_RE = re.compile(r"^(\s*)class\s+([^\W\d]\w*)")
++_PARAM_RE = re.compile(r"\s*\*{0,2}\s*([^\W\d]\w*)")
++_SALVAGED = 3
++
++
++def parse_tolerant(text):
++    """Return an ``ast.Module`` for ``text``, repairing errors as needed."""
++    lines = text.replace("\0", " ").split("\n")
++    state = [_ORIGINAL] * len(lines)
++    patched_headers = set()
++    for _ in range(4 * len(lines) + 20):
++        try:
++            return ast.parse("\n".join(lines))
++        except SyntaxError as exc:
++            if not _repair(lines, state, patched_headers, exc):
++                break
++        except (ValueError, RecursionError, MemoryError):
++            break
++    return ast.Module(body=[], type_ignores=[])
++
++
++def _repair(lines, state, patched_headers, exc):
++    msg = exc.msg or ""
++    if msg.startswith("expected an indented block"):
++        match = _HEADER_RE.search(msg)
++        if match:
++            header = int(match.group(1)) - 1
++            if 0 <= header < len(lines) and header not in patched_headers:
++                patched_headers.add(header)
++                lines[header] = _with_pass_body(lines[header])
++                return True
++    idx = (exc.lineno or len(lines)) - 1
++    idx = max(0, min(idx, len(lines) - 1))
++    if msg.startswith("unterminated triple-quoted string") and ("eof", idx) not in patched_headers:
++        patched_headers.add(("eof", idx))
++        text = lines[idx][max(0, (exc.offset or 1) - 1):]
++        quotes = [q for q in ('"""', "'''") if q in text]
++        if quotes:
++            lines[-1] += min(quotes, key=text.index)
++            return True
++    while idx >= 0 and (state[idx] == _BLANKED or not lines[idx].strip()):
++        idx -= 1
++    if idx < 0:
++        return False
++    if msg.startswith("expected 'except' or 'finally' block"):
++        header = _find_try_header(lines, idx)
++        if header is not None:
++            lines[header] = lines[header][: _indent_width(lines[header])] + "if True:"
++            return True
++    if msg.startswith("unexpected indent"):
++        _blank_block(lines, state, idx)
++        return True
++    if state[idx] == _ORIGINAL and lines[idx].rstrip().endswith(":"):
++        salvaged = _salvage_header(lines[idx])
++        if salvaged is not None and salvaged != lines[idx]:
++            state[idx] = _SALVAGED
++            lines[idx] = salvaged
++            return True
++    if state[idx] in (_ORIGINAL, _SALVAGED):
++        stripped = lines[idx].lstrip()
++        indent = lines[idx][: len(lines[idx]) - len(stripped)]
++        state[idx] = _PASSED
++        lines[idx] = indent + "pass"
++    else:
++        state[idx] = _BLANKED
++        lines[idx] = ""
++    return True
++
++
++def _blank_block(lines, state, idx):
++    """Blank an orphaned indented block: line ``idx`` and deeper/equal lines after it."""
++    width = _indent_width(lines[idx])
++    end = idx
++    while end < len(lines) and (not lines[end].strip() or _indent_width(lines[end]) >= width):
++        if lines[end].strip():
++            state[end] = _BLANKED
++            lines[end] = ""
++        end += 1
++
++
++def _find_try_header(lines, idx):
++    """The ``try:`` line whose handlers are missing at line ``idx``."""
++    limit = _indent_width(lines[idx]) if lines[idx].strip() else None
++    for number in range(min(idx, len(lines) - 1), -1, -1):
++        stripped = lines[number].strip()
++        if not stripped:
++            continue
++        width = _indent_width(lines[number])
++        if stripped.replace(" ", "") == "try:" and (limit is None or width <= limit):
++            return number
++        if limit is not None and width < limit:
++            return None
++    return None
++
++
++def _indent_width(line):
++    return len(line) - len(line.lstrip())
++
++
++def _salvage_header(line):
++    """Reduce a broken ``def``/``class`` header to a minimal valid one."""
++    match = _DEF_RE.match(line)
++    if match:
++        params = []
++        rest = line[match.end():]
++        if rest.lstrip().startswith("("):
++            inside = rest[rest.index("(") + 1: rest.rfind(":")]
++            for piece in inside.split(","):
++                found = _PARAM_RE.match(piece)
++                if found and found.group(1) not in params \
++                        and not keyword.iskeyword(found.group(1)):
++                    params.append(found.group(1))
++        return "%s%sdef %s(%s):" % (match.group(1), match.group(2) or "", match.group(3),
++                                    ", ".join(params))
++    match = _CLASS_RE.match(line)
++    if match:
++        return "%sclass %s:" % (match.group(1), match.group(2))
++    return None
++
++
++def _with_pass_body(line):
++    """Give a block header such as ``if x:`` an inline ``pass`` body."""
++    stripped = line.rstrip()
++    if stripped.endswith(":"):
++        return stripped + " pass"
++    colon = stripped.rfind(":")
++    if colon >= 0:
++        return stripped[: colon + 1] + " pass"
++    return stripped
+
+### sithlib/presentation.py (created)
+--- sithlib/presentation.py
++++ sithlib/presentation.py
+@@ -0,0 +1,24 @@
++"""Completion wording.
++
++Secret: the vocabulary used for a completion's ``type`` field and the
++format of its human-readable ``description``.
++"""
++
++KEYWORD = "keyword"
++
++
++def describe(name, kind, type_name=None):
++    """Return ``(type, description)`` for a name of the given kind."""
++    if kind == "module":
++        return "module", "module %s" % name
++    if kind == "class":
++        return "class", "class %s" % name
++    if kind == "function":
++        return "function", "def %s(...)" % name
++    if kind == "instance":
++        return "instance", "instance of %s" % (type_name or "object")
++    if kind == "param":
++        return "param", "param %s" % name
++    if kind == KEYWORD:
++        return "keyword", name
++    return "statement", "statement"
+
+### sithlib/ranking.py (created)
+--- sithlib/ranking.py
++++ sithlib/ranking.py
+@@ -0,0 +1,21 @@
++"""Completion ordering.
++
++Secret: the ranking rules — public names, then private, then dunder names,
++then keywords, each group alphabetical ignoring case.
++"""
++
++
++def _group(name, is_keyword):
++    if is_keyword:
++        return 3
++    if name.startswith("__") and name.endswith("__"):
++        return 2
++    if name.startswith("_"):
++        return 1
++    return 0
++
++
++def rank(items, name_of, is_keyword):
++    """Return ``items`` sorted; ``name_of``/``is_keyword`` describe an item."""
++    return sorted(items, key=lambda item: (_group(name_of(item), is_keyword(item)),
++                                           name_of(item).lower(), name_of(item)))
+
+### sithlib/scopes.py (created)
+--- sithlib/scopes.py
++++ sithlib/scopes.py
+@@ -0,0 +1,408 @@
++"""Scope and binding model.
++
++Secret: how name bindings are discovered in a syntax tree, which scope they
++belong to, and the rules (indentation heuristics included) that decide which
++scope encloses a cursor and which bindings are visible from it.
++"""
++
++import ast
++
++from . import parsing
++
++# Binding forms exposed to clients.
++DEF = "def"
++CLASS = "class"
++PARAM = "param"
++ASSIGN = "assign"
++IMPORT = "import"
++IMPORT_FROM = "import_from"
++STAR = "star"
++EXCEPT = "except"
++OTHER = "other"
++
++
++class Binding:
++    """One event that binds a name (or, for STAR, a set of names)."""
++
++    def __init__(self, name, form, line, order, scope, **details):
++        self.name = name
++        self.form = form
++        self.line = line
++        self.order = order
++        self.scope = scope
++        # form-specific details:
++        #   DEF/CLASS: node
++        #   PARAM: function (Scope), index, annotation, star ("", "*", "**")
++        #   ASSIGN: value (expr or None), path (tuple of ints), annotation
++        #   IMPORT: module (dotted name bound), as_name (bool)
++        #   IMPORT_FROM: module, level, attr
++        #   STAR: module, level
++        #   EXCEPT: type_expr
++        self.details = details
++
++
++class Scope:
++    MODULE, FUNCTION, CLASS = "module", "function", "class"
++
++    def __init__(self, kind, node, parent, tree):
++        self.kind = kind
++        self.node = node
++        self.parent = parent
++        self.tree = tree
++        self.children = []
++        self.events = []
++        self.instance_events = []  # self.<attr> assignments in __init__ (classes)
++        self.globals_declared = set()
++
++    @property
++    def name(self):
++        return getattr(self.node, "name", None)
++
++    def class_scope(self):
++        """For a method, the scope of the class that defines it."""
++        if self.kind == Scope.FUNCTION and self.parent is not None \
++                and self.parent.kind == Scope.CLASS:
++            return self.parent
++        return None
++
++    def decorator_names(self):
++        names = []
++        for deco in getattr(self.node, "decorator_list", []):
++            if isinstance(deco, ast.Name):
++                names.append(deco.id)
++            elif isinstance(deco, ast.Attribute):
++                names.append(deco.attr)
++        return names
++
++    def returned_expressions(self):
++        """Return-value expressions of a function (excluding nested scopes)."""
++        found = []
++        for node in _walk_own(self.node.body if self.node is not None else []):
++            if isinstance(node, (ast.Yield, ast.YieldFrom)):
++                return []
++            if isinstance(node, ast.Return) and node.value is not None:
++                found.append(node.value)
++        return found
++
++    def base_expressions(self):
++        return list(getattr(self.node, "bases", []))
++
++    def is_async(self):
++        return isinstance(self.node, ast.AsyncFunctionDef)
++
++    def chain(self):
++        """Scopes searched for names from here: self, enclosing functions, module."""
++        result = [self]
++        scope = self.parent
++        while scope is not None:
++            if scope.kind != Scope.CLASS:
++                result.append(scope)
++            scope = scope.parent
++        return result
++
++    def events_until_line(self, line):
++        return [e for e in self.events if e.line <= line]
++
++    def events_before(self, order):
++        return [e for e in self.events if e.order < order]
++
++    def all_events(self):
++        return list(self.events)
++
++    def instance_attribute_events(self):
++        return list(self.instance_events)
++
++
++class ScopeTree:
++    def __init__(self, text):
++        self._lines = text.split("\n")
++        module = parsing.parse_tolerant(text)
++        self.module = Scope(Scope.MODULE, module, None, self)
++        _Collector(self.module).visit_body(module.body)
++
++    def scope_at(self, line, col):
++        scope = self.module
++        while True:
++            inner = None
++            for child in scope.children:
++                if self._contains(child, line, col):
++                    inner = child
++            if inner is None:
++                return scope
++            scope = inner
++
++    def _contains(self, scope, line, col):
++        node = scope.node
++        header, end = node.lineno, node.end_lineno or node.lineno
++        header_col = node.col_offset
++        body = node.body[0] if node.body else None
++        if line < header:
++            return False
++        if line == header:
++            return body is not None and body.lineno == header and col >= body.col_offset
++        text = self._lines[line - 1] if line - 1 < len(self._lines) else ""
++        before = text[:col]
++        indent = _indent_width(text) if before.strip() else col
++        if indent <= header_col and (line > end or not before.strip()):
++            return False
++        if line <= end:
++            return True
++        for number in range(end + 1, line):
++            other = self._lines[number - 1] if number - 1 < len(self._lines) else ""
++            stripped = other.strip()
++            if stripped and not stripped.startswith("#") and _indent_width(other) <= header_col:
++                return False
++        return True
++
++
++def _indent_width(text):
++    return len(text) - len(text.lstrip())
++
++
++def _walk_own(statements):
++    """Walk nodes in ``statements`` without entering nested scopes."""
++    stack = list(reversed(statements))
++    while stack:
++        node = stack.pop()
++        yield node
++        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
++            continue
++        stack.extend(reversed(list(ast.iter_child_nodes(node))))
++
++
++class _Counter:
++    value = 0
++
++    @classmethod
++    def next(cls):
++        cls.value += 1
++        return cls.value
++
++
++class _Collector(ast.NodeVisitor):
++    def __init__(self, scope):
++        self.scope = scope
++
++    # -- helpers ---------------------------------------------------------
++    def visit_body(self, statements):
++        for statement in statements:
++            self.visit(statement)
++
++    def _target_scope(self, name):
++        if name in self.scope.globals_declared:
++            scope = self.scope
++            while scope.parent is not None:
++                scope = scope.parent
++            return scope
++        return self.scope
++
++    def bind(self, name, form, line, **details):
++        scope = self._target_scope(name) if name else self.scope
++        binding = Binding(name, form, line, _Counter.next(), scope, **details)
++        scope.events.append(binding)
++        return binding
++
++    def bind_target(self, target, line, value, path=(), annotation=None):
++        if isinstance(target, ast.Name):
++            self.bind(target.id, ASSIGN, line, value=value, path=path, annotation=annotation)
++        elif isinstance(target, (ast.Tuple, ast.List)):
++            for index, element in enumerate(target.elts):
++                self.bind_target(element, line, value, path + (index,))
++        elif isinstance(target, ast.Starred):
++            self.bind_target(target.value, line, None)
++        else:
++            self.visit(target)
++
++    def bind_plain(self, target, line):
++        for node in ast.walk(target):
++            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
++                self.bind(node.id, OTHER, line)
++
++    # -- scopes ----------------------------------------------------------
++    def _visit_function(self, node):
++        for deco in node.decorator_list:
++            self.visit(deco)
++        args = node.args
++        for default in args.defaults + [d for d in args.kw_defaults if d is not None]:
++            self.visit(default)
++        self.bind(node.name, DEF, node.lineno, node=node)
++        child = Scope(Scope.FUNCTION, node, self.scope, self.scope.tree)
++        self.scope.children.append(child)
++        positional = args.posonlyargs + args.args
++        index = 0
++        for arg in positional:
++            child_bind(child, arg.arg, node.lineno, function=child, index=index,
++                       annotation=arg.annotation, star="")
++            index += 1
++        if args.vararg:
++            child_bind(child, args.vararg.arg, node.lineno, function=child, index=index,
++                       annotation=None, star="*")
++            index += 1
++        for arg in args.kwonlyargs:
++            child_bind(child, arg.arg, node.lineno, function=child, index=index,
++                       annotation=arg.annotation, star="")
++            index += 1
++        if args.kwarg:
++            child_bind(child, args.kwarg.arg, node.lineno, function=child, index=index,
++                       annotation=None, star="**")
++        collector = _Collector(child)
++        for statement in _walk_own(node.body):
++            if isinstance(statement, ast.Global):
++                child.globals_declared.update(statement.names)
++        collector.visit_body(node.body)
++        parent_class = child.class_scope()
++        if parent_class is not None and node.name == "__init__" and positional:
++            self_name = positional[0].arg
++            _collect_instance_attributes(parent_class, child, node.body, self_name)
++
++    visit_FunctionDef = _visit_function
++    visit_AsyncFunctionDef = _visit_function
++
++    def visit_ClassDef(self, node):
++        for deco in node.decorator_list:
++            self.visit(deco)
++        for base in node.bases:
++            self.visit(base)
++        self.bind(node.name, CLASS, node.lineno, node=node)
++        child = Scope(Scope.CLASS, node, self.scope, self.scope.tree)
++        self.scope.children.append(child)
++        _Collector(child).visit_body(node.body)
++
++    def visit_Lambda(self, node):
++        pass
++
++    def _visit_comprehension(self, node):
++        for generator in node.generators:
++            self.visit(generator.iter)
++            break
++
++    visit_ListComp = _visit_comprehension
++    visit_SetComp = _visit_comprehension
++    visit_DictComp = _visit_comprehension
++    visit_GeneratorExp = _visit_comprehension
++
++    # -- statements ------------------------------------------------------
++    def visit_Global(self, node):
++        self.scope.globals_declared.update(node.names)
++
++    def visit_Assign(self, node):
++        self.visit(node.value)
++        for target in node.targets:
++            self.bind_target(target, node.lineno, node.value)
++
++    def visit_AnnAssign(self, node):
++        if node.value is not None:
++            self.visit(node.value)
++        if isinstance(node.target, ast.Name):
++            self.bind(node.target.id, ASSIGN, node.lineno, value=node.value, path=(),
++                      annotation=node.annotation)
++        else:
++            self.visit(node.target)
++
++    def visit_AugAssign(self, node):
++        self.visit(node.value)
++        if isinstance(node.target, ast.Name):
++            name = node.target.id
++            scope = self._target_scope(name)
++            if not any(e.name == name for e in scope.events):
++                self.bind(name, OTHER, node.lineno)
++
++    def visit_NamedExpr(self, node):
++        self.visit(node.value)
++        if isinstance(node.target, ast.Name):
++            self.bind(node.target.id, ASSIGN, node.lineno, value=node.value, path=(),
++                      annotation=None)
++
++    def _visit_for(self, node):
++        self.visit(node.iter)
++        self.bind_plain(node.target, node.lineno)
++        self.visit_body(node.body)
++        self.visit_body(node.orelse)
++
++    visit_For = _visit_for
++    visit_AsyncFor = _visit_for
++
++    def _visit_with(self, node):
++        for item in node.items:
++            self.visit(item.context_expr)
++            if item.optional_vars is not None:
++                self.bind_plain(item.optional_vars, node.lineno)
++        self.visit_body(node.body)
++
++    visit_With = _visit_with
++    visit_AsyncWith = _visit_with
++
++    def visit_ExceptHandler(self, node):
++        if node.type is not None:
++            self.visit(node.type)
++        if node.name:
++            self.bind(node.name, EXCEPT, node.lineno, type_expr=node.type)
++        self.visit_body(node.body)
++
++    def visit_Import(self, node):
++        for alias in node.names:
++            if alias.asname:
++                self.bind(alias.asname, IMPORT, node.lineno, module=alias.name, as_name=True)
++            else:
++                first = alias.name.split(".")[0]
++                self.bind(first, IMPORT, node.lineno, module=first, as_name=False)
++
++    def visit_ImportFrom(self, node):
++        module = node.module or ""
++        for alias in node.names:
++            if alias.name == "*":
++                self.bind(None, STAR, node.lineno, module=module, level=node.level)
++            else:
++                self.bind(alias.asname or alias.name, IMPORT_FROM, node.lineno,
++                          module=module, level=node.level, attr=alias.name)
++
++    def visit_MatchAs(self, node):
++        if node.pattern is not None:
++            self.visit(node.pattern)
++        if node.name:
++            self.bind(node.name, OTHER, node.lineno)
++
++    def visit_MatchStar(self, node):
++        if node.name:
++            self.bind(node.name, OTHER, node.lineno)
++
++    def visit_MatchMapping(self, node):
++        self.generic_visit(node)
++        if node.rest:
++            self.bind(node.rest, OTHER, node.lineno)
++
++    def visit_TypeAlias(self, node):
++        if isinstance(node.name, ast.Name):
++            self.bind(node.name.id, OTHER, node.lineno)
++
++
++def child_bind(scope, name, line, **details):
++    scope.events.append(Binding(name, PARAM, line, _Counter.next(), scope, **details))
++
++
++def _collect_instance_attributes(class_scope, init_scope, body, self_name):
++    def is_self_attr(target):
++        return (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
++                and target.value.id == self_name)
++
++    def record(target, line, value, path, annotation=None):
++        if is_self_attr(target):
++            class_scope.instance_events.append(Binding(
++                target.attr, ASSIGN, line, _Counter.next(), init_scope,
++                value=value, path=path, annotation=annotation))
++        elif isinstance(target, (ast.Tuple, ast.List)):
++            for index, element in enumerate(target.elts):
++                record(element, line, value, path + (index,))
++        elif isinstance(target, ast.Starred):
++            record(target.value, line, None, ())
++
++    for node in _walk_own(body):
++        if isinstance(node, ast.Assign):
++            for target in node.targets:
++                record(target, node.lineno, node.value, ())
++        elif isinstance(node, ast.AnnAssign):
++            record(node.target, node.lineno, node.value, (), node.annotation)
++        elif isinstance(node, ast.AugAssign) and is_self_attr(node.target):
++            if not any(e.name == node.target.attr for e in class_scope.instance_events):
++                class_scope.instance_events.append(Binding(
++                    node.target.attr, OTHER, node.lineno, _Counter.next(), init_scope))
+
+### sithlib/source.py (created)
+--- sithlib/source.py
++++ sithlib/source.py
+@@ -0,0 +1,54 @@
++"""Source file access.
++
++Secret: how a file on disk is read, decoded and split into lines, and how a
++(1-based line, 0-based column) cursor is validated against it.
++"""
++
++import os
++
++
++class SourceError(Exception):
++    """The file cannot be used as input (missing, undecodable, bad cursor)."""
++
++
++class SourceFile:
++    def __init__(self, path):
++        if not os.path.isfile(path):
++            raise SourceError("not a regular file: %s" % path)
++        try:
++            with open(path, "rb") as handle:
++                raw = handle.read()
++        except OSError as exc:
++            raise SourceError("cannot read %s: %s" % (path, exc))
++        try:
++            text = raw.decode("utf-8")
++        except UnicodeDecodeError:
++            raise SourceError("file is not valid UTF-8: %s" % path)
++        if text.startswith("\ufeff"):
++            text = text[1:]
++        text = text.replace("\r\n", "\n").replace("\r", "\n")
++        self._path = os.path.abspath(path)
++        self._lines = text.split("\n")
++
++    @property
++    def path(self):
++        return self._path
++
++    def text(self):
++        return "\n".join(self._lines)
++
++    def lines(self):
++        """The file's lines without line terminators (a copy)."""
++        return list(self._lines)
++
++    def check_position(self, line, col):
++        if line < 1 or line > len(self._lines):
++            raise SourceError("line %d out of range" % line)
++        if col < 0 or col > len(self._lines[line - 1]):
++            raise SourceError("column %d out of range" % col)
++
++    def text_before(self, line, col):
++        """All text from the start of the file up to the cursor."""
++        head = self._lines[: line - 1]
++        head.append(self._lines[line - 1][:col])
++        return "\n".join(head)
+
+### sithlib/vocabulary.py (created)
+--- sithlib/vocabulary.py
++++ sithlib/vocabulary.py
+@@ -0,0 +1,23 @@
++"""Language vocabulary.
++
++Secret: where the builtin namespace and the keyword list come from (here:
++the running interpreter's ``builtins`` and ``keyword`` modules).
++"""
++
++import builtins
++import keyword
++
++
++def keywords():
++    return list(keyword.kwlist)
++
++
++def builtin_namespace():
++    """The object whose attributes are the builtin names."""
++    return builtins
++
++
++def builtin_names():
++    """Builtin names, excluding those that are reserved keywords."""
++    reserved = set(keyword.kwlist)
++    return [name for name in dir(builtins) if name not in reserved]
+

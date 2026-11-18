@@ -1,0 +1,1 @@
+- [sith infer/goto spec decisions](sith-infer-goto-decisions.md) — conventions chosen where the spec was ambiguous (descriptions, builtins, module lines)

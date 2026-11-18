@@ -1,0 +1,387 @@
+### appctl_core/app.py (modified)
+--- appctl_core/app.py
++++ appctl_core/app.py
+@@ -8,7 +8,7 @@
+ import os
+ import time
+ 
+-from . import (aliases, binding, catalog, config_files, dispatch, file_cache,
++from . import (aliases, binding, catalog, config_files, db, dispatch, file_cache,
+                help_text, logfile, process, remote, rewrites, runtime_config,
+                tokens, values)
+ from .command_tree import CommandTree
+@@ -22,7 +22,7 @@
+     """Everything a command handler may use."""
+ 
+     def __init__(self, command, args, out, config, tree, cwd=None, cache=None,
+-                 launcher=None):
++                 launcher=None, db=None):
+         self.command = command
+         self.args = args
+         self.out = out
+@@ -31,6 +31,7 @@
+         self.cwd = cwd if cwd is not None else os.getcwd()
+         self.cache = cache
+         self.launcher = launcher
++        self.db = db
+ 
+     def run_process(self, command, **kwargs):
+         """Run an external command (see ``process.run``)."""
+@@ -133,8 +134,14 @@
+         self.cache = file_cache.from_env(self.env, self.locations.root_dir,
+                                          warn=out.warning)
+         try:
++            self.db = db.open_database(self.locations.root_dir)
++        except CliError as exc:
++            out.report(exc)
++            return exc.exit_code
++        try:
+             return self.load_and_execute(alias)
+         finally:
++            self.db.close()
+             if not _is_completion(self.argv):
+                 try:
+                     self.cache.clean()
+@@ -213,7 +220,7 @@
+                 config_path=self.locations.global_config_path)
+             result = node.run(CommandContext(node, bound, out, config, tree,
+                                              cwd=self.cwd, cache=self.cache,
+-                                             launcher=launcher))
++                                             launcher=launcher, db=self.db))
+             return int(result or 0)
+         except MissingPositional:
+             out.usage(help_text.usage_line(node))
+
+### appctl_core/db.py (created)
+--- appctl_core/db.py
++++ appctl_core/db.py
+@@ -0,0 +1,211 @@
++"""Persistent state database.
++
++Secret: where the SQLite file lives, the table layout used for key/value
++options and for the migration history, the timestamp format, and how
++connection and schema failures are reported.
++"""
++
++import os
++import sqlite3
++from datetime import datetime, timezone
++
++from . import messages
++from .errors import CliError
++
++_SUBDIR = "db"
++_FILE_NAME = "appctl.sqlite"
++_TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
++_BUSY_TIMEOUT = 30
++
++_SCHEMA = (
++    """CREATE TABLE IF NOT EXISTS options (
++        key TEXT NOT NULL PRIMARY KEY,
++        value TEXT NOT NULL,
++        modified_on TEXT NOT NULL
++    )""",
++    """CREATE TABLE IF NOT EXISTS migrations (
++        migration TEXT NOT NULL,
++        type TEXT NOT NULL,
++        timestamp TEXT NOT NULL,
++        PRIMARY KEY (migration, type)
++    )""",
++)
++
++
++def db_dir(root_dir):
++    return os.path.join(root_dir, _SUBDIR)
++
++
++def db_path(root_dir):
++    """``<root_dir>/db/appctl.sqlite``."""
++    return os.path.join(db_dir(root_dir), _FILE_NAME)
++
++
++def timestamp(now=None):
++    """UTC timestamp in ISO 8601 form, e.g. ``2026-01-02T03:04:05Z``."""
++    now = now or datetime.now(timezone.utc)
++    return now.astimezone(timezone.utc).strftime(_TIMESTAMP)
++
++
++def _details(exc):
++    if isinstance(exc, OSError):
++        return getattr(exc, "strerror", None) or str(exc)
++    return str(exc)
++
++
++def _text(value):
++    if isinstance(value, bytes):
++        return value.decode("utf-8", errors="surrogateescape")
++    if isinstance(value, bool):
++        return "true" if value else "false"
++    return "" if value is None else str(value)
++
++
++class Database:
++    """Key/value options and migration history kept in a SQLite file.
++
++    The file and its tables are created on first access. Failures raise a
++    ``CliError`` carrying the user-facing message.
++    """
++
++    def __init__(self, path):
++        self.path = str(path)
++        self._conn = None
++        self._connect()
++        self._create_tables()
++
++    # --- setup ------------------------------------------------------------
++
++    def _connect(self):
++        try:
++            directory = os.path.dirname(self.path)
++            if directory and not os.path.isdir(directory):
++                os.makedirs(directory, exist_ok=True)
++            self._conn = sqlite3.connect(self.path, timeout=_BUSY_TIMEOUT,
++                                         isolation_level=None)
++        except (OSError, sqlite3.Error) as exc:
++            raise CliError(messages.db_connection_failed(_details(exc))) from exc
++
++    def _create_tables(self):
++        try:
++            with self._transaction():
++                for statement in _SCHEMA:
++                    self._conn.execute(statement)
++        except sqlite3.Error as exc:
++            self.close()
++            raise CliError(messages.db_table_creation_failed(_details(exc))) from exc
++
++    def _transaction(self):
++        return _Transaction(self._conn)
++
++    def close(self):
++        if self._conn is not None:
++            try:
++                self._conn.close()
++            except sqlite3.Error:
++                pass
++            self._conn = None
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *exc_info):
++        self.close()
++
++    # --- options ----------------------------------------------------------
++
++    def get_option(self, key):
++        """The stored string for ``key``, or ``False`` when it is not set."""
++        row = self._conn.execute("SELECT value FROM options WHERE key = ?",
++                                 (_text(key),)).fetchone()
++        return False if row is None else _text(row[0])
++
++    def update_option(self, key, value):
++        """Insert or replace the value stored under ``key``."""
++        with self._transaction():
++            self._conn.execute(
++                "INSERT INTO options (key, value, modified_on) VALUES (?, ?, ?) "
++                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
++                "modified_on = excluded.modified_on",
++                (_text(key), _text(value), timestamp()))
++        return True
++
++    def get_options(self):
++        """Every option as ``{key, value, modified_on}``, ordered by key."""
++        rows = self._conn.execute(
++            "SELECT key, value, modified_on FROM options ORDER BY key")
++        return [{"key": _text(k), "value": _text(v), "modified_on": _text(m)}
++                for k, v, m in rows]
++
++    # --- migrations -------------------------------------------------------
++
++    def get_migrations(self, migration_type=None):
++        """Applied migrations as ``{migration, type, timestamp}``, ordered by
++        type and then name; optionally only those of ``migration_type``."""
++        query = "SELECT migration, type, timestamp FROM migrations"
++        params = ()
++        if migration_type is not None:
++            query += " WHERE type = ?"
++            params = (_text(migration_type),)
++        query += " ORDER BY type, migration"
++        return [{"migration": _text(m), "type": _text(t), "timestamp": _text(s)}
++                for m, t, s in self._conn.execute(query, params)]
++
++    def is_migrated(self, migration, migration_type):
++        row = self._conn.execute(
++            "SELECT 1 FROM migrations WHERE migration = ? AND type = ?",
++            (_text(migration), _text(migration_type))).fetchone()
++        return row is not None
++
++    def add_migration(self, migration, migration_type):
++        """Record ``migration`` as applied now."""
++        with self._transaction():
++            self._conn.execute(
++                "INSERT INTO migrations (migration, type, timestamp) VALUES (?, ?, ?) "
++                "ON CONFLICT(migration, type) DO UPDATE SET timestamp = excluded.timestamp",
++                (_text(migration), _text(migration_type), timestamp()))
++        return True
++
++    def remove_migration(self, migration, migration_type):
++        """Forget ``migration``; ``True`` when a record was removed."""
++        with self._transaction():
++            cursor = self._conn.execute(
++                "DELETE FROM migrations WHERE migration = ? AND type = ?",
++                (_text(migration), _text(migration_type)))
++        return cursor.rowcount > 0
++
++    def run_migration(self, migration, migration_type, up):
++        """Run ``up()`` unless ``migration`` was already applied; record it
++        once ``up`` completes. Return whether it ran."""
++        if self.is_migrated(migration, migration_type):
++            return False
++        up()
++        self.add_migration(migration, migration_type)
++        return True
++
++    def rollback_migration(self, migration, migration_type, down=None):
++        """Run ``down()`` (if given) for an applied migration and remove its
++        record. Return whether it was rolled back."""
++        if not self.is_migrated(migration, migration_type):
++            return False
++        if down is not None:
++            down()
++        self.remove_migration(migration, migration_type)
++        return True
++
++
++class _Transaction:
++    def __init__(self, conn):
++        self._conn = conn
++
++    def __enter__(self):
++        self._conn.execute("BEGIN IMMEDIATE")
++
++    def __exit__(self, exc_type, exc, tb):
++        self._conn.execute("COMMIT" if exc_type is None else "ROLLBACK")
++        return False
++
++
++def open_database(root_dir):
++    """The database below ``root_dir`` (created on first access)."""
++    return Database(db_path(root_dir))
+
+### appctl_core/messages.py (modified)
+--- appctl_core/messages.py
++++ appctl_core/messages.py
+@@ -175,3 +175,11 @@
+ 
+ def archive_extracted(archive, destination):
+     return f"Extracted '{archive}' to '{destination}'."
++
++
++def db_connection_failed(details):
++    return f"Unable to initialize connection to {_PROGRAM} sqlite database: {details}"
++
++
++def db_table_creation_failed(details):
++    return f"Encountered Error while creating table: {details}"
+
+### tests/test_db.py (created)
+--- tests/test_db.py
++++ tests/test_db.py
+@@ -0,0 +1,96 @@
++import io
++import os
++import re
++import sqlite3
++
++import pytest
++
++from appctl_core import db
++from appctl_core.app import run
++from appctl_core.errors import CliError
++
++IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
++
++
++def call(tmp_path, *argv):
++    out, err = io.StringIO(), io.StringIO()
++    env = {"APPCTL_ROOT_DIR": str(tmp_path / "root"), "PATH": os.environ.get("PATH", "")}
++    code = run(list(argv), env, out, err, cwd=str(tmp_path), stdin=io.StringIO(""))
++    return code, out.getvalue(), err.getvalue()
++
++
++def test_store_is_created_on_first_invocation(tmp_path):
++    assert call(tmp_path, "cli", "version")[:2] == (0, "appctl 1.0.0\n")
++    path = tmp_path / "root" / "db" / "appctl.sqlite"
++    assert path.is_file()
++    tables = {r[0] for r in sqlite3.connect(path).execute(
++        "SELECT name FROM sqlite_master WHERE type = 'table'")}
++    assert {"options", "migrations"} <= tables
++
++
++def test_options_persist_and_upsert(tmp_path):
++    with db.open_database(str(tmp_path)) as store:
++        assert store.get_option("missing") is False
++        store.update_option("k", 42)
++        assert store.get_option("k") == "42"
++        store.update_option("k", "0123")
++        assert store.get_option("k") == "0123"
++    with db.open_database(str(tmp_path)) as store:
++        assert store.get_option("k") == "0123"
++        [row] = store.get_options()
++        assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", row["modified_on"])
++
++
++def test_untrusted_values_are_stored_verbatim(tmp_path):
++    with db.open_database(str(tmp_path)) as store:
++        nasty = "x'); DROP TABLE options; --"
++        store.update_option(nasty, nasty)
++        assert store.get_option(nasty) == nasty
++        assert store.get_option("' OR '1'='1") is False
++
++
++def test_migration_history(tmp_path):
++    ran = []
++    with db.open_database(str(tmp_path)) as store:
++        assert store.run_migration("b", "db", lambda: ran.append("b"))
++        assert store.run_migration("a", "db", lambda: ran.append("a"))
++        assert store.run_migration("z", "container", lambda: ran.append("z"))
++        assert not store.run_migration("a", "db", lambda: ran.append("again"))
++    with db.open_database(str(tmp_path)) as store:
++        names = [(m["type"], m["migration"]) for m in store.get_migrations()]
++        assert names == [("container", "z"), ("db", "a"), ("db", "b")]
++        assert [m["migration"] for m in store.get_migrations("db")] == ["a", "b"]
++
++        def fail():
++            raise RuntimeError("boom")
++        with pytest.raises(RuntimeError):
++            store.run_migration("c", "db", fail)
++        assert not store.is_migrated("c", "db")
++        assert store.rollback_migration("a", "db", lambda: ran.append("down"))
++        assert not store.is_migrated("a", "db")
++        assert not store.rollback_migration("a", "db")
++    assert ran == ["b", "a", "z", "down"]
++
++
++def test_connection_failure(tmp_path):
++    (tmp_path / "root").mkdir()
++    (tmp_path / "root" / "db").write_text("not a directory")
++    code, out, err = call(tmp_path, "cli", "version")
++    assert (code, out) == (1, "")
++    assert err.startswith("Error: Unable to initialize connection to appctl sqlite database: ")
++    assert err.count("\n") == 1
++
++
++def test_connection_failure_when_file_is_a_directory(tmp_path):
++    (tmp_path / "root" / "db" / "appctl.sqlite").mkdir(parents=True)
++    with pytest.raises(CliError, match="^Unable to initialize connection to appctl sqlite"):
++        db.open_database(str(tmp_path / "root"))
++
++
++def test_table_creation_failure(tmp_path):
++    path = tmp_path / "root" / "db" / "appctl.sqlite"
++    path.parent.mkdir(parents=True)
++    path.write_bytes(b"this is definitely not a sqlite database file" * 10)
++    code, out, err = call(tmp_path, "cli", "version")
++    assert (code, out) == (1, "")
++    assert err.startswith("Error: Encountered Error while creating table: ")
+

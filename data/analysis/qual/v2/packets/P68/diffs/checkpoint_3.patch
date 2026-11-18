@@ -1,0 +1,232 @@
+### eve_industry/cli.py (modified)
+--- eve_industry/cli.py
++++ eve_industry/cli.py
+@@ -9,9 +9,33 @@
+ from .invention import InventionData, InventionError, InventionPlanner, render_invention
+ from .inventory import Inventory
+ from .item_info import describe
+-from .recipe import RecipeError, RecipeResolver
++from .recipe import MAX_MATERIAL_EFFICIENCY, MAX_TIME_EFFICIENCY, RecipeError, RecipeResolver
+ from .report import render
+ from .sde_loader import SDEFileError
++
++
++def _material_efficiency(value: str) -> int:
++    try:
++        me = int(value)
++    except ValueError:
++        raise argparse.ArgumentTypeError(f"invalid integer: {value!r}")
++    if not 0 <= me <= MAX_MATERIAL_EFFICIENCY:
++        raise argparse.ArgumentTypeError(
++            f"must be an integer in [0,{MAX_MATERIAL_EFFICIENCY}], got {me}"
++        )
++    return me
++
++
++def _time_efficiency(value: str) -> int:
++    try:
++        te = int(value)
++    except ValueError:
++        raise argparse.ArgumentTypeError(f"invalid integer: {value!r}")
++    if not 0 <= te <= MAX_TIME_EFFICIENCY or te % 2:
++        raise argparse.ArgumentTypeError(
++            f"must be an even integer in [0,{MAX_TIME_EFFICIENCY}], got {te}"
++        )
++    return te
+ 
+ 
+ def build_parser() -> argparse.ArgumentParser:
+@@ -23,6 +47,14 @@
+     recipe = sub.add_parser("recipe", help="Show the recipe for a product or blueprint")
+     recipe.add_argument("name", nargs="+", help="Exact typeName of a product or blueprint")
+     recipe.add_argument("--sde", required=True, help="Path to the SDE directory")
++    recipe.add_argument("--material-efficiency", "-me", dest="me", type=_material_efficiency,
++                        default=0, metavar="ME",
++                        help="Blueprint material efficiency, integer in [0,10] (default 0)")
++    recipe.add_argument("--time-efficiency", "-te", dest="te", type=_time_efficiency,
++                        default=0, metavar="TE",
++                        help="Blueprint time efficiency, even integer in [0,20] (default 0)")
++    recipe.add_argument("--display-waste", "-waste", dest="waste", action="store_true",
++                        help="Show material wasted compared to ME 10")
+     invention = sub.add_parser("invention", help="Plan invention / reverse engineering for a product")
+     invention.add_argument("name", nargs="+", help="Exact typeName of a Tech II/III product or blueprint")
+     invention.add_argument("--sde", required=True, help="Path to the SDE directory")
+@@ -31,12 +63,12 @@
+     return parser
+ 
+ 
+-def run_recipe(name: str, sde_dir: Path) -> str:
++def run_recipe(name: str, sde_dir: Path, me: int = 0, te: int = 0, waste: bool = False) -> str:
+     inventory = Inventory(sde_dir)
+     published = {t.type_id for t in inventory.types.values() if t.published}
+     industry = IndustryData(sde_dir, published)
+-    recipe = RecipeResolver(inventory, industry).resolve(name)
+-    return render(describe(inventory, recipe.product), recipe)
++    recipe = RecipeResolver(inventory, industry).resolve(name, me=me, te=te)
++    return render(describe(inventory, recipe.product), recipe, show_waste=waste)
+ 
+ 
+ def run_invention(name: str, sde_dir: Path, skill: int) -> str:
+@@ -57,7 +89,7 @@
+         return 2
+     try:
+         if args.command == "recipe":
+-            print(run_recipe(name, sde_dir))
++            print(run_recipe(name, sde_dir, args.me, args.te, args.waste))
+         elif args.command == "invention":
+             print(run_invention(name, sde_dir, args.skill))
+         else:
+
+### eve_industry/models.py (modified)
+--- eve_industry/models.py
++++ eve_industry/models.py
+@@ -34,6 +34,7 @@
+     name: str
+     quantity: int
+     buildable: bool
++    waste: int = 0
+ 
+ 
+ @dataclass
+
+### eve_industry/recipe.py (modified)
+--- eve_industry/recipe.py
++++ eve_industry/recipe.py
+@@ -3,13 +3,29 @@
+ import math
+ from typing import Optional
+ 
++from . import constants as C
+ from .industry_data import ActivityKey, IndustryData
+ from .inventory import Inventory
+ from .models import InvType, Material, Recipe
+ 
+ 
++MAX_MATERIAL_EFFICIENCY = 10
++MAX_TIME_EFFICIENCY = 20
++
++
+ class RecipeError(Exception):
+     """Raised when no recipe can be resolved for the requested name."""
++
++
++def material_amount(per_run: int, me: int, runs: int = 1) -> int:
++    """ceil(max(1, per_run * (1 - ME/100) * runs)), computed exactly in integers."""
++    scaled = per_run * (100 - me) * runs
++    return max(1, -(-scaled // 100))
++
++
++def job_seconds(base_seconds: int, te: int) -> int:
++    """Job duration in seconds after applying a Time Efficiency percentage."""
++    return -(-base_seconds * (100 - te) // 100)
+ 
+ 
+ class RecipeResolver:
+@@ -17,7 +33,7 @@
+         self.inventory = inventory
+         self.industry = industry
+ 
+-    def resolve(self, name: str) -> Recipe:
++    def resolve(self, name: str, me: int = 0, te: int = 0) -> Recipe:
+         candidates = self.inventory.published_by_name(name)
+         if not candidates:
+             raise RecipeError(f"No published item named '{name}' found in the SDE")
+@@ -26,15 +42,17 @@
+         for item in candidates:
+             key = self.industry.blueprint_activity(item.type_id)
+             if key is not None:
+-                return self._build(key)
++                return self._build(key, me=me, te=te)
+         for item in candidates:
+             sources = self.industry.sources_of(item.type_id)
+             if sources:
+-                return self._build(sources[0], product_id=item.type_id)
++                return self._build(sources[0], product_id=item.type_id, me=me, te=te)
+ 
+         raise RecipeError(f"'{name}' has no manufacturing or reaction recipe")
+ 
+-    def _build(self, key: ActivityKey, product_id: Optional[int] = None) -> Recipe:
++    def _build(
++        self, key: ActivityKey, product_id: Optional[int] = None, me: int = 0, te: int = 0
++    ) -> Recipe:
+         blueprint_id, activity_id = key
+         products = self.industry.products[key]
+         if product_id is None:
+@@ -46,15 +64,24 @@
+         blueprint = self._require_type(blueprint_id)
+         seconds = self.industry.times.get(key, 0)
+ 
+-        materials = [
+-            Material(
+-                type_id=material_id,
+-                name=self.inventory.type_name(material_id),
+-                quantity=qty,
+-                buildable=self.industry.is_buildable(material_id),
++        # Material and time efficiency only apply to manufacturing jobs.
++        if activity_id != C.MANUFACTURING:
++            me = te = 0
++        seconds = job_seconds(seconds, te)
++
++        best_me = MAX_MATERIAL_EFFICIENCY if activity_id == C.MANUFACTURING else 0
++        materials = []
++        for material_id, qty in self.industry.materials.get(key, {}).items():
++            needed = material_amount(qty, me)
++            materials.append(
++                Material(
++                    type_id=material_id,
++                    name=self.inventory.type_name(material_id),
++                    quantity=needed,
++                    buildable=self.industry.is_buildable(material_id),
++                    waste=needed - material_amount(qty, best_me),
++                )
+             )
+-            for material_id, qty in self.industry.materials.get(key, {}).items()
+-        ]
+         materials.sort(key=lambda m: (m.name.lower(), m.name, m.type_id))
+ 
+         return Recipe(
+
+### eve_industry/report.py (modified)
+--- eve_industry/report.py
++++ eve_industry/report.py
+@@ -5,7 +5,7 @@
+ from .models import ItemInfo, Recipe
+ 
+ 
+-def render(info: ItemInfo, recipe: Recipe) -> str:
++def render(info: ItemInfo, recipe: Recipe, show_waste: bool = False) -> str:
+     market = " > ".join(info.market_group_path) if info.market_group_path else "None"
+     lines: List[str] = [
+         f"ITEM: {info.name} ({info.type_id})",
+@@ -18,10 +18,15 @@
+         f"Activity: {recipe.activity_name}",
+         f"Output Quantity: {recipe.output_quantity}",
+         f"Run Time: {recipe.run_time_minutes}",
+-        "| Item | Quantity | Buildable |",
+-        "|:-:|:---:|---:|",
+     ]
++    if show_waste:
++        lines += ["| Item | Quantity | Waste | Buildable |", "|:-:|:---:|:-:|---:|"]
++    else:
++        lines += ["| Item | Quantity | Buildable |", "|:-:|:---:|---:|"]
+     for material in recipe.materials:
+         buildable = "Yes" if material.buildable else "No"
+-        lines.append(f"| {material.name} | {material.quantity} | {buildable} |")
++        if show_waste:
++            lines.append(f"| {material.name} | {material.quantity} | {material.waste} | {buildable} |")
++        else:
++            lines.append(f"| {material.name} | {material.quantity} | {buildable} |")
+     return "\n".join(lines)
+
+### industry.py (modified)
+--- industry.py
++++ industry.py
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env python3
+ """Entry point:
+     python industry.py recipe <Product or Blueprint name> --sde <SDE directory>
++        [--material-efficiency/-me <0-10>] [--time-efficiency/-te <even 0-20>] [--display-waste/-waste]
+     python industry.py invention <Product or Blueprint name> --sde <SDE directory> [--skill <1-5>]
+ """
+ 
+

@@ -1,0 +1,121 @@
+From 8ed22d4df6a1ad12062c981a27549a287e332a63 Mon Sep 17 00:00:00 2001
+From: anon <anon@example.com>
+Date: Mon, 9 Nov 2026 13:38:27 -0500
+Subject: [PATCH 4/5] Parnas P3b: fresh agent container per checkpoint; delete
+ agent-written docs
+
+Reset now removes the agent container (sleep-infinity runtime) and starts a new one
+from the same image and mounts, so /tmp, ~/.claude.json, ~/.cache, ~/.local do not
+carry over. Records old/new container ids and non-mounted listings. Also deletes any
+.md/.rst the agent wrote (task-provided files kept, by pre-checkpoint-1 listing).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/slop_code/agent_runner/runner.py | 70 ++++++++++++++++++++++++----
+ 1 file changed, 60 insertions(+), 10 deletions(-)
+
+diff --git a/src/slop_code/agent_runner/runner.py b/src/slop_code/agent_runner/runner.py
+index 342f90c..77069e9 100644
+--- a/src/slop_code/agent_runner/runner.py
++++ b/src/slop_code/agent_runner/runner.py
+@@ -669,6 +669,9 @@ class AgentRunner:
+                 checkpoint=checkpoint.name,
+             )
+             self.agent.setup(session=self.session)
++            # Parnas pilot P3b: remember what the workspace held before the agent ran
++            # (static assets), so the reset can tell agent-written docs from task files.
++            self._parnas_initial_ws = set(self._parnas_listing(Path(self.session.working_dir)))
+             return
+ 
+         logger.info(
+@@ -688,18 +691,26 @@ class AgentRunner:
+         ws = Path(self.session.working_dir)
+         home = getattr(self.agent, "_trace_dir", None)
+ 
+-        def listing(root: Path | None) -> list[str]:
+-            if root is None or not root.exists():
+-                return []
+-            out = []
+-            for dp, dns, fns in os.walk(root):
+-                dns[:] = [d for d in dns if d not in (".venv", "__pycache__", "node_modules")]
+-                for n in fns:
+-                    out.append(str((Path(dp) / n).relative_to(root)))
+-            return sorted(out)
++        listing = self._parnas_listing
++        initial = getattr(self, "_parnas_initial_ws", set())
++
++        # P3b: the agent's container persisted across checkpoints (sleep infinity +
++        # docker exec), so /tmp, ~/.claude.json, ~/.cache, ~/.local survived. Record
++        # what was there, then remove the container; the next exec creates a fresh one
++        # from the same image with the same mounts (workspace, ~/.claude, ro creds).
++        container_record = self._parnas_respawn_container()
+ 
+         before = {"workspace": listing(ws), "claude_home": listing(home)}
+         removed: list[str] = []
++        # P3b: any agent-written prose doc (not present before checkpoint 1) is a
++        # design/notes carrier; delete it. Task-provided files are kept.
++        for p in sorted(ws.rglob("*")):
++            if not p.is_file() or {".venv", "node_modules"} & set(p.parts):
++                continue
++            rel = str(p.relative_to(ws))
++            if p.suffix.lower() in (".md", ".rst", ".markdown") and rel not in initial:
++                p.unlink()
++                removed.append(rel)
+         for name in ("DESIGN.md", "CLAUDE.md", "AGENTS.md", "CLAUDE.local.md"):
+             for p in ws.rglob(name):
+                 if ".venv" in p.parts:
+@@ -717,11 +728,50 @@ class AgentRunner:
+                     removed.append("~/.claude/" + p.name)
+         after = {"workspace": listing(ws), "claude_home": listing(home)}
+         record = {"checkpoint": checkpoint.name, "removed": removed,
+-                  "before": before, "after": after}
++                  "before": before, "after": after,
++                  "initial_workspace": sorted(initial), "container": container_record}
+         (self.output_path / f"parnas_reset_{checkpoint.name}.json").write_text(
+             json.dumps(record, indent=2))
+         logger.info("parnas.reset_done", checkpoint=checkpoint.name, removed=removed)
+ 
++    @staticmethod
++    def _parnas_listing(root: Path | None) -> list[str]:
++        if root is None or not Path(root).exists():
++            return []
++        out = []
++        for dp, dns, fns in os.walk(root):
++            dns[:] = [d for d in dns if d not in (".venv", "__pycache__", "node_modules")]
++            for n in fns:
++                out.append(str((Path(dp) / n).relative_to(root)))
++        return sorted(out)
++
++    def _parnas_respawn_container(self) -> dict[str, Any]:
++        """P3b: list the old container's non-mounted state, remove it, start a new one
++        and list the same places, so the record shows nothing carried over."""
++        rt = getattr(self.agent, "_runtime", None)
++        if rt is None or not hasattr(rt, "_ensure_container_running"):
++            return {"respawned": False, "reason": "no docker streaming runtime"}
++        probe = ("cd / && for d in /tmp \"$HOME\"; do echo \"## $d\"; "
++                 "find \"$d\" -xdev -mindepth 1 -maxdepth 3 "
++                 "-not -path \"$HOME/.claude\" -not -path \"$HOME/.claude/*\" "
++                 "2>/dev/null | sort; done")
++
++        def snap(c) -> dict[str, Any]:
++            try:
++                r = c.exec_run(["sh", "-c", probe], environment={"HOME": "/tmp/agent_home"})
++                return {"id": c.id[:12], "listing": r.output.decode(errors="replace").splitlines()}
++            except Exception as e:  # noqa: BLE001
++                return {"id": getattr(c, "id", "?")[:12], "error": repr(e)}
++
++        old = rt._container
++        old_rec = snap(old) if old is not None else {"id": None}
++        rt.kill()
++        new = rt._ensure_container_running()
++        new_rec = snap(new)
++        if new_rec.get("id") == old_rec.get("id"):
++            raise RuntimeError("parnas reset: container was not replaced")
++        return {"respawned": True, "old": old_rec, "new": new_rec}
++
+     def finish(self) -> dict[str, Any]:
+         """Cleanup agent, stop monitoring, save final results."""
+         logger.debug("Finishing agent run", problem=self.run_spec.problem.name)
+-- 
+2.43.0
+

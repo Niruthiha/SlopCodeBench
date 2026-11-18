@@ -1,0 +1,1391 @@
+### mtl_engine/ast_nodes.py (modified)
+--- mtl_engine/ast_nodes.py
++++ mtl_engine/ast_nodes.py
+@@ -234,3 +234,32 @@
+     @property
+     def group_columns(self):
+         return self.group_by.columns if self.group_by else []
++
++
++def expr_text(expr):
++    """Compact source-like rendering of an expression (used in metadata)."""
++    if isinstance(expr, Literal):
++        if isinstance(expr.value, bool):
++            return "true" if expr.value else "false"
++        if isinstance(expr.value, str):
++            return '"' + expr.value + '"'
++        return repr(expr.value)
++    if isinstance(expr, ColumnRef):
++        return expr.name if expr.qualifier is None else f"{expr.qualifier}.{expr.name}"
++    if isinstance(expr, Unary):
++        return expr.op + _operand_text(expr.operand)
++    if isinstance(expr, Binary):
++        sep = "" if expr.op == "==" else " "
++        return f"{_operand_text(expr.left)}{sep}{expr.op}{sep}{_operand_text(expr.right)}"
++    if isinstance(expr, InExpr):
++        return f"{_operand_text(expr.needle)} in {_operand_text(expr.haystack)}"
++    if isinstance(expr, Cast):
++        return f"cast({expr_text(expr.operand)} as {expr.target})"
++    if isinstance(expr, Call):
++        return f"{expr.name}({', '.join(expr_text(a) for a in expr.args)})"
++    return "?"
++
++
++def _operand_text(expr):
++    text = expr_text(expr)
++    return f"({text})" if isinstance(expr, (Binary, InExpr)) else text
+
+### mtl_engine/cli.py (modified)
+--- mtl_engine/cli.py
++++ mtl_engine/cli.py
+@@ -2,11 +2,14 @@
+ import argparse
+ import sys
+ 
+-from . import casts, dtypes, ingest, inputs, joins, loader, output, params, pipeline
++from . import (casts, dtypes, ingest, inputs, joins, loader, metadata, output, params, pipeline,
++               udfs, versions)
+ from .badrecords import BadRecordSink
+-from .errors import ConfigError, DSLSyntaxError, IOFailure, MTLError, RuntimeFailure, TypeCheckError
++from .errors import (ArtifactError, ConfigError, DSLSyntaxError, IOFailure, MTLError,
++                     RuntimeFailure, TypeCheckError)
+ from .parser import parse_program
+ from .schema import resolve_all
++from .state import DEFAULT_SOURCE, GRANULARITIES, MTIME_SIZE, SCHEMES, RunState, sha256_hex
+ from .timeutil import TimestampParser, resolve_timezone
+ from .typecheck import check_program, check_schema_calcs
+ 
+@@ -44,47 +47,144 @@
+                         help="comma-separated null markers (default: empty, null, NULL, NaN)")
+     parser.add_argument("--bad-records-out", dest="bad_records_out", default=None,
+                         help="write rejected rows as JSON Lines to this file")
++    parser.add_argument("--meta-out", dest="meta_out", default=None,
++                        help="write run metadata (provenance, stats, lineage) as JSON")
++    parser.add_argument("--state-dir", dest="state_dir", default=None,
++                        help="directory holding the resumable run state")
++    parser.add_argument("--resume", action="store_true",
++                        help="resume from the state in --state-dir, skipping completed files")
++    parser.add_argument("--fingerprint", default=MTIME_SIZE, type=str.lower, choices=SCHEMES,
++                        help="how input files are identified in the state (default: mtime_size)")
++    parser.add_argument("--checkpoint-granularity", dest="checkpoint_granularity",
++                        default="file", type=str.lower, choices=GRANULARITIES,
++                        help="checkpoint unit (files are always the committed unit)")
++    parser.add_argument("--udf", action="append", nargs="+", default=[], metavar="PATH",
++                        help="Python file registering user-defined functions (repeatable)")
+     return parser
++
++
++class _Run:
++    """What one invocation read and produced, shared by both execution modes."""
++
++    def __init__(self, args):
++        self.args = args
++        self.dsl_sha256 = None
++        self.config_sha256 = None
++        self.version = None
++        self.state = None
++        self.param_values = {}
++
++
++def _read_bytes(path, what):
++    try:
++        if path == "-":
++            return sys.stdin.buffer.read()
++        with open(path, "rb") as fh:
++            return fh.read()
++    except OSError as exc:
++        raise IOFailure(f"cannot read {what} '{path}': {exc}") from exc
++
++
++def _load_program(ctx):
++    """Read the DSL, check its version header, parse it and gate its constructs."""
++    data = _read_bytes(ctx.args.dsl, "DSL")
++    ctx.dsl_sha256 = sha256_hex(data)
++    try:
++        text = data.decode("utf-8-sig")
++    except UnicodeDecodeError as exc:
++        raise IOFailure(f"cannot read '{ctx.args.dsl}': {exc}") from exc
++    ctx.version, text = versions.split_header(text)
++    program = parse_program(text)
++    versions.check_features(program, ctx.version)
++    return program
++
++
++def _open_state(ctx, program):
++    args = ctx.args
++    ctx.state = RunState(program.name or DEFAULT_SOURCE, versions.show(ctx.version),
++                         ctx.dsl_sha256, ctx.config_sha256, args.fingerprint,
++                         args.state_dir, args.resume)
++    return ctx.state
++
++
++def _observe(state, source, records):
++    """Pass (Origin, row) records through, tracking the source's event-time watermark."""
++    latest = []
++    for record in records:
++        latest.append(record[1].get(loader.EVENT_TIME))
++        if len(latest) >= 4096:
++            state.observe_timestamps(source, latest)
++            latest = []
++        yield record
++    state.observe_timestamps(source, latest)
++
++
++def _finish(ctx, program, sink, text, document):
++    """Write the results, then the metadata, and commit the state last."""
++    args = ctx.args
++    ctx.state.finish()
++    sink.write(args.bad_records_out)
++    _write(text, args.out)
++    if args.meta_out is not None:
++        meta = metadata.build(ctx.state, program, args, ctx.param_values,
++                              loader.parse_null_markers(args.nulls), sink, document)
++        _write(metadata.serialize(meta), args.meta_out)
++    ctx.state.commit()
++    warning = versions.older_minor_warning(ctx.version)
++    if warning:
++        sys.stderr.write(warning + "\n")
+ 
+ 
+ def run(argv):
+     """Execute the CLI stages and write the JSON result."""
+     args = build_arg_parser().parse_args(argv)
++    if args.resume and args.state_dir is None:
++        raise ArtifactError("--resume requires --state-dir")
+     patterns = [p for group in args.input + args.csv for p in group]
+-    if args.ingest_config is not None or not patterns:
+-        return _run_ingest(args)
+     if args.dsl == "-" and inputs.STDIN in patterns:
+         raise IOFailure("--input and --dsl cannot both read from STDIN")
++    udfs.load([p for group in args.udf for p in group])
++    run_ctx = _Run(args)
++    program = _load_program(run_ctx)
++    if args.ingest_config is not None or not patterns:
++        return _run_ingest(run_ctx, program)
+     ts_parser, cli_params = _setup(args)
+     ctx = loader.LoadContext(ts_parser, loader.parse_null_markers(args.nulls), args.strict)
+     sink = BadRecordSink(args.strict)
+ 
+-    program = parse_program(loader.read_text(args.dsl))
+     if program.sources is not None:
+         raise ConfigError("--ingest-config is required for pipelines with a sources block")
+     try:
++        files = inputs.resolve(patterns, args.recursive, args.format)
+         if program.schema_name is None:
+             # Bare statements: the input columns are the typing environment.
+-            sources = loader.open_sources(inputs.resolve(patterns, args.recursive, args.format))
++            state = _open_state(run_ctx, program)
++            sources = [state.open(DEFAULT_SOURCE, f) for f in files]
+             fields, lenient = loader.infer_fields(sources, ctx)
+             row_schema = check_program(program, fields)
+             records = loader.iter_rows(sources, fields, ctx, sink, lenient)
++            records = _observe(state, DEFAULT_SOURCE, records)
+             buckets = pipeline.run(program, records, row_schema=row_schema, sink=sink)
+         else:
+             params.check_provided(program.params, cli_params, args.strict)
+             schemas = resolve_all(program.schemas)
+             param_values = params.resolve(program.params, cli_params, ts_parser)
++            run_ctx.param_values = param_values
+             for resolved in schemas.values():
+                 check_schema_calcs(resolved, param_values)
+             used = schemas[program.schema_name]
+             row_schema = check_program(program, used.types, param_values)
+-            sources = loader.open_sources(inputs.resolve(patterns, args.recursive, args.format))
++            state = _open_state(run_ctx, program)
++            sources = [state.open(DEFAULT_SOURCE, f) for f in files]
+             records = loader.iter_rows(sources, used.physical, ctx, sink)
++            records = _observe(state, DEFAULT_SOURCE, records)
+             buckets = pipeline.run(program, records, used.calc_order, row_schema, sink)
+-        text = output.serialize(output.build_document(program, buckets))
+-    finally:
++        document = output.build_document(program, buckets)
++        text = output.serialize(document)
++    except BaseException:
+         sink.write(args.bad_records_out)
+-    _write(text, args.out)
++        raise
++    _finish(run_ctx, program, sink, text, document)
+ 
+ 
+ def _setup(args):
+@@ -98,10 +198,10 @@
+     return ts_parser, cli_params
+ 
+ 
+-def _run_ingest(args):
++def _run_ingest(run_ctx, program):
+     """Multi-source mode: sources declared by --ingest-config, combined by joins."""
++    args = run_ctx.args
+     ts_parser, cli_params = _setup(args)
+-    program = parse_program(loader.read_text(args.dsl))
+     if args.ingest_config is None:
+         if program.sources is not None:
+             raise ConfigError("--ingest-config is required for pipelines with a sources block")
+@@ -109,12 +209,14 @@
+     if program.schema_name is None:
+         raise DSLSyntaxError("--ingest-config requires a pipeline block using a schema")
+     config = ingest.load_config(args.ingest_config, args.recursive, args.format)
++    run_ctx.config_sha256 = sha256_hex(_read_bytes(args.ingest_config, "ingest config"))
+     cli_nulls = loader.parse_null_markers(args.nulls)
+     sink = BadRecordSink(args.strict)
+ 
+     params.check_provided(program.params, cli_params, args.strict)
+     schemas = resolve_all(program.schemas)
+     param_values = params.resolve(program.params, cli_params, ts_parser)
++    run_ctx.param_values = param_values
+     for resolved in schemas.values():
+         check_schema_calcs(resolved, param_values)
+     ingest.bind_schemas(config, schemas, program.schema_name, ts_parser)
+@@ -137,9 +239,10 @@
+     row_schema = check_program(program, working, param_values)
+ 
+     files = ingest.assign_files(config, set(used))
++    state = _open_state(run_ctx, program)
+     try:
+         loaded = {name: _load_source(config.sources[name], files[name], ts_parser, cli_nulls,
+-                                     args.strict, sink) for name in used}
++                                     args.strict, sink, state) for name in used}
+         if program.sources is not None:
+             records = joins.run(program, {alias: loaded[name]
+                                           for alias, name in alias_names.items()}, sink)
+@@ -147,10 +250,12 @@
+             records = [(origin, {f: pipeline.coerce(row.get(f), t) for f, t in working.items()})
+                        for name in used for origin, row in loaded[name]]
+         buckets = pipeline.run(program, records, (), row_schema, sink)
+-        text = output.serialize(output.build_document(program, buckets))
+-    finally:
++        document = output.build_document(program, buckets)
++        text = output.serialize(document)
++    except BaseException:
+         sink.write(args.bad_records_out)
+-    _write(text, args.out)
++        raise
++    _finish(run_ctx, program, sink, text, document)
+ 
+ 
+ def _check_union(config, working):
+@@ -163,7 +268,7 @@
+                                      f"but the pipeline schema requires {want}")
+ 
+ 
+-def _load_source(source, files, ts_parser, cli_nulls, strict, sink):
++def _load_source(source, files, ts_parser, cli_nulls, strict, sink, state):
+     """Read, map and validate every file of one ingest source; returns (Origin, row) pairs
+     with the schema's calculated fields evaluated."""
+     tz = source.tz or ts_parser.default_tz
+@@ -185,8 +290,9 @@
+ 
+     rows = []
+     for input_file in files:
+-        opened = loader.open_source(input_file)
++        opened = state.open(source.name, input_file)
+         rows.extend(loader.iter_mapped_rows(opened, plan, ctx, sink))
++    state.observe_timestamps(source.name, (row.get(loader.EVENT_TIME) for _, row in rows))
+     calcs = [(f.name, f.expr, f.type) for f in resolved.calc_order]
+     if calcs:
+         rows = pipeline.transform_rows(rows, calcs, (), sink)
+
+### mtl_engine/errors.py (modified)
+--- mtl_engine/errors.py
++++ mtl_engine/errors.py
+@@ -37,3 +37,9 @@
+ class ConfigError(MTLError):
+     kind = "config_error"
+     exit_code = 5
++
++
++class ArtifactError(MTLError):
++    """Version/resume errors: unsupported DSL versions and unusable resume state."""
++    kind = "artifact_error"
++    exit_code = 6
+
+### mtl_engine/evaluator.py (modified)
+--- mtl_engine/evaluator.py
++++ mtl_engine/evaluator.py
+@@ -6,7 +6,7 @@
+ import math
+ import operator
+ 
+-from . import casts, dtypes, functions
++from . import casts, dtypes, functions, udfs
+ from .ast_nodes import Binary, Call, Cast, ColumnRef, InExpr, Literal, Unary
+ from .errors import RuntimeFailure
+ 
+@@ -55,6 +55,9 @@
+     if name in functions.WINDOW_FUNCTIONS:
+         return _eval_offset(expr, row, frame)
+     args = [evaluate(a, row, frame) for a in expr.args]
++    udf = udfs.REGISTRY.get(name)
++    if udf is not None:
++        return udfs.call(udf, args, expr.line)
+     return functions.call(name, args)
+ 
+ 
+
+### mtl_engine/joins.py (modified)
+--- mtl_engine/joins.py
++++ mtl_engine/joins.py
+@@ -8,7 +8,7 @@
+ 
+ from . import badrecords as br
+ from . import dtypes
+-from .ast_nodes import Binary, ColumnRef, Projection
++from .ast_nodes import Binary, ColumnRef, Projection, expr_text
+ from .badrecords import BadRecord
+ from .errors import DSLSyntaxError, RuntimeFailure, TypeCheckError
+ from .evaluator import evaluate
+@@ -124,12 +124,15 @@
+         for col, t in side.relation.types.items():
+             env[side.tag + _SEP + col] = t
+ 
++    written = {id(node): expr_text(node) for node in _conjuncts(join.on)}
+     _resolve(join.on, sides, join.line)
+     check_names(join.on, env, params, line=join.line)
+     t = infer(join.on, env, params)
+     if t != dtypes.BOOL:
+         raise TypeCheckError(f"line {join.line}: join condition must be boolean, got {t}")
+-    join.keys = _equi_keys(join.on)
++    key_nodes = _equi_keys(join.on)
++    join.keys = [(left_expr, right_expr) for _, left_expr, right_expr in key_nodes]
++    join.key_texts = [written[id(node)] for node, _, _ in key_nodes]
+ 
+     if join.within is not None:
+         for side in sides:
+@@ -195,8 +198,8 @@
+         node.qualifier = None
+ 
+ 
+-def _equi_keys(on):
+-    """(left_expr, right_expr) pairs of top-level `==` conjuncts usable as hash keys."""
++def _conjuncts(on):
++    """The top-level operands of `&` in a condition, left to right."""
+     conjuncts = []
+     stack = [on]
+     while stack:
+@@ -205,15 +208,20 @@
+             stack.extend((node.right, node.left))
+         else:
+             conjuncts.append(node)
++    return conjuncts
++
++
++def _equi_keys(on):
++    """(node, left_expr, right_expr) for top-level `==` conjuncts usable as hash keys."""
+     keys = []
+-    for node in conjuncts:
++    for node in _conjuncts(on):
+         if not (isinstance(node, Binary) and node.op == "=="):
+             continue
+         a, b = _sides_of(node.left), _sides_of(node.right)
+         if a == {LEFT} and b == {RIGHT}:
+-            keys.append((node.left, node.right))
++            keys.append((node, node.left, node.right))
+         elif a == {RIGHT} and b == {LEFT}:
+-            keys.append((node.right, node.left))
++            keys.append((node, node.right, node.left))
+     return keys
+ 
+ 
+
+### mtl_engine/loader.py (modified)
+--- mtl_engine/loader.py
++++ mtl_engine/loader.py
+@@ -77,8 +77,9 @@
+ 
+     kind = "text"
+ 
+-    def __init__(self, path, header, header_line, records):
++    def __init__(self, path, header, header_line, records, file_format=inputs.CSV):
+         self.path = path
++        self.format = file_format
+         self.header = header
+         self.header_line = header_line
+         self.records = records
+@@ -88,15 +89,24 @@
+     def columns(self):
+         return self.header
+ 
++    @property
++    def rows_read(self):
++        return len(self.records)
++
+ 
+ class ParquetSource:
+     kind = "parquet"
++    format = inputs.PARQUET
+ 
+     def __init__(self, path, table):
+         self.path = path
+         self.table = table
+         self.columns = list(table.column_names)
+         _check_columns(path, self.columns)
++
++    @property
++    def rows_read(self):
++        return self.table.num_rows
+ 
+ 
+ def open_sources(files):
+@@ -120,7 +130,7 @@
+     if fmt is None:
+         first = text.split("\n", 1)[0]
+         fmt = inputs.TSV if "\t" in first and "," not in first else inputs.CSV
+-    return _parse_delimited(path, text, "\t" if fmt == inputs.TSV else ",")
++    return _parse_delimited(path, text, "\t" if fmt == inputs.TSV else ",", fmt)
+ 
+ 
+ def _read_bytes(path):
+@@ -146,7 +156,7 @@
+     return ParquetSource(path, table)
+ 
+ 
+-def _parse_delimited(path, text, delimiter):
++def _parse_delimited(path, text, delimiter, file_format):
+     reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, quotechar='"',
+                         doublequote=True, strict=True)
+     header = None
+@@ -173,7 +183,7 @@
+     if header is None:
+         raise IOFailure(f"'{path}' has no header row")
+     _check_columns(path, header)
+-    return TextSource(path, header, header_line, records)
++    return TextSource(path, header, header_line, records, file_format)
+ 
+ 
+ def _is_blank(record):
+
+### mtl_engine/metadata.py (created)
+--- mtl_engine/metadata.py
++++ mtl_engine/metadata.py
+@@ -0,0 +1,122 @@
++"""The --meta-out document: provenance, input statistics, lineage and output shape."""
++import json
++from datetime import datetime
++
++from . import badrecords as br
++from . import udfs
++from .state import iso_z
++from .timeutil import format_utc
++from .versions import RUNTIME_VERSION
++
++ERROR_TYPES = (br.PARSE_TYPE_MISMATCH, br.TIMESTAMP_PARSE_ERROR, br.RUNTIME_ERROR,
++               br.TYPE_ERROR, br.MISSING_REQUIRED_FIELD, br.PARQUET_TYPE_MISMATCH)
++
++
++def build(run_state, program, args, param_values, null_markers, sink, document):
++    """Assemble the metadata object (key order as specified)."""
++    started = run_state.started_at
++    completed = run_state.completed_at
++    duration_ms = max(0, round((completed - started).total_seconds() * 1000))
++    return {
++        "run": {
++            "run_id": run_state.run_id,
++            "started_at": iso_z(started),
++            "completed_at": iso_z(completed),
++            "duration_ms": duration_ms,
++            "resume": bool(run_state.resume),
++        },
++        "versions": {
++            "mtl_runtime": RUNTIME_VERSION,
++            "dsl_version": run_state.dsl_version,
++            "dsl_sha256": run_state.dsl_sha256,
++            "ingest_config_sha256": run_state.config_sha256,
++        },
++        "inputs": {
++            "sources": _sources(run_state.files, sink),
++            "params": {name: _json_value(param_values[name].value)
++                       for name in sorted(param_values)},
++            "tz": args.tz,
++            "timestamp_format": args.timestamp_format,
++            "null_markers": sorted(null_markers),
++        },
++        "pipeline": _pipeline(program),
++        "udfs": udfs.metadata(),
++        "quality": {
++            "strict": bool(args.strict),
++            "bad_record_counts": _bad_counts(sink),
++        },
++        "output": _output(program, document),
++    }
++
++
++def serialize(meta):
++    return json.dumps(meta, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
++
++
++def _sources(files, sink):
++    bad_rows = {}
++    for record in sink.records:
++        origin = record.origin
++        bad_rows.setdefault(origin.path, set()).add((origin.line, origin.row_index))
++    by_source = {}
++    for f in files:
++        rows_bad = min(len(bad_rows.get(f.display, ())), f.rows_read)
++        by_source.setdefault(f.source, []).append({
++            "path": f.path,
++            "fingerprint": f.fingerprint,
++            "format": f.format,
++            "rows_read": f.rows_read,
++            "rows_valid": f.rows_read - rows_bad,
++            "rows_bad": rows_bad,
++        })
++    return [{"name": name, "files": sorted(entries, key=lambda e: e["path"])}
++            for name, entries in sorted(by_source.items())]
++
++
++def _pipeline(program):
++    window = None
++    if program.window is not None:
++        window = {"duration": f"{program.window.amount}{program.window.unit}",
++                  "aligned_to_epoch": True}
++    return {
++        "name": program.name,
++        "schema": program.schema_name,
++        "group_by": list(program.group_columns),
++        "window": window,
++        "aggregates": sorted(item.alias for item in program.aggregate.items),
++        "post_agg_calcs": sorted(calc.name for calc in program.post_calcs),
++        "joins": [{"left": join.left, "right": join.right, "type": join.join_type,
++                   "temporal_within": getattr(join, "within_text", None),
++                   "on_keys": list(getattr(join, "key_texts", []))}
++                  for join in program.joins],
++    }
++
++
++def _bad_counts(sink):
++    counts = {name: 0 for name in ERROR_TYPES}
++    for record in sink.records:
++        counts[record.error_type] = counts.get(record.error_type, 0) + 1
++    return counts
++
++
++def _output(program, document):
++    is_array = isinstance(document, list)
++    return {
++        "shape": "array" if is_array else "object",
++        "row_count": len(document) if is_array else 1,
++        "ordering": {
++            "primary": "window_start" if program.window is not None else None,
++            "secondary": list(program.group_columns),
++        },
++        "key_ordering": {
++            "window_keys_first": True,
++            "aggregate_aliases_lex": True,
++            "post_agg_calcs_lex": True,
++        },
++    }
++
++
++def _json_value(value):
++    if isinstance(value, datetime):
++        return format_utc(value)
++    return value
+
+### mtl_engine/parser.py (modified)
+--- mtl_engine/parser.py
++++ mtl_engine/parser.py
+@@ -1,5 +1,5 @@
+ """Recursive-descent parser turning DSL source into a Program."""
+-from . import dtypes
++from . import dtypes, udfs
+ from .ast_nodes import (JOIN_TYPES, POST_AGG, PRE, AggItem, Aggregate, Apply, Binary, Calc,
+                         Call, Cast, ColumnRef, FieldDecl, Filter, GroupBy, InExpr, Join, Literal,
+                         ParamDecl, Program, Projection, SchemaDecl, SourceBinding, SourcesDecl,
+@@ -545,7 +545,7 @@
+             self.error(f"expected 'on (<condition>)' but found {self.tok.describe()}")
+         self.advance()
+         on = self.parse_expr()
+-        within = join_type = None
++        within = join_type = within_text = None
+         while self.tok.is_ident("within", "type"):
+             clause = self.advance()
+             if clause.value == "within":
+@@ -557,6 +557,7 @@
+                                f"{tok.describe()}")
+                 self.advance()
+                 within = tok.value[0] * DURATION_UNITS[tok.value[1]]
++                within_text = f"{tok.value[0]}{tok.value[1]}"
+             else:
+                 if join_type is not None:
+                     self.error("duplicate 'type' clause", clause)
+@@ -600,7 +601,9 @@
+             self.advance()
+             alias = self.expect_ident("a join alias")
+         self.expect_end()
+-        return Join(left, right, on, within, join_type or "inner", projections, alias, head.line)
++        join = Join(left, right, on, within, join_type or "inner", projections, alias, head.line)
++        join.within_text = within_text
++        return join
+ 
+     def parse_join_side(self):
+         if self.tok.is_op("("):
+@@ -738,7 +741,8 @@
+         name = name_tok.value
+         if name == "cast":
+             return self.parse_cast(name_tok)
+-        if name not in ARITY:
++        udf = udfs.REGISTRY.get(name) if name not in ARITY else None
++        if name not in ARITY and udf is None:
+             self.error(f"unknown function '{name}'", name_tok)
+         self.expect_op("(")
+         args = []
+@@ -748,7 +752,7 @@
+                 self.advance()
+                 args.append(self.parse_expr())
+         self.expect_op(")")
+-        lo, hi = ARITY[name]
++        lo, hi = ARITY[name] if udf is None else (len(udf.args), len(udf.args))
+         if not lo <= len(args) <= hi:
+             expected = str(lo) if lo == hi else f"{lo} to {hi}"
+             self.error(f"{name}() takes {expected} argument(s), got {len(args)}", name_tok)
+
+### mtl_engine/state.py (created)
+--- mtl_engine/state.py
++++ mtl_engine/state.py
+@@ -0,0 +1,351 @@
++"""Resumable runs: input fingerprints, per-file checkpoints and the persistent state file.
++
++With --state-dir every input file that is read is checkpointed: its parsed content
++is stored under `<state-dir>/<pipeline>.checkpoints/`, keyed by its canonical path,
++format and fingerprint. A resumed run reuses the checkpoint of every file whose
++fingerprint matches a `done` entry of the previous state instead of reading the
++file again, then replays evaluation over all files, so its output is identical to
++that of a run over the same inputs. The state file is replaced atomically, and
++only after the run succeeded.
++"""
++import gzip
++import hashlib
++import json
++import os
++import pickle
++import re
++import tempfile
++import uuid
++import zlib
++from datetime import datetime, timezone
++
++from . import inputs, loader
++from .errors import ArtifactError, IOFailure
++from .timeutil import format_utc
++
++MTIME_SIZE = "mtime_size"
++XXHASH64 = "xxhash64"
++SCHEMES = (MTIME_SIZE, XXHASH64)
++GRANULARITIES = ("file", "rowgroup", "line")
++DEFAULT_SOURCE = "default"
++DONE = "done"
++
++_CHUNK = 1 << 20
++_GZIP_MAGIC = b"\x1f\x8b"
++
++
++def sha256_hex(data):
++    return hashlib.sha256(data).hexdigest()
++
++
++def now_utc():
++    return datetime.now(timezone.utc)
++
++
++def iso_z(dt):
++    """ISO 8601 UTC with millisecond precision and a trailing Z."""
++    dt = dt.astimezone(timezone.utc)
++    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
++
++
++# --------------------------------------------------------------------------- fingerprints
++
++
++def fingerprint(path, scheme):
++    try:
++        if scheme == MTIME_SIZE:
++            st = os.stat(path)
++            return {"scheme": MTIME_SIZE, "mtime_epoch_ms": st.st_mtime_ns // 1_000_000,
++                    "size_bytes": st.st_size}
++        return {"scheme": XXHASH64, "hash": _content_hash(path)}
++    except OSError as exc:
++        raise IOFailure(f"cannot read '{path}': {exc}") from exc
++
++
++def _content_hash(path):
++    """xxHash64 of the file's content; gzip files are hashed decompressed."""
++    with open(path, "rb") as fh:
++        gzipped = fh.read(2) == _GZIP_MAGIC
++    if gzipped:
++        try:
++            with gzip.open(path, "rb") as fh:
++                return _hash_stream(fh)
++        except (OSError, EOFError, zlib.error):
++            pass  # not really gzip: hash the raw bytes; reading it will report the problem
++    with open(path, "rb") as fh:
++        return _hash_stream(fh)
++
++
++def _hash_stream(fh):
++    try:
++        import xxhash
++    except ImportError:  # pragma: no cover - dependency is in requirements.txt
++        return f"{_xxh64(fh.read()):016x}"
++    hasher = xxhash.xxh64()
++    for chunk in iter(lambda: fh.read(_CHUNK), b""):
++        hasher.update(chunk)
++    return hasher.hexdigest()
++
++
++_P1, _P2, _P3 = 11400714785074694791, 14029467366897019727, 1609587929392839161
++_P4, _P5 = 9650029242287828579, 2870177450012600261
++_M = (1 << 64) - 1
++
++
++def _rotl(x, r):
++    return ((x << r) | (x >> (64 - r))) & _M
++
++
++def _round(acc, value):
++    return (_rotl((acc + value * _P2) & _M, 31) * _P1) & _M
++
++
++def _xxh64(data, seed=0):
++    """Pure-Python XXH64, used when the xxhash package is unavailable."""
++    n = len(data)
++    i = 0
++    if n >= 32:
++        v = [(seed + _P1 + _P2) & _M, (seed + _P2) & _M, seed, (seed - _P1) & _M]
++        while i + 32 <= n:
++            for lane in range(4):
++                v[lane] = _round(v[lane], int.from_bytes(data[i:i + 8], "little"))
++                i += 8
++        h = (_rotl(v[0], 1) + _rotl(v[1], 7) + _rotl(v[2], 12) + _rotl(v[3], 18)) & _M
++        for lane in v:
++            h = ((h ^ _round(0, lane)) * _P1 + _P4) & _M
++    else:
++        h = (seed + _P5) & _M
++    h = (h + n) & _M
++    while i + 8 <= n:
++        h ^= _round(0, int.from_bytes(data[i:i + 8], "little"))
++        h = (_rotl(h, 27) * _P1 + _P4) & _M
++        i += 8
++    if i + 4 <= n:
++        h ^= (int.from_bytes(data[i:i + 4], "little") * _P1) & _M
++        h = (_rotl(h, 23) * _P2 + _P3) & _M
++        i += 4
++    while i < n:
++        h ^= (data[i] * _P5) & _M
++        h = (_rotl(h, 11) * _P1) & _M
++        i += 1
++    h ^= h >> 33
++    h = (h * _P2) & _M
++    h ^= h >> 29
++    h = (h * _P3) & _M
++    return h ^ (h >> 32)
++
++
++# --------------------------------------------------------------------------- run state
++
++
++class FileRecord:
++    """One input file of this run (STDIN has no canonical path or fingerprint)."""
++
++    def __init__(self, source, path, display, fingerprint_, file_format, rows_read, key):
++        self.source = source
++        self.path = path
++        self.display = display
++        self.fingerprint = fingerprint_
++        self.format = file_format
++        self.rows_read = rows_read
++        self.key = key
++
++
++class RunState:
++    def __init__(self, pipeline, dsl_version, dsl_sha256, config_sha256, scheme=MTIME_SIZE,
++                 state_dir=None, resume=False):
++        self.run_id = str(uuid.uuid4())
++        self.started_at = now_utc()
++        self.pipeline = pipeline
++        self.dsl_version = dsl_version
++        self.dsl_sha256 = dsl_sha256
++        self.config_sha256 = config_sha256
++        self.scheme = scheme
++        self.state_dir = state_dir
++        self.resume = resume
++        self.files = []
++        self.watermarks = {}
++        self.created_at = None
++        self.previous = {}
++        if resume and state_dir is None:
++            raise ArtifactError("--resume requires --state-dir")
++        if state_dir is None:
++            return
++        stem = _safe_name(pipeline)
++        self.state_path = os.path.join(state_dir, stem + ".state.json")
++        self.checkpoint_dir = os.path.join(state_dir, stem + ".checkpoints")
++        if os.path.exists(state_dir) and not os.path.isdir(state_dir):
++            raise ArtifactError(f"state dir '{state_dir}' exists and is not a directory")
++        if resume:
++            self._load_previous()
++        else:
++            _makedirs(state_dir)
++
++    # -- previous state --------------------------------------------------
++    def _load_previous(self):
++        path = self.state_path
++        if not os.path.isfile(path):
++            raise ArtifactError(f"cannot resume: no state file '{path}'")
++        try:
++            with open(path, "r", encoding="utf-8") as fh:
++                data = json.load(fh)
++        except (OSError, UnicodeDecodeError, ValueError) as exc:
++            raise ArtifactError(f"cannot resume: malformed state file '{path}': {exc}") from exc
++        files = _validate(data, path)
++        if data["pipeline"] != self.pipeline:
++            raise ArtifactError(f"cannot resume: state file '{path}' belongs to pipeline "
++                                f"'{data['pipeline']}', not '{self.pipeline}'")
++        if data["dsl_sha256"] != self.dsl_sha256:
++            raise ArtifactError("cannot resume: breaking change: the DSL changed since the "
++                                "last run (dsl_sha256 mismatch)")
++        if data["ingest_config_sha256"] != self.config_sha256:
++            raise ArtifactError("cannot resume: breaking change: the ingest config changed "
++                                "since the last run (ingest_config_sha256 mismatch)")
++        self.created_at = data.get("created_at")
++        self.previous = {entry["path"]: entry for entry in files}
++
++    # -- inputs -------------------------------------------------------------
++    def open(self, source, input_file):
++        """Open one input file, from its checkpoint when the previous run completed it."""
++        if input_file.path == inputs.STDIN:
++            opened = loader.open_source(input_file)
++            self.files.append(FileRecord(source, inputs.STDIN, inputs.STDIN, None,
++                                         opened.format, opened.rows_read, None))
++            return opened
++        canonical = os.path.realpath(input_file.path)
++        fp = fingerprint(canonical, self.scheme)
++        key = sha256_hex(json.dumps([canonical, input_file.format, fp],
++                                    sort_keys=True).encode("utf-8"))
++        opened = None
++        prev = self.previous.get(canonical)
++        if prev is not None and prev.get("status") == DONE and prev.get("fingerprint") == fp:
++            opened = self._read_checkpoint(key)
++        if opened is None:
++            opened = loader.open_source(input_file)
++            if self.state_dir is not None:
++                self._write_checkpoint(key, opened)
++        else:
++            opened.path = input_file.path
++        self.files.append(FileRecord(source, canonical, input_file.path, fp, opened.format,
++                                     opened.rows_read, key))
++        return opened
++
++    def observe_timestamps(self, source, values):
++        """Track the maximum event timestamp seen per source (advisory watermark)."""
++        best = self.watermarks.get(source)
++        for value in values:
++            if isinstance(value, datetime) and (best is None or value > best):
++                best = value
++        self.watermarks[source] = best
++
++    def _checkpoint_path(self, key):
++        return os.path.join(self.checkpoint_dir, key + ".pkl")
++
++    def _read_checkpoint(self, key):
++        try:
++            with open(self._checkpoint_path(key), "rb") as fh:
++                return pickle.load(fh)
++        except Exception:  # missing or unreadable checkpoint: process the file again
++            return None
++
++    def _write_checkpoint(self, key, opened):
++        _makedirs(self.checkpoint_dir)
++        _atomic_write(self._checkpoint_path(key),
++                      pickle.dumps(opened, protocol=pickle.HIGHEST_PROTOCOL))
++
++    # -- commit -------------------------------------------------------------
++    def finish(self):
++        self.completed_at = now_utc()
++
++    def commit(self):
++        """Atomically replace the state file, then drop unreferenced checkpoints."""
++        if self.state_dir is None:
++            return
++        tracked = sorted((f for f in self.files if f.key is not None), key=lambda f: f.path)
++        state = {
++            "pipeline": self.pipeline,
++            "dsl_version": self.dsl_version,
++            "dsl_sha256": self.dsl_sha256,
++            "ingest_config_sha256": self.config_sha256,
++            "created_at": self.created_at or iso_z(self.completed_at),
++            "last_run": {
++                "run_id": self.run_id,
++                "completed_at": iso_z(self.completed_at),
++                "files": [{"source": f.source, "path": f.path, "fingerprint": f.fingerprint,
++                           "status": DONE} for f in tracked],
++                "watermarks": {name: {"max_timestamp_utc": None if ts is None else format_utc(ts)}
++                               for name, ts in sorted(self.watermarks.items())},
++            },
++        }
++        text = json.dumps(state, indent=2, ensure_ascii=False) + "\n"
++        _makedirs(self.state_dir)
++        _atomic_write(self.state_path, text.encode("utf-8"))
++        keep = {f.key + ".pkl" for f in tracked}
++        try:
++            names = os.listdir(self.checkpoint_dir)
++        except OSError:
++            return
++        for name in names:
++            if name not in keep:
++                try:
++                    os.remove(os.path.join(self.checkpoint_dir, name))
++                except OSError:
++                    pass
++
++
++def _validate(data, path):
++    def bad(why):
++        raise ArtifactError(f"cannot resume: malformed state file '{path}': {why}")
++
++    if not isinstance(data, dict):
++        bad("not a JSON object")
++    for key in ("pipeline", "dsl_sha256"):
++        if not isinstance(data.get(key), str):
++            bad(f"'{key}' must be a string")
++    if "ingest_config_sha256" not in data or not (
++            data["ingest_config_sha256"] is None or isinstance(data["ingest_config_sha256"], str)):
++        bad("'ingest_config_sha256' must be a string or null")
++    last = data.get("last_run")
++    if not isinstance(last, dict):
++        bad("'last_run' must be an object")
++    files = last.get("files")
++    if not isinstance(files, list):
++        bad("'last_run.files' must be a list")
++    for entry in files:
++        if not (isinstance(entry, dict) and isinstance(entry.get("path"), str)
++                and isinstance(entry.get("fingerprint"), dict)
++                and isinstance(entry.get("status"), str)):
++            bad("every 'last_run.files' entry needs path, fingerprint and status")
++    return files
++
++
++def _safe_name(name):
++    return re.sub(r"[^A-Za-z0-9_.-]", "_", name) or DEFAULT_SOURCE
++
++
++def _makedirs(path):
++    try:
++        os.makedirs(path, exist_ok=True)
++    except OSError as exc:
++        raise ArtifactError(f"cannot create state dir '{path}': {exc}") from exc
++
++
++def _atomic_write(path, data):
++    """Write to a temporary file in the target's directory, then rename over the target."""
++    directory = os.path.dirname(os.path.abspath(path))
++    try:
++        fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=directory)
++        try:
++            with os.fdopen(fd, "wb") as fh:
++                fh.write(data)
++                fh.flush()
++                os.fsync(fh.fileno())
++            os.replace(tmp, path)
++        except BaseException:
++            try:
++                os.remove(tmp)
++            except OSError:
++                pass
++            raise
++    except OSError as exc:
++        raise ArtifactError(f"cannot write state '{path}': {exc}") from exc
+
+### mtl_engine/typecheck.py (modified)
+--- mtl_engine/typecheck.py
++++ mtl_engine/typecheck.py
+@@ -5,7 +5,7 @@
+ are reported as DSL errors before an expression is typed; everything else
+ is a type error.
+ """
+-from . import casts, dtypes, functions
++from . import casts, dtypes, functions, udfs
+ from .ast_nodes import (Apply, Binary, Call, Cast, ColumnRef, Filter, InExpr, Literal,
+                         Unary)
+ from .errors import DSLSyntaxError, TypeCheckError
+@@ -214,6 +214,8 @@
+             raise TypeCheckError(f"line {expr.line}: {expr.name}() offset must be an int, "
+                                  f"got {arg_types[1]}")
+         return arg_types[0]
++    if expr.name in udfs.REGISTRY:
++        return udfs.result_type(udfs.REGISTRY[expr.name], arg_types, expr.line)
+     return functions.result_type(expr.name, arg_types, expr.line)
+ 
+ 
+
+### mtl_engine/udfs.py (created)
+--- mtl_engine/udfs.py
++++ mtl_engine/udfs.py
+@@ -0,0 +1,239 @@
++"""User-defined scalar functions loaded from Python files given with --udf.
++
++A UDF file declares its functions in one of three ways (checked in this order):
++
++* a `register(registry)` function calling `registry.register(name, func, args, returns)`
++  (or `registry(name, args=..., returns=...)` as a decorator factory);
++* a `UDFS` dict mapping name -> {"func": callable, "args": [types], "returns": type}
++  (a bare callable value is typed from its annotations);
++* public module-level functions whose parameters and return are annotated.
++
++Types are DSL type names (int, float, string, bool, timestamp) or the Python types
++int, float, str, bool and datetime.
++"""
++import hashlib
++import importlib.util
++import inspect
++import keyword
++import math
++import re
++import sys
++from datetime import datetime, timezone
++
++from . import dtypes
++from .errors import ConfigError, IOFailure, RuntimeFailure
++
++# name -> Udf, filled by load() before the DSL is parsed.
++REGISTRY = {}
++
++_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
++_TYPE_ALIASES = {
++    "int": dtypes.INT, "integer": dtypes.INT, "long": dtypes.INT,
++    "float": dtypes.FLOAT, "double": dtypes.FLOAT, "number": dtypes.FLOAT,
++    "string": dtypes.STRING, "str": dtypes.STRING, "text": dtypes.STRING,
++    "bool": dtypes.BOOL, "boolean": dtypes.BOOL,
++    "timestamp": dtypes.TIMESTAMP, "datetime": dtypes.TIMESTAMP,
++}
++_PY_TYPES = {int: dtypes.INT, float: dtypes.FLOAT, str: dtypes.STRING, bool: dtypes.BOOL,
++             datetime: dtypes.TIMESTAMP}
++# Names a UDF may not take: built-in functions, aggregates and keywords of the DSL.
++_RESERVED = {"len", "day", "month", "year", "round", "starts_with", "ends_with", "contains",
++             "coalesce", "param", "lag", "lead", "cast", "average", "median", "sum", "count",
++             "std", "var", "min", "max", "true", "false", "in", "filter", "apply", "group_by",
++             "window", "aggregate", "calc", "schema", "pipeline", "params", "sources", "with",
++             "join", "mtl_version"}
++
++
++class Udf:
++    def __init__(self, name, func, args, returns, digest):
++        self.name = name
++        self.func = func
++        self.args = args
++        self.returns = returns
++        self.hash = digest
++
++    def to_json(self):
++        return {"name": self.name, "args": list(self.args), "returns": self.returns,
++                "hash": self.hash}
++
++
++class _Registry:
++    """Handed to a UDF file's register() function."""
++
++    def __init__(self, path, digest):
++        self.path = path
++        self.digest = digest
++        self.found = []
++
++    def register(self, name, func=None, args=None, returns=None):
++        if func is None:
++            def decorator(fn):
++                self.register(name, fn, args, returns)
++                return fn
++            return decorator
++        self.found.append(_make(name, func, args, returns, self.path, self.digest))
++        return func
++
++    __call__ = register
++
++
++def load(paths):
++    """Load every UDF file, replacing the registry contents."""
++    REGISTRY.clear()
++    for idx, path in enumerate(paths):
++        for udf in _load_file(path, idx):
++            if udf.name in REGISTRY:
++                raise ConfigError(f"UDF '{udf.name}' is registered more than once")
++            REGISTRY[udf.name] = udf
++
++
++def metadata():
++    """Registered UDFs, sorted by name then signature."""
++    return [u.to_json() for u in sorted(REGISTRY.values(),
++                                        key=lambda u: (u.name, list(u.args), u.returns))]
++
++
++def _load_file(path, idx):
++    try:
++        with open(path, "rb") as fh:
++            data = fh.read()
++    except OSError as exc:
++        raise IOFailure(f"cannot read UDF file '{path}': {exc}") from exc
++    digest = hashlib.sha256(data).hexdigest()
++    module_name = f"_mtl_udf_{idx}"
++    try:
++        spec = importlib.util.spec_from_file_location(module_name, path)
++        if spec is None or spec.loader is None:
++            raise ConfigError(f"UDF file '{path}' is not a Python module")
++        module = importlib.util.module_from_spec(spec)
++        sys.modules[module_name] = module
++        spec.loader.exec_module(module)
++    except ConfigError:
++        raise
++    except BaseException as exc:  # arbitrary user code: any failure is a registration error
++        if isinstance(exc, KeyboardInterrupt):
++            raise
++        raise ConfigError(f"cannot load UDF file '{path}': {type(exc).__name__}: {exc}") from exc
++
++    register = getattr(module, "register", None)
++    if callable(register):
++        registry = _Registry(path, digest)
++        try:
++            register(registry)
++        except ConfigError:
++            raise
++        except Exception as exc:
++            raise ConfigError(f"UDF registration in '{path}' failed: {exc}") from exc
++        found = registry.found
++    elif isinstance(getattr(module, "UDFS", None), dict):
++        found = []
++        for name, spec in module.UDFS.items():
++            if callable(spec):
++                found.append(_make(name, spec, None, None, path, digest))
++            elif isinstance(spec, dict):
++                func = spec.get("func", spec.get("fn", spec.get("function")))
++                args = spec.get("args", spec.get("arg_types", spec.get("params")))
++                returns = spec.get("returns", spec.get("return_type", spec.get("return")))
++                found.append(_make(name, func, args, returns, path, digest))
++            else:
++                raise ConfigError(f"UDF '{name}' in '{path}' must be a function or a mapping")
++    else:
++        found = [_make(name, obj, None, None, path, digest)
++                 for name, obj in vars(module).items()
++                 if inspect.isfunction(obj) and obj.__module__ == module_name
++                 and not name.startswith("_")]
++    if not found:
++        raise ConfigError(f"UDF file '{path}' does not register any function")
++    return found
++
++
++def _make(name, func, args, returns, path, digest):
++    if not isinstance(name, str) or not _NAME_RE.match(name) or keyword.iskeyword(name):
++        raise ConfigError(f"invalid UDF name {name!r} in '{path}'")
++    if name in _RESERVED:
++        raise ConfigError(f"UDF '{name}' in '{path}' clashes with a built-in name")
++    if not callable(func):
++        raise ConfigError(f"UDF '{name}' in '{path}' is not callable")
++    if args is None or returns is None:
++        try:
++            sig = inspect.signature(func)
++        except (TypeError, ValueError) as exc:
++            raise ConfigError(f"UDF '{name}' in '{path}' has no inspectable signature") from exc
++        if args is None:
++            args = []
++            for param in sig.parameters.values():
++                if param.kind not in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD):
++                    raise ConfigError(f"UDF '{name}' in '{path}' must take positional "
++                                      "parameters only")
++                if param.annotation is inspect.Parameter.empty:
++                    raise ConfigError(f"UDF '{name}' in '{path}': parameter '{param.name}' "
++                                      "needs a type annotation")
++                args.append(param.annotation)
++        if returns is None:
++            if sig.return_annotation is inspect.Signature.empty:
++                raise ConfigError(f"UDF '{name}' in '{path}' needs a return type annotation")
++            returns = sig.return_annotation
++    if isinstance(args, (str, type)) or not isinstance(args, (list, tuple)):
++        raise ConfigError(f"UDF '{name}' in '{path}': 'args' must be a list of types")
++    arg_types = [_dsl_type(a, name, path) for a in args]
++    return Udf(name, func, arg_types, _dsl_type(returns, name, path), digest)
++
++
++def _dsl_type(value, name, path):
++    if isinstance(value, type) and value in _PY_TYPES:
++        return _PY_TYPES[value]
++    if isinstance(value, str) and value.strip().lower() in _TYPE_ALIASES:
++        return _TYPE_ALIASES[value.strip().lower()]
++    raise ConfigError(f"UDF '{name}' in '{path}' uses unsupported type {value!r}")
++
++
++# --------------------------------------------------------------------------- typing / calls
++
++
++def result_type(udf, arg_types, line):
++    from .errors import TypeCheckError
++
++    for idx, (want, got) in enumerate(zip(udf.args, arg_types), start=1):
++        if not (want == got or (want == dtypes.FLOAT and got == dtypes.INT)):
++            raise TypeCheckError(f"line {line}: argument {idx} of {udf.name}() must be {want}, "
++                                 f"got {got}")
++    return udf.returns
++
++
++def call(udf, args, line):
++    """Invoke a UDF; null arguments yield null. A result of the wrong type is a TypeError
++    (rejected as TYPE_ERROR), any exception a runtime error."""
++    if any(a is None for a in args):
++        return None
++    args = [float(a) if t == dtypes.FLOAT and isinstance(a, int) else a
++            for a, t in zip(args, udf.args)]
++    try:
++        result = udf.func(*args)
++    except Exception as exc:
++        raise RuntimeFailure(f"line {line}: UDF {udf.name}() failed: "
++                             f"{type(exc).__name__}: {exc}") from exc
++    if result is None:
++        return None
++    want = udf.returns
++    if want == dtypes.FLOAT and isinstance(result, int) and not isinstance(result, bool):
++        result = float(result)
++    if want == dtypes.TIMESTAMP and isinstance(result, datetime):
++        result = (result.replace(tzinfo=timezone.utc) if result.tzinfo is None
++                  else result.astimezone(timezone.utc))
++    if not _conforms(result, want):
++        raise TypeError(f"UDF {udf.name}() returned {type(result).__name__}, expected {want}")
++    if want == dtypes.FLOAT and not math.isfinite(result):
++        raise RuntimeFailure(f"line {line}: UDF {udf.name}() returned a non-finite number")
++    return result
++
++
++def _conforms(value, t):
++    if t == dtypes.BOOL:
++        return isinstance(value, bool)
++    if t == dtypes.INT:
++        return isinstance(value, int) and not isinstance(value, bool)
++    if t == dtypes.FLOAT:
++        return isinstance(value, float)
++    if t == dtypes.STRING:
++        return isinstance(value, str)
++    return isinstance(value, datetime) and value.tzinfo is not None
+
+### mtl_engine/versions.py (created)
+--- mtl_engine/versions.py
++++ mtl_engine/versions.py
+@@ -0,0 +1,114 @@
++"""The `mtl_version` header and gating of DSL constructs by declared version."""
++import re
++
++from .ast_nodes import Call, Cast, ColumnRef
++from .errors import ArtifactError, DSLSyntaxError
++from .functions import ARITY
++from .typecheck import walk
++
++RUNTIME_VERSION = "1.5.0"
++# Newest DSL version this runtime implements; any 1.x minor is accepted.
++SUPPORTED = (1, 5)
++
++_KEYWORD_RE = re.compile(r"mtl_version(?![A-Za-z0-9_])")
++_HEADER_RE = re.compile(r"mtl_version[ \t]+(\d+)\.(\d+)[ \t]*(#.*)?$")
++
++PART2 = (1, 2)
++PART3 = (1, 3)
++PART4 = (1, 4)
++
++
++def show(version):
++    return f"{version[0]}.{version[1]}"
++
++
++def split_header(text):
++    """Return ((major, minor), text with the header line blanked out).
++
++    The header must be the first line that is neither blank nor a comment.
++    """
++    lines = text.splitlines(keepends=True)
++    for idx, line in enumerate(lines):
++        stripped = line.strip()
++        if not stripped or stripped.startswith("#"):
++            continue
++        if not _KEYWORD_RE.match(stripped):
++            break
++        match = _HEADER_RE.match(stripped)
++        if match is None:
++            raise DSLSyntaxError(f"line {idx + 1}: invalid version header {stripped!r}; "
++                                 "expected 'mtl_version <MAJOR>.<MINOR>'")
++        version = (int(match.group(1)), int(match.group(2)))
++        if version[0] != SUPPORTED[0]:
++            raise ArtifactError(f"unsupported DSL major version {show(version)}; this runtime "
++                                f"supports {SUPPORTED[0]}.x up to {show(SUPPORTED)}")
++        lines[idx] = "\n"  # keep line numbers of the remaining statements
++        return version, "".join(lines)
++    raise ArtifactError("missing 'mtl_version <MAJOR>.<MINOR>' header on the first "
++                        "non-comment line of the DSL")
++
++
++def check_features(program, version):
++    """DSL error for the first construct that needs a newer minor than declared."""
++    too_new = [(line, need, what) for need, what, line in _features(program) if version < need]
++    if too_new:
++        line, need, what = min(too_new, key=lambda f: f[0])
++        raise DSLSyntaxError(f"line {line}: {what} requires mtl_version {show(need)} or later, "
++                             f"but the DSL declares {show(version)}")
++
++
++def older_minor_warning(version):
++    """Warning text when the declared minor predates this runtime's behavior."""
++    if version >= SUPPORTED:
++        return None
++    return (f"WARNING:version:DSL declares mtl_version {show(version)}; constructs and "
++            f"semantics of later minors (up to {show(SUPPORTED)}) are not enabled for it")
++
++
++def _features(program):
++    for decl in program.schemas.values():
++        yield PART2, "schema block", decl.line
++        for field in decl.fields:
++            if field.expr is not None:
++                yield from _expr_features(field.expr, field.line)
++    for decl in program.params:
++        yield PART2, "params block", decl.line
++    for calc in program.calcs:
++        yield PART2, "calc", calc.line
++        yield from _expr_features(calc.expr, calc.line)
++    if program.window is not None and program.window.param is not None:
++        yield PART2, "param() window durations", program.window.line
++    for op in program.row_ops:
++        expr = getattr(op, "predicate", None) or getattr(op, "expr", None)
++        yield from _expr_features(expr, op.line)
++    for item in program.aggregate.items:
++        if item.func == "count" and item.column is not None:
++            yield PART3, "count(column)", item.line
++    if program.sources is not None:
++        yield PART4, "sources block", program.sources.line
++    for block in program.with_blocks:
++        yield PART4, "with block", block.line
++        for calc in block.calcs:
++            yield from _expr_features(calc.expr, calc.line)
++        for flt in block.filters:
++            yield from _expr_features(flt.predicate, flt.line)
++    for join in program.joins:
++        yield PART4, "join", join.line
++        yield from _expr_features(join.on, join.line)
++        for proj in join.projections:
++            yield from _expr_features(proj.expr, proj.line)
++
++
++def _expr_features(expr, line):
++    for node in walk(expr):
++        if isinstance(node, Call):
++            if node.name in ("param", "lag", "lead"):
++                yield PART2, f"{node.name}()", node.line
++            elif node.name == "coalesce":
++                yield PART3, "coalesce()", node.line
++            elif node.name not in ARITY:
++                yield PART4, f"user-defined function {node.name}()", node.line
++        elif isinstance(node, Cast):
++            yield PART3, "cast()", node.line
++        elif isinstance(node, ColumnRef) and node.qualifier is not None:
++            yield PART4, f"qualified column '{node.qualifier}.{node.name}'", line
+
+### requirements.txt (modified)
+--- requirements.txt
++++ requirements.txt
+@@ -1,3 +1,4 @@
+ tzdata>=2024.1
+ pyarrow>=14
+ PyYAML>=6.0
++xxhash>=3.0
+

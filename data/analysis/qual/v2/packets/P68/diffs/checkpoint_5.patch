@@ -1,0 +1,292 @@
+### eve_industry/cli.py (modified)
+--- eve_industry/cli.py
++++ eve_industry/cli.py
+@@ -66,6 +66,8 @@
+     plan.add_argument("--config", required=True, help="YAML build config file")
+     plan.add_argument("--sde", required=True, help="Path to the SDE directory")
+     plan.add_argument("--output", required=True, help="Directory to write the CSV files to")
++    plan.add_argument("--build-all", dest="build_all", action="store_true",
++                      help="Also build every buildable component in the tree")
+     return parser
+ 
+ 
+@@ -86,14 +88,15 @@
+     return render_invention(describe(inventory, plan.product), plan)
+ 
+ 
+-def run_plan(build: str, config_path: Path, sde_dir: Path, output_dir: Path) -> None:
++def run_plan(build: str, config_path: Path, sde_dir: Path, output_dir: Path,
++             build_all: bool = False) -> None:
+     config = load_config(config_path)
+     inventory = Inventory(sde_dir)
+     published = {t.type_id for t in inventory.types.values() if t.published}
+     industry = IndustryData(sde_dir, published)
+     invention = InventionData(sde_dir, published)
+     planner = BuildPlanner(inventory, industry, invention)
+-    plan = planner.plan(planner.parse(build), config)
++    plan = planner.plan(planner.parse(build), config, build_all=build_all)
+     write_plan(plan, inventory, output_dir)
+ 
+ 
+@@ -110,7 +113,7 @@
+         elif args.command == "invention":
+             print(run_invention(name, sde_dir, args.skill))
+         elif args.command == "plan":
+-            run_plan(name, Path(args.config), sde_dir, Path(args.output))
++            run_plan(name, Path(args.config), sde_dir, Path(args.output), args.build_all)
+         else:
+             return 2
+     except (RecipeError, InventionError, PlanError, SDEFileError) as exc:
+
+### eve_industry/plan.py (modified)
+--- eve_industry/plan.py
++++ eve_industry/plan.py
+@@ -17,7 +17,14 @@
+ from .sde_loader import load_yaml
+ 
+ MAX_TE_BONUS = 30
++MAX_SPLIT_DAYS = 30
++DEFAULT_SPLIT_DAYS = 3.0
+ SECONDS_PER_DAY = 86400
++CAPITAL_MARKET_GROUP = "Capital Ships"
++CAPITAL_SHIP_GROUPS = frozenset({
++    "Capital Industrial Ship", "Carrier", "Dreadnought", "Force Auxiliary", "Freighter",
++    "Jump Freighter", "Lancer Dreadnought", "Supercarrier", "Titan",
++})
+ NO_DECRYPTOR = "None"
+ DECRYPTOR_SUFFIX = " Decryptor"
+ 
+@@ -33,6 +40,9 @@
+ class PlanConfig:
+     te_bonus: int = 0
+     invention_skill: int = 5
++    split_days: float = DEFAULT_SPLIT_DAYS
++    component_me: int = MAX_MATERIAL_EFFICIENCY
++    component_te: int = MAX_TIME_EFFICIENCY
+ 
+ 
+ @dataclass(frozen=True)
+@@ -64,6 +74,8 @@
+     jobs: List[Job] = field(default_factory=list)
+     # typeID -> quantity to buy
+     purchases: Dict[int, int] = field(default_factory=dict)
++    # typeID -> surplus left over after the build
++    leftovers: Dict[int, int] = field(default_factory=dict)
+ 
+ 
+ def load_config(path: Path) -> PlanConfig:
+@@ -74,7 +86,27 @@
+         raise PlanError(f"Config file must be a mapping: {path}")
+     te_bonus = _config_int(raw, "te_bonus", 0, 0, MAX_TE_BONUS)
+     skill = _config_int(raw, "invention_skill", 5, 1, 5)
+-    return PlanConfig(te_bonus=te_bonus, invention_skill=skill)
++    split_days = _config_split_days(raw)
++    defaults = raw.get("component_bpo_defaults")
++    if defaults is None:
++        defaults = {}
++    if not isinstance(defaults, dict):
++        raise PlanError("Config 'component_bpo_defaults' must be a mapping with 'me' and 'te'")
++    me = _config_int(defaults, "me", MAX_MATERIAL_EFFICIENCY, 0, MAX_MATERIAL_EFFICIENCY)
++    te = _config_int(defaults, "te", MAX_TIME_EFFICIENCY, 0, MAX_TIME_EFFICIENCY)
++    return PlanConfig(te_bonus=te_bonus, invention_skill=skill, split_days=split_days,
++                      component_me=me, component_te=te)
++
++
++def _config_split_days(raw: dict) -> float:
++    value = raw.get("split_days", DEFAULT_SPLIT_DAYS)
++    if value is None:
++        value = DEFAULT_SPLIT_DAYS
++    if isinstance(value, bool) or not isinstance(value, (int, float)) or math.isnan(value):
++        raise PlanError(f"Config 'split_days' must be a number in (0,{MAX_SPLIT_DAYS}], got {value!r}")
++    if not 0 < value <= MAX_SPLIT_DAYS:
++        raise PlanError(f"Config 'split_days' must be a number in (0,{MAX_SPLIT_DAYS}], got {value}")
++    return float(value)
+ 
+ 
+ def _config_int(raw: dict, key: str, default: int, low: int, high: int) -> int:
+@@ -183,7 +215,7 @@
+ 
+     # --- planning ----------------------------------------------------------
+ 
+-    def plan(self, spec: BuildSpec, config: PlanConfig) -> BuildPlan:
++    def plan(self, spec: BuildSpec, config: PlanConfig, build_all: bool = False) -> BuildPlan:
+         purchases: Dict[int, int] = defaultdict(int)
+         me, te = spec.me, spec.te
+         if spec.invented:
+@@ -193,19 +225,112 @@
+         if activity_id != C.MANUFACTURING:
+             me = te = 0
+ 
+-        for material_id, qty in self.industry.materials.get(spec.blueprint_key, {}).items():
+-            per_job = max(spec.runs, -(-qty * (100 - me) * spec.runs // 100))
+-            purchases[material_id] += per_job * spec.jobs
+-
+-        seconds = self.industry.times.get(spec.blueprint_key, 0) * spec.runs
++        if not build_all:
++            for material_id, qty in self.industry.materials.get(spec.blueprint_key, {}).items():
++                purchases[material_id] += _job_material(qty, me, spec.runs) * spec.jobs
++            job = self._job(spec.blueprint_key, spec.runs, te, spec.jobs, config)
++            return BuildPlan(jobs=[job], purchases=dict(purchases))
++
++        demand: Dict[int, int] = defaultdict(int)
++        jobs: Dict[Tuple[str, int], Job] = {}
++
++        def schedule(key: ActivityKey, runs: int, count: int, me: int, te: int) -> None:
++            days_per_run = self._days_per_run(key, te, config)
++            for job_runs, job_count in split_runs(runs, days_per_run, config.split_days):
++                job = self._job(key, job_runs, te, job_count * count, config)
++                previous = jobs.get((job.name, job.runs))
++                if previous is not None:
++                    job = Job(job.name, job.runs, job.days, previous.count + job.count)
++                jobs[(job.name, job.runs)] = job
++                for material_id, qty in self.industry.materials.get(key, {}).items():
++                    amount = _job_material(qty, me, job_runs) * job_count * count
++                    if self.industry.is_buildable(material_id):
++                        demand[material_id] += amount
++                    else:
++                        purchases[material_id] += amount
++
++        schedule(spec.blueprint_key, spec.runs, spec.jobs, me, te)
++
++        leftovers: Dict[int, int] = {}
++        for type_id in self._consumer_order(spec.blueprint_key):
++            needed = demand.get(type_id, 0)
++            if needed <= 0:
++                continue
++            key = self.industry.sources_of(type_id)[0]
++            per_run = next(q for p, q in self.industry.products[key] if p == type_id)
++            if per_run <= 0:
++                raise PlanError(f"'{self.inventory.type_name(type_id)}' cannot be built")
++            runs = -(-needed // per_run)
++            surplus = runs * per_run - needed
++            if surplus:
++                leftovers[type_id] = surplus
++            component_me, component_te = self._component_efficiency(type_id, key, config)
++            schedule(key, runs, 1, component_me, component_te)
++
++        return BuildPlan(jobs=list(jobs.values()), purchases=dict(purchases), leftovers=leftovers)
++
++    def _job(self, key: ActivityKey, runs: int, te: int, count: int, config: PlanConfig) -> Job:
++        seconds = self.industry.times.get(key, 0) * runs
+         seconds *= (100 - te) * (100 - config.te_bonus) / 10000
+-        job = Job(
+-            name=self.inventory.type_name(blueprint_id),
+-            runs=spec.runs,
++        return Job(
++            name=self.inventory.type_name(key[0]),
++            runs=runs,
+             days=round(seconds / SECONDS_PER_DAY, 2),
+-            count=spec.jobs,
++            count=count,
+         )
+-        return BuildPlan(jobs=[job], purchases=dict(purchases))
++
++    def _days_per_run(self, key: ActivityKey, te: int, config: PlanConfig) -> float:
++        seconds = self.industry.times.get(key, 0) * ((100 - te) * (100 - config.te_bonus) / 10000)
++        return seconds / SECONDS_PER_DAY
++
++    def _component_efficiency(self, type_id: int, key: ActivityKey,
++                              config: PlanConfig) -> Tuple[int, int]:
++        if key[1] != C.MANUFACTURING:
++            return 0, 0
++        item = self.inventory.types.get(type_id)
++        if item is not None and self._is_t1_capital(item):
++            return 0, 0
++        return config.component_me, config.component_te
++
++    def _is_t1_capital(self, item: InvType) -> bool:
++        if not self.inventory.is_ship(item) or self.inventory.tech_level_of(item) != "Tech I":
++            return False
++        if self.inventory.group_name_of(item) in CAPITAL_SHIP_GROUPS:
++            return True
++        return CAPITAL_MARKET_GROUP in (self.inventory.market_group_path(item) or [])
++
++    def _consumer_order(self, root: ActivityKey) -> List[int]:
++        """Buildable materials reachable from ``root``, each listed after all of its consumers."""
++        order: List[int] = []
++        state: Dict[int, int] = {}  # 1 = in progress, 2 = done
++
++        def materials_of(key: ActivityKey) -> List[int]:
++            return sorted(m for m in self.industry.materials.get(key, {})
++                          if self.industry.is_buildable(m))
++
++        stack: List[Tuple[int, List[int]]] = []
++        for material_id in materials_of(root):
++            if material_id in state:
++                continue
++            state[material_id] = 1
++            stack.append((material_id, materials_of(self.industry.sources_of(material_id)[0])))
++            while stack:
++                type_id, pending = stack[-1]
++                if pending:
++                    child = pending.pop()
++                    seen = state.get(child)
++                    if seen == 1:
++                        raise PlanError(
++                            f"Circular recipe involving '{self.inventory.type_name(child)}'")
++                    if seen is None:
++                        state[child] = 1
++                        stack.append((child, materials_of(self.industry.sources_of(child)[0])))
++                    continue
++                stack.pop()
++                state[type_id] = 2
++                order.append(type_id)
++        order.reverse()
++        return order
+ 
+     def _plan_invention(self, spec: BuildSpec, config: PlanConfig,
+                         purchases: Dict[int, int]) -> Tuple[int, int]:
+@@ -259,17 +384,38 @@
+         return candidates[0].type_id
+ 
+ 
++def _job_material(per_run: int, me: int, runs: int) -> int:
++    """Material needed by a single job, rounded up at the job level."""
++    return max(runs, -(-per_run * (100 - me) * runs // 100))
++
++
++def split_runs(runs: int, days_per_run: float, split_days: float) -> List[Tuple[int, int]]:
++    """Split ``runs`` into jobs within the day limit; returns (runs, count) pairs."""
++    if runs <= 1 or days_per_run <= 0:
++        return [(runs, 1)]
++    max_runs = max(1, int(min(float(MAX_SPLIT_DAYS), split_days) // days_per_run))
++    if runs <= max_runs:
++        return [(runs, 1)]
++    t = -(-runs // max_runs)
++    base, extra = divmod(runs, t)
++    if base + 1 == max_runs and extra > t / 2 and runs // (t + 1) + 1 < max_runs:
++        t += 1
++        base, extra = divmod(runs, t)
++    return [(r, c) for r, c in ((base + 1, extra), (base, t - extra)) if c > 0 and r > 0]
++
++
+ # --- output ----------------------------------------------------------------
+ 
+ def write_plan(plan: BuildPlan, inventory: Inventory, output_dir: Path) -> None:
+     output_dir.mkdir(parents=True, exist_ok=True)
+ 
+     rows = []
+-    for type_id, quantity in plan.purchases.items():
++    for type_id in set(plan.purchases) | set(plan.leftovers):
++        quantity = plan.purchases.get(type_id, 0)
+         item = inventory.types.get(type_id)
+         name = inventory.type_name(type_id)
+         volume = inventory.packaged_volume(item) if item else 0.0
+-        rows.append((name, quantity, round(quantity * volume, 2), 0, 0))
++        rows.append((name, quantity, round(quantity * volume, 2), 0, plan.leftovers.get(type_id, 0)))
+     rows.sort(key=lambda r: r[0])
+     with open(output_dir / "materials.csv", "w", newline="", encoding="utf-8") as fh:
+         writer = csv.writer(fh, lineterminator="\n")
+
+### industry.py (modified)
+--- industry.py
++++ industry.py
+@@ -4,6 +4,7 @@
+         [--material-efficiency/-me <0-10>] [--time-efficiency/-te <even 0-20>] [--display-waste/-waste]
+     python industry.py invention <Product or Blueprint name> --sde <SDE directory> [--skill <1-5>]
+     python industry.py plan <Build string> --config <YAML config> --sde <SDE directory> --output <dir>
++        [--build-all]
+ """
+ 
+ import sys
+

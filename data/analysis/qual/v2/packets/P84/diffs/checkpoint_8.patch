@@ -1,0 +1,3017 @@
+### appctl_cli/app.py (modified)
+--- appctl_cli/app.py
++++ appctl_cli/app.py
+@@ -4,7 +4,7 @@
+ import sys
+ import time
+ 
+-from . import config_loader, database, upgrade
++from . import config_loader, database, self_update, system
+ from .arguments import END_OF_OPTIONS, is_assoc_token, parse_argv
+ from .commands import build_command_tree
+ from .context import Context
+@@ -14,9 +14,10 @@
+ from .logger import FileLogger, log_path
+ from .output import Output
+ from .remote import run_remote
+-from .resolver import resolve
++from .resolver import resolve, try_resolve
+ from .rewrites import apply_rewrites
+ from .runtime_config import build_runtime_config, deprecation_warnings, is_strict_mode
++from .startup import Startup, is_machine_readable
+ from .suggest import get_suggestion
+ from .validator import ArgumentValidator
+ 
+@@ -72,9 +73,14 @@
+     return list(positional[:2]) == ["cli", "completions"]
+ 
+ 
+-def runs_automatic_upgrade(positional):
+-    """Every command upgrades first after a version change, except these two."""
+-    return list(positional[:2]) not in (["cli", "completions"], ["cli", "migrate"])
++def runs_startup(positional):
++    """First-run setup and the version comparison run for everything but tab completion."""
++    return not is_completion_request(positional)
++
++
++# Commands that never trigger the automatic update check.
++NO_AUTO_UPDATE = ("cli check-update", "cli completions", "cli has-command", "cli self-uninstall",
++                  "cli update")
+ 
+ 
+ class Runner:
+@@ -87,12 +93,32 @@
+         self.strict = strict
+         self.loaded = loaded
+         self._root = None
++        self._requirements_met = False
+ 
+     @property
+     def root(self):
+         if self._root is None:
+             self._root = build_command_tree()
+         return self._root
++
++    def target_command(self):
++        """The command the positional arguments resolve to, or ``None``."""
++        resolved = try_resolve(self.root, self.parsed.positional)
++        return resolved[0] if resolved else None
++
++    def ensure_requirements(self, command):
++        if self._requirements_met or not system.requires_system_check(command):
++            return
++        system.ensure_requirements(self.environ, self.output)
++        self._requirements_met = True
++
++    def auto_update(self, command):
++        """Periodic update check; an exit code when it ran an update."""
++        if command is None or command.full_name in NO_AUTO_UPDATE:
++            return None
++        if is_machine_readable(command, self.parsed.assoc):
++            return None
++        return self_update.auto_check_update(self.environ, self.output)
+ 
+     # -- aliases ----------------------------------------------------------
+ 
+@@ -150,6 +176,7 @@
+             return 0
+         command, remaining = resolve(self.root, positional)
+         check_disabled(command, positional, runtime["disabled_commands"])
++        self.ensure_requirements(command)
+         if not command.is_runnable:
+             self.output.line(render_usage(command))
+             return 0
+@@ -160,7 +187,8 @@
+         )
+         context = Context(root=self.root, command=command, output=self.output,
+                           runtime=runtime, strict=self.strict, config=self.loaded,
+-                          alias=alias, cwd=self.cwd or os.getcwd(), environ=self.environ)
++                          alias=alias, cwd=self.cwd or os.getcwd(), environ=self.environ,
++                          argv=list(self.argv))
+         return command.handler(context, args, assoc)
+ 
+ 
+@@ -186,22 +214,27 @@
+         db = database.get_db(environ)
+         loaded = config_loader.load(environ, cwd)
+         output.set_color(build_runtime_config(parsed.runtime, loaded.merged)["color"])
+-        if runs_automatic_upgrade(parsed.positional) and upgrade.needs_upgrade(db):
+-            output.debug("Version changed, running the upgrade.", group="bootstrap")
+-            upgrade.run_upgrade(environ, output)
++        runner = Runner(argv, parsed, environ, output, strict, loaded, cwd)
++        target = runner.target_command()
++        if runs_startup(parsed.positional):
++            Startup(environ, output, db, target, parsed.assoc).run()
++            updated = runner.auto_update(target)
++            if updated is not None:
++                return updated
+         output.debug(f"Using global config: {loaded.global_path}", group="bootstrap")
+         if loaded.project_path:
+             output.debug(f"Using project config: {loaded.project_path}", group="bootstrap")
+         else:
+             output.debug("No project config found.", group="bootstrap")
+-        runner = Runner(argv, parsed, environ, output, strict, loaded, cwd)
+         if alias:
+             return runner.run_alias(alias)
+         return runner.run()
+ 
+     code = guarded(output, start)
+     database.close_all()
+-    if not is_completion_request(parsed.positional):
++    # After a self-uninstall the root directory is gone; do not recreate it.
++    if not is_completion_request(parsed.positional) and os.path.isdir(
++            config_loader.root_dir(environ)):
+         clean_cache(environ, output)
+     return code
+ 
+
+### appctl_cli/command.py (modified)
+--- appctl_cli/command.py
++++ appctl_cli/command.py
+@@ -17,7 +17,7 @@
+     """
+ 
+     def __init__(self, name, description="", synopsis="", handler=None,
+-                 alias=None, defaults=None, options=None, longdesc=""):
++                 alias=None, defaults=None, options=None, longdesc="", machine_output=False):
+         self.name = name
+         self.description = description
+         self.synopsis = " ".join((synopsis or "").split())
+@@ -26,6 +26,8 @@
+         self.defaults = dict(defaults or {})
+         self.options = dict(options or {})
+         self.longdesc = longdesc
++        # The output is a machine-readable or shell-consumable payload.
++        self.machine_output = bool(machine_output)
+         self.parent = None
+         self.subcommands = {}
+ 
+
+### appctl_cli/commands/_listing.py (modified)
+--- appctl_cli/commands/_listing.py
++++ appctl_cli/commands/_listing.py
+@@ -28,7 +28,8 @@
+     ]
+ 
+ 
+-def render_list(ctx, items, assoc, default_fields, available=None, id_field="id", prefix=None):
++def render_list(ctx, items, assoc, default_fields, available=None, id_field="id", prefix=None,
++                single_as_item=True):
+     available = list(available or default_fields)
+     items = filter_items(items, assoc, available, prefix)
+     fmt = assoc.get("format", "table")
+@@ -43,7 +44,8 @@
+                 ctx.output.line(format_value(value))
+         return
+     fields = select_fields(assoc.get("fields"), default_fields, available, prefix)
+-    ctx.output.line(format_items(items, fields, fmt, id_field=id_field))
++    ctx.output.line(format_items(items, fields, fmt, id_field=id_field,
++                                 single_as_item=single_as_item))
+ 
+ 
+ def render_record(ctx, item, assoc, available, prefix=None):
+
+### appctl_cli/commands/cli.py (modified)
+--- appctl_cli/commands/cli.py
++++ appctl_cli/commands/cli.py
+@@ -1,51 +1,149 @@
+-"""``appctl cli``: information about appctl itself."""
+-
++"""``appctl cli``: information about appctl itself and its self-management."""
++
++import json
+ import os
+ import platform
+-
+-from .. import PROGRAM_NAME, __version__, upgrade
++import pprint
++import shutil
++
++from .. import PROGRAM_NAME, __version__, container, database, upgrade
+ from ..arguments import is_assoc_token, parse_assoc_token
+-from ..formatter import format_value
++from ..config_loader import ALL_ALIAS, alias_sort_key, is_alias, packages_dir, root_dir
+ from ..errors import AppctlError
+ from ..extract import extract_archive, validate_archive
++from ..file_cache import cache_dir
++from ..formatter import format_value, to_json, to_yaml
++from ..process import exec_command, run_command
+ from ..resolver import try_resolve
+ from ..runtime_config import GLOBAL_PARAMETERS, visible_parameters
+-from ..synopsis import ASSOC, FLAG
++from ..self_update import (UPDATE_ALL_FIELDS, UPDATE_FIELDS, available_updates,
++                           selected_update_type, self_update, up_to_date_message)
++from ..synopsis import ASSOC, FLAG, POSITIONAL
++from ..system import (INSTALL_DIR, PRODUCT_NAME, archive_path, binary_path, ensure_requirements,
++                      runtime_binary, runtime_binary_path, runtime_version)
++from ._listing import LIST_OPTIONS, render_list
++
++INFO_FORMATS = ("list", "json")
++CHECK_UPDATE_FORMATS = ("table", "csv", "json", "count", "yaml")
++PARAM_DUMP_FORMATS = ("json", "var_export")
++ALIAS_FORMATS = ("yaml", "json")
++SHELLS = ("bash", "zsh")
++
++ALL_ALIAS_DESCRIPTION = "Run command against every registered alias."
++FILE_MARKER = "<file> "
++FILE_DESCRIPTION = "Path to a file."
++UNINSTALL_QUESTION = (f"Are you sure you want to remove {PRODUCT_NAME} and all its projects "
++                      "(along with their data)? This is an irreversible action. "
++                      "No backup will be kept.")
++
++
++def _environ(ctx):
++    return ctx.environ if ctx.environ is not None else os.environ
++
++
++def _check_format(fmt, allowed):
++    if fmt not in allowed:
++        raise AppctlError(f"Invalid format: {fmt}. Supported formats: {', '.join(allowed)}.")
++
++
++# -- version / info ----------------------------------------------------------------
+ 
+ 
+ def version(ctx, args, assoc):
+-    ctx.output.line(f"{PROGRAM_NAME} {__version__}")
++    ctx.output.line(__version__)
++
++
++def _os_description():
++    parts = (platform.system(), platform.release(), platform.version(), platform.machine())
++    return " ".join(part for part in parts if part)
++
++
++def info_data(ctx):
++    environ = _environ(ctx)
++    packages = packages_dir(environ)
++    packages = packages if os.path.isdir(packages) else None
++    config = ctx.config
++    try:
++        stored = upgrade.stored_version(database.get_db(environ))
++    except AppctlError:
++        stored = None
++    return {
++        "os": _os_description(),
++        "shell": environ.get("SHELL") or environ.get("COMSPEC"),
++        "runtime_binary": runtime_binary(environ),
++        "runtime_binary_path": runtime_binary_path(environ),
++        "runtime_version": runtime_version(environ),
++        "python_version": platform.python_version(),
++        "appctl_dir_path": INSTALL_DIR,
++        "appctl_binary_path": binary_path(),
++        "appctl_archive_path": archive_path(),
++        "appctl_root_dir": root_dir(environ),
++        "appctl_packages_dir_path": packages,
++        "packages_dir": packages,
++        "appctl_cache_dir": cache_dir(environ),
++        "global_config_path": config.global_path if config else None,
++        "project_config_path": config.project_path if config else None,
++        "appctl_version": __version__,
++        "appctl_stored_version": stored,
++        "appctl_nightly": upgrade.is_nightly(),
++        "release_channel": ctx.runtime.get("installer_version"),
++        "strict_args_mode": ctx.strict,
++        "runtime_config": {k: v for k, v in ctx.runtime.items()
++                           if k in GLOBAL_PARAMETERS and v != GLOBAL_PARAMETERS[k].default},
++    }
++
++
++INFO_LABELS = (
++    ("os", "OS"),
++    ("shell", "Shell"),
++    ("runtime_binary", "Runtime binary"),
++    ("runtime_binary_path", "Runtime binary path"),
++    ("runtime_version", "Runtime version"),
++    ("appctl_dir_path", f"{PRODUCT_NAME} dir path"),
++    ("appctl_binary_path", f"{PRODUCT_NAME} binary path"),
++    ("appctl_archive_path", f"{PRODUCT_NAME} archive path"),
++    ("appctl_root_dir", f"{PRODUCT_NAME} root dir"),
++    ("appctl_packages_dir_path", f"{PRODUCT_NAME} packages dir"),
++    ("appctl_cache_dir", f"{PRODUCT_NAME} cache dir"),
++    ("global_config_path", f"{PRODUCT_NAME} global config"),
++    ("project_config_path", f"{PRODUCT_NAME} project config"),
++    ("appctl_version", f"{PRODUCT_NAME} version"),
++    ("appctl_stored_version", f"{PRODUCT_NAME} stored version"),
++    ("appctl_nightly", f"{PRODUCT_NAME} nightly build"),
++    ("release_channel", f"{PRODUCT_NAME} release channel"),
++    ("strict_args_mode", "Strict args mode"),
++)
++
++
++def _info_text(value):
++    if value is None:
++        return ""
++    if isinstance(value, bool):
++        return "yes" if value else "no"
++    return format_value(value)
+ 
+ 
+ def info(ctx, args, assoc):
+-    data = {
+-        "appctl_version": __version__,
+-        "python_version": platform.python_version(),
+-        "os": platform.system(),
+-        "strict_args_mode": ctx.strict,
+-        "global_config_path": ctx.config.global_path if ctx.config else None,
+-        "project_config_path": ctx.config.project_path if ctx.config else None,
+-        "packages_dir": ctx.config.packages_dir if ctx.config else None,
+-        "runtime_config": {k: v for k, v in ctx.runtime.items()
+-                           if v != GLOBAL_PARAMETERS[k].default},
+-    }
+-    if assoc["format"] == "json":
+-        ctx.output.line(format_value(data, "json"))
++    fmt = assoc.get("format", "list")
++    _check_format(fmt, INFO_FORMATS)
++    data = info_data(ctx)
++    if fmt == "json":
++        ctx.output.line(json.dumps(data, indent=4, default=str))
+         return
+-    if assoc["format"] != "list":
+-        raise AppctlError(f"Invalid format: {assoc['format']}. Supported formats: list, json.")
+-    ctx.output.line(f"appctl version:\t{data['appctl_version']}")
+-    ctx.output.line(f"Python version:\t{data['python_version']}")
+-    ctx.output.line(f"OS:\t{data['os']}")
+-    ctx.output.line(f"Strict args mode:\t{'enabled' if ctx.strict else 'disabled'}")
+-    ctx.output.line(f"Global config:\t{data['global_config_path'] or ''}")
+-    ctx.output.line(f"Project config:\t{data['project_config_path'] or ''}")
+-    ctx.output.line(f"Packages dir:\t{data['packages_dir'] or ''}")
++    for key, label in INFO_LABELS:
++        value = data[key]
++        if key == "strict_args_mode":
++            value = "enabled" if value else "disabled"
++        ctx.output.line(f"{label}:\t{_info_text(value)}")
+     for key, value in data["runtime_config"].items():
+         ctx.output.line(f"--{key}:\t{format_value(value)}")
+ 
+ 
+-def update(ctx, args, assoc):
++# -- updates ----------------------------------------------------------------------------
++
++
++def extract(ctx, assoc):
++    """``cli update --archive``: extract a local ``.zip``/``.tar.gz`` into a directory."""
+     archive = assoc.get("archive")
+     validate_archive(archive)
+     dest = assoc.get("path") or ctx.runtime.get("path") or os.getcwd()
+@@ -55,27 +153,189 @@
+     ctx.output.success(f"Extracted '{archive}' to '{dest}'.")
+ 
+ 
++def update(ctx, args, assoc):
++    if "archive" in assoc:
++        return extract(ctx, assoc)
++    return self_update(_environ(ctx), ctx.output, assoc, ctx.argv)
++
++
++def check_update(ctx, args, assoc):
++    fmt = assoc.get("format") or "table"
++    _check_format(fmt, CHECK_UPDATE_FORMATS)
++    only = selected_update_type(ctx.argv, assoc)
++    updates = available_updates(_environ(ctx), __version__, only)
++    if not updates and fmt == "table":
++        ctx.output.success(up_to_date_message(only))
++        return
++    render_list(ctx, updates, dict(assoc, format=fmt), UPDATE_FIELDS, UPDATE_ALL_FIELDS,
++                id_field="version", single_as_item=False)
++
++
+ def migrate(ctx, args, assoc):
+     upgrade.run_upgrade(ctx.environ, ctx.output)
+     ctx.output.success(f"Upgraded to {PROGRAM_NAME} {__version__}.")
+ 
+ 
++# -- dumps ------------------------------------------------------------------------------
++
++
+ def param_dump(ctx, args, assoc):
++    fmt = assoc.get("format", "json")
++    _check_format(fmt, PARAM_DUMP_FORMATS)
++    parameters = visible_parameters()
+     dump = {}
+-    for name, param in visible_parameters().items():
+-        entry = {"synopsis": param.synopsis, "description": param.description,
+-                 "default": param.default}
++    for name in sorted(parameters):
++        param = parameters[name]
++        entry = {
++            "runtime": param.runtime,
++            "file": param.file,
++            "synopsis": param.synopsis,
++            "default": param.default,
++            "multiple": param.multiple,
++            "description": param.description,
++            "deprecated": param.deprecated,
++        }
+         if assoc.get("with-values"):
+             entry["current"] = ctx.runtime.get(name)
+         dump[name] = entry
+-    ctx.output.line(format_value(dump, "json"))
++    if fmt == "var_export":
++        ctx.output.line(pprint.pformat(dump, sort_dicts=False))
++    else:
++        ctx.output.line(json.dumps(dump, indent=4, default=str))
++
++
++def command_to_dict(command):
++    entry = {
++        "name": command.name,
++        "description": command.description,
++        "longdesc": command.longdesc or "",
++        "subcommands": [command_to_dict(sub) for sub in command.sorted_subcommands()],
++    }
++    if not entry["subcommands"]:
++        entry["synopsis"] = command.synopsis
++    return entry
++
++
++def cmd_dump(ctx, args, assoc):
++    ctx.output.line(to_json(command_to_dict(ctx.root)))
+ 
+ 
+ def has_command(ctx, args, assoc):
+-    tokens = " ".join(args).split()
++    tokens = " ".join(str(arg) for arg in args).split()
++    if not tokens:
++        return 1
+     resolved = try_resolve(ctx.root, tokens)
+-    found = resolved is not None and not resolved[1]
+-    return 0 if found else 1
++    if resolved is None or resolved[1]:
++        return 1
++    disabled = {" ".join(str(entry).split()) for entry in ctx.runtime.get("disabled_commands", ())}
++    path = resolved[0].path
++    if any(" ".join(path[:depth]) in disabled for depth in range(1, len(path) + 1)):
++        return 1
++    return 0
++
++
++# -- aliases ----------------------------------------------------------------------------
++
++
++def alias_listing(aliases):
++    """Registered aliases by name; ``@all`` first when registered."""
++    listing = {}
++    if ALL_ALIAS in aliases:
++        definition = aliases[ALL_ALIAS]
++        listing[ALL_ALIAS] = ALL_ALIAS_DESCRIPTION if definition is None else definition
++    for name in sorted((n for n in aliases if n != ALL_ALIAS), key=alias_sort_key):
++        listing[name] = aliases[name]
++    return listing
++
++
++def alias(ctx, args, assoc):
++    fmt = assoc.get("format", "yaml")
++    _check_format(fmt, ALIAS_FORMATS)
++    listing = alias_listing(ctx.config.aliases if ctx.config else {})
++    ctx.output.line(to_json(listing) if fmt == "json" else to_yaml(listing))
++
++
++# -- self-uninstall ----------------------------------------------------------------------
++
++RESOURCES = (
++    ("containers", ["ps", "-aq"], ["rm", "-f"]),
++    ("networks", ["network", "ls", "-q"], ["network", "rm"]),
++    ("volumes", ["volume", "ls", "-q"], ["volume", "rm", "-f"]),
++    ("images", ["images", "-q"], ["rmi", "-f"]),
++)
++
++
++def _labeled_ids(list_command, output):
++    argv = [container.RUNTIME_BINARY] + list_command + ["--filter",
++                                                        f"label={container.VENDOR_LABEL}"]
++    result = run_command(argv, output)
++    if not result.succeeded:
++        return None
++    ids = []
++    for item in result.stdout.split():
++        if item not in ids:
++            ids.append(item)
++    return ids
++
++
++def remove_runtime_resources(output):
++    """Remove every appctl-labeled container, network, volume and image."""
++    for kind, list_command, remove_command in RESOURCES:
++        ids = _labeled_ids(list_command, output)
++        if ids is None:
++            output.warning(f"Unable to list the {PRODUCT_NAME} {kind}.")
++            continue
++        if ids and not exec_command([container.RUNTIME_BINARY] + remove_command + ids, output):
++            output.warning(f"Unable to remove some {PRODUCT_NAME} {kind}.")
++
++
++def _is_protected(path):
++    path = os.path.realpath(path)
++    protected = {os.path.realpath(os.sep), os.path.realpath(os.path.expanduser("~"))}
++    return path in protected
++
++
++def _remove_tree(path, output):
++    if not path or not os.path.lexists(path):
++        return
++    if _is_protected(path):
++        output.warning(f"Refusing to remove '{path}'.")
++        return
++    try:
++        if os.path.isdir(path) and not os.path.islink(path):
++            shutil.rmtree(path)
++        else:
++            os.unlink(path)
++    except OSError as exc:
++        output.warning(f"Unable to remove '{path}': {exc.strerror or exc}.")
++
++
++def self_uninstall(ctx, args, assoc):
++    environ = _environ(ctx)
++    output = ctx.output
++    ensure_requirements(environ, output)
++    if not output.confirm(UNINSTALL_QUESTION, assoc):
++        return 0
++    remove_runtime_resources(output)
++    try:
++        projects = database.get_db(environ).get_projects()
++    except AppctlError as exc:
++        output.warning(f"Unable to read the projects: {exc.message}")
++        projects = []
++    database.close_all()
++    for project in projects:
++        _remove_tree(project["path"], output)
++    if output.logger is not None:
++        output.logger.enabled = False
++    _remove_tree(root_dir(environ), output)
++    archive = archive_path()
++    if archive:
++        _remove_tree(archive, output)
++    output.success(f"{PRODUCT_NAME} has been removed successfully.")
++    return 0
++
++
++# -- tab completion -------------------------------------------------------------------------
+ 
+ 
+ def _completion_words(line):
+@@ -89,83 +349,190 @@
+     return words, current
+ 
+ 
+-def completion_candidates(root, line):
++def _alias_description(definition):
++    if definition is None:
++        return ALL_ALIAS_DESCRIPTION
++    if isinstance(definition, list):
++        return "Group of aliases: " + ", ".join(definition)
++    if isinstance(definition, dict):
++        target = definition.get("ssh") or definition.get("path") or definition.get("url")
++        if target:
++            return f"Alias for {target}."
++    return "Alias."
++
++
++def _is_file_positional(token):
++    name = (token.name or "").lower()
++    return name == "file" or name.endswith(("-file", "_file"))
++
++
++def completion_suggestions(root, line, aliases=None):
++    """``[(suggestion, description)]`` for the word at the end of ``line``, sorted."""
+     words, current = _completion_words(line)
++    alias_given = bool(words) and is_alias(words[0])
++    if alias_given:
++        words = words[1:]
+     used = {parse_assoc_token(w)[0] for w in words if is_assoc_token(w)}
+     command = root
+     consumed = True
++    positional_count = 0
+     for word in (w for w in words if not is_assoc_token(w)):
+         child = command.find_subcommand(word) if consumed else None
+         if child is None:
+             if not command.is_runnable or command.is_root:
+                 return []
+             consumed = False
++            positional_count += 1
+             continue
+         command = child
+-    candidates = []
++
++    found = {}
++
++    def add(text, description=""):
++        if text.startswith(current):
++            found.setdefault(text, description or "")
++
++    if consumed and command.is_root and not alias_given:
++        for name, definition in (aliases or {}).items():
++            add(f"{name} ", _alias_description(definition))
+     if consumed:
+-        candidates += [f"{sub.name} " for sub in command.sorted_subcommands()]
++        for sub in command.sorted_subcommands():
++            add(f"{sub.name} ", sub.description)
+     if command.is_runnable and not command.is_root:
++        positionals = command.tokens_of_type(POSITIONAL)
++        upcoming = None
++        if positional_count < len(positionals):
++            upcoming = positionals[positional_count]
++        elif positionals and positionals[-1].repeating:
++            upcoming = positionals[-1]
++        if upcoming is not None and _is_file_positional(upcoming) and not current.startswith("-"):
++            return [(FILE_MARKER, FILE_DESCRIPTION)]
+         for token in command.tokens_of_type(ASSOC, FLAG):
+             if token.name not in used:
+-                candidates.append(f"--{token.name}=" if token.type == ASSOC else f"--{token.name} ")
++                text = f"--{token.name}=" if token.type == ASSOC else f"--{token.name} "
++                add(text, command.options.get(token.name, ""))
+         for name, param in visible_parameters().items():
+             if param.runtime and name not in used:
+-                candidates.append(f"--{name}=" if "=" in param.synopsis else f"--{name} ")
+-    return [c for c in candidates if c.startswith(current)]
++                add(f"--{name}=" if "=" in param.synopsis else f"--{name} ", param.description)
++    return sorted(found.items(), key=lambda item: (item[0].lower(), item[0]))
++
++
++def render_completion(suggestion, description, shell="bash"):
++    if shell != "zsh":
++        return suggestion
++    name = suggestion.rstrip().replace("\\", "\\\\").replace(":", "\\:")
++    summary = " ".join(str(description or "").split())
++    return f"{name}:{summary}" if summary else name
+ 
+ 
+ def completions(ctx, args, assoc):
++    shell = assoc.get("shell") or "bash"
++    if shell not in SHELLS:
++        raise AppctlError(f"Invalid shell: {shell}. Supported shells: {', '.join(SHELLS)}.")
+     line = str(assoc["line"])
+     point = assoc.get("point")
+     if point is not None and point is not True:
+         try:
+-            line = line[:int(point)]
++            line = line[:max(int(point), 0)]
+         except ValueError:
+             pass
+-    for candidate in completion_candidates(ctx.root, line):
+-        ctx.output.line(candidate)
++    aliases = ctx.config.aliases if ctx.config else {}
++    for suggestion, description in completion_suggestions(ctx.root, line, aliases):
++        ctx.output.line(render_completion(suggestion, description, shell))
++
++
++# -- registration ---------------------------------------------------------------------------
+ 
+ 
+ def register(registry):
+-    registry.add("cli", description="Reviews current appctl info.")
+-    registry.add("cli version", version, description="Prints the appctl version.")
+-    registry.add(
+-        "cli info", info,
++    registry.add("cli", description=f"Reviews current {PROGRAM_NAME} info and manages "
++                                    f"{PROGRAM_NAME} itself.")
++    registry.add(
++        "cli alias", alias,
+         synopsis="[--format=<format>]",
+-        description="Prints various details about the appctl environment.",
+-        defaults={"format": "list"},
+-        options={"format": "Render output in a particular format (list, json)."},
+-    )
+-    registry.add(
+-        "cli update", update,
+-        synopsis="--archive=<archive-path> [--path=<destination>]",
+-        description="Extracts a .zip or .tar.gz archive into a directory.",
+-        options={"archive": "Path to the archive to extract.",
+-                 "path": "Directory to extract into. Defaults to the current directory."},
+-    )
+-    registry.add(
+-        "cli migrate", migrate,
+-        description="Runs pending migrations and upgrades containers to the current version.",
+-    )
+-    registry.add(
+-        "cli param-dump", param_dump,
+-        synopsis="[--with-values] [--format=<format>]",
+-        description="Dumps the list of global parameters, as JSON.",
+-        defaults={"format": "json"},
+-        options={"with-values": "Display current values also."},
++        description="Lists the registered aliases.",
++        defaults={"format": "yaml"},
++        options={"format": "Render output in a particular format (yaml, json)."},
++        alias="aliases", machine_output=True,
++    )
++    registry.add(
++        "cli check-update", check_update,
++        synopsis="[--patch] [--minor] [--major] [--field=<field>] [--fields=<fields>] "
++                 "[--format=<format>]",
++        description=f"Checks for {PROGRAM_NAME} updates via the releases API.",
++        options=dict(LIST_OPTIONS,
++                     patch="Only list patch updates.",
++                     minor="Only list minor updates.",
++                     major="Only list major updates.",
++                     format="Render output in a particular format (table, csv, json, count, "
++                            "yaml)."),
++    )
++    registry.add(
++        "cli cmd-dump", cmd_dump,
++        description="Dumps the list of installed commands, as JSON.",
++        machine_output=True,
+     )
+     registry.add(
+         "cli completions", completions,
+-        synopsis="--line=<line> [--point=<point>]",
++        synopsis="--line=<line> [--point=<point>] [--shell=<shell>]",
+         description="Generates tab completion strings.",
++        defaults={"shell": "bash"},
+         options={"line": "The current command line to be executed.",
+                  "point": "The index to the current cursor position relative to the beginning "
+-                          "of the command."},
++                          "of the command.",
++                 "shell": "The shell to generate completions for (bash, zsh)."},
++        machine_output=True,
+     )
+     registry.add(
+         "cli has-command", has_command,
+         synopsis="<command-name>...",
+         description="Detects if a command exists.",
+         options={"command-name": "The command to check."},
+-    )
++        machine_output=True,
++    )
++    registry.add(
++        "cli info", info,
++        synopsis="[--format=<format>]",
++        description=f"Prints various details about the {PROGRAM_NAME} environment.",
++        defaults={"format": "list"},
++        options={"format": "Render output in a particular format (list, json)."},
++    )
++    registry.add(
++        "cli migrate", migrate,
++        description="Runs pending migrations and upgrades containers to the current version.",
++    )
++    registry.add(
++        "cli param-dump", param_dump,
++        synopsis="[--with-values] [--format=<format>]",
++        description="Dumps the list of global parameters, as JSON or in var_export format.",
++        defaults={"format": "json"},
++        options={"with-values": "Display current values also.",
++                 "format": "Render output in a particular format (json, var_export)."},
++        machine_output=True,
++    )
++    registry.add(
++        "cli self-uninstall", self_uninstall,
++        synopsis="[--yes]",
++        description=f"Removes {PROGRAM_NAME} and everything it created from the system.",
++        options={"yes": "Do not prompt for confirmation."},
++    )
++    registry.add(
++        "cli update", update,
++        synopsis="[--stable] [--nightly] [--patch] [--minor] [--major] [--yes] "
++                 "[--archive=<archive-path>] [--path=<destination>]",
++        description=f"Updates {PROGRAM_NAME} to the latest release.",
++        longdesc=(f"Without --stable or --nightly, checks for a newer version and asks to "
++                  "install it.\nWith --archive, extracts a local .zip or .tar.gz archive into "
++                  "a directory instead."),
++        options={"stable": "Update to the latest stable release.",
++                 "nightly": "Update to the latest nightly build.",
++                 "patch": "Only perform patch updates.",
++                 "minor": "Only perform minor updates.",
++                 "major": "Only perform major updates.",
++                 "yes": "Do not prompt for confirmation.",
++                 "archive": "Path to a local archive to extract instead of updating.",
++                 "path": "Directory to extract the archive into. Defaults to the current "
++                         "directory."},
++    )
++    registry.add("cli version", version, description=f"Prints the {PROGRAM_NAME} version.",
++                 machine_output=True)
+
+### appctl_cli/commands/config.py (modified)
+--- appctl_cli/commands/config.py
++++ appctl_cli/commands/config.py
+@@ -107,7 +107,7 @@
+         "config get", get,
+         synopsis="<name> [--type=<type>]",
+         description="Gets the value of a specific constant or variable defined in the configuration file.",
+-        defaults={"type": "all"}, options=type_option,
++        defaults={"type": "all"}, options=type_option, machine_output=True,
+     )
+     registry.add(
+         "config list", list_,
+@@ -115,7 +115,8 @@
+         description="Lists variables, constants, and file includes defined in the configuration file.",
+         defaults={"format": "table"}, options=LIST_OPTIONS,
+     )
+-    registry.add("config path", path, description="Gets the path to the configuration file.")
++    registry.add("config path", path, description="Gets the path to the configuration file.",
++                 machine_output=True)
+     registry.add(
+         "config set", set_,
+         synopsis="<name> <value> [--type=<type>] [--raw]",
+
+### appctl_cli/commands/option.py (modified)
+--- appctl_cli/commands/option.py
++++ appctl_cli/commands/option.py
+@@ -93,7 +93,7 @@
+         synopsis="<key> [--format=<format>]",
+         description="Gets the value for an option.",
+         defaults={"format": "plaintext"},
+-        options=value_options,
++        options=value_options, machine_output=True,
+     )
+     registry.add(
+         "option list", list_,
+
+### appctl_cli/commands/site.py (modified)
+--- appctl_cli/commands/site.py
++++ appctl_cli/commands/site.py
+@@ -128,6 +128,7 @@
+         synopsis="[<site-name>] [--services]",
+         description="Shows the merged compose configuration of a site.",
+         options=dict(site_option, services="Only list the service names, one per line."),
++        machine_output=True,
+     )
+     registry.add(
+         "site create", create,
+
+### appctl_cli/context.py (modified)
+--- appctl_cli/context.py
++++ appctl_cli/context.py
+@@ -14,3 +14,4 @@
+     alias: str = None
+     cwd: str = None
+     environ: dict = None
++    argv: list = field(default_factory=list)
+
+### appctl_cli/formatter.py (modified)
+--- appctl_cli/formatter.py
++++ appctl_cli/formatter.py
+@@ -89,7 +89,8 @@
+     return buffer.getvalue().rstrip("\n")
+ 
+ 
+-def format_items(items, fields, fmt="table", id_field="id"):
++def format_items(items, fields, fmt="table", id_field="id", single_as_item=True):
++    """Render records; with ``single_as_item`` a lone record's table is laid out vertically."""
+     _check_format(fmt, LIST_FORMATS)
+     if fmt == "count":
+         return str(len(items))
+@@ -100,7 +101,7 @@
+         return to_json(records)
+     if fmt == "yaml":
+         return to_yaml(records)
+-    if fmt == "table" and len(items) == 1:
++    if fmt == "table" and len(items) == 1 and single_as_item:
+         return format_item(items[0], fields, "table")
+     rows = [[_text(record[f]) for f in fields] for record in records]
+     if fmt == "csv":
+
+### appctl_cli/migrations/README.md (deleted)
+--- appctl_cli/migrations/README.md
++++ appctl_cli/migrations/README.md
+@@ -1,20 +0,0 @@
+-# Migrations
+-
+-appctl and every installed extension may ship migrations:
+-
+-    <source>/migrations/db/<sequence>_<name>.py          database migrations
+-    <source>/migrations/container/<sequence>_<name>.py   container migrations
+-
+-`<source>` is this package directory for appctl itself, or an extension
+-directory under the packages directory (`<packages>/<extension>` or
+-`<packages>/<vendor>/<extension>`). `<sequence>` is a number, usually a
+-`YYYYMMDDHHMMSS` timestamp; pending migrations run in ascending
+-`(sequence, name, source)` order.
+-
+-A migration module defines `up()` and optionally `down()` (or a `Migration`
+-class with those methods). Both may take one argument, a
+-`MigrationContext` giving access to `db`, `output`, `environ`, `root_dir`
+-and the migration's `source`, `name`, `type` and `path`.
+-
+-Applied migrations are recorded in the `migrations` table as
+-`<source>:<sequence>_<name>` with their type (`db` or `container`).
+
+### appctl_cli/output.py (modified)
+--- appctl_cli/output.py
++++ appctl_cli/output.py
+@@ -1,5 +1,6 @@
+ """Writers for the different kinds of user-facing output."""
+ 
++import copy
+ import os
+ import platform
+ import select
+@@ -90,6 +91,13 @@
+     def stdin(self):
+         return self._stdin or sys.stdin
+ 
++    def redirected(self, stdout=None, stderr=None):
++        """A copy of this writer that sends STDOUT (and/or STDERR) messages elsewhere."""
++        clone = copy.copy(self)
++        clone._stdout = self.stdout if stdout is None else stdout
++        clone._stderr = self.stderr if stderr is None else stderr
++        return clone
++
+     # -- colors -----------------------------------------------------------
+ 
+     def set_color(self, value):
+
+### appctl_cli/process.py (modified)
+--- appctl_cli/process.py
++++ appctl_cli/process.py
+@@ -15,6 +15,7 @@
+ 
+ OBFUSCATED = "******"
+ SIGNAL_EXIT_CODE = -1
++TIMEOUT_EXIT_CODE = 124
+ SIGNAL_WARNING = ("Spawned process returned exit code -1, which could be caused by the "
+                   "signal handling configuration of the runtime (e.g. a custom SIGCHLD or "
+                   "SIGHUP handler).")
+@@ -72,12 +73,14 @@
+         print(f"Warning: {SIGNAL_WARNING}", file=sys.stderr)
+ 
+ 
+-def run_command(command, output=None, obfuscate_list=(), cwd=None, env=None, stdin=None):
++def run_command(command, output=None, obfuscate_list=(), cwd=None, env=None, stdin=None,
++                timeout=None):
+     """Run ``command`` (a shell string or an argv list) and return a :class:`ProcessRun`.
+ 
+     The command is logged at debug level before it runs; non-empty STDOUT and
+     STDERR and then the return code are logged afterwards. Every substring in
+-    ``obfuscate_list`` is masked in the log, never in the command itself.
++    ``obfuscate_list`` is masked in the log, never in the command itself. A
++    command still running after ``timeout`` seconds is killed (return code 124).
+     """
+     shell = not isinstance(command, (list, tuple))
+     argv = command if shell else [str(part) for part in command]
+@@ -85,8 +88,11 @@
+     started = time.monotonic()
+     try:
+         completed = subprocess.run(argv, shell=shell, cwd=cwd, env=env, input=stdin,
+-                                   capture_output=True, text=True, errors="replace")
++                                   capture_output=True, text=True, errors="replace",
++                                   timeout=timeout)
+         stdout, stderr, return_code = completed.stdout, completed.stderr, completed.returncode
++    except subprocess.TimeoutExpired:
++        stdout, stderr, return_code = "", f"Timed out after {timeout} seconds.\n", TIMEOUT_EXIT_CODE
+     except OSError as exc:
+         stdout, stderr, return_code = "", f"{exc.strerror or exc}\n", 127
+     run_time = time.monotonic() - started
+@@ -160,11 +166,15 @@
+     words = shlex.split(command) if isinstance(command, str) else list(command)
+     words += [str(a) for a in args]
+     words += [_flag(k, v) for k, v in (assoc or {}).items()]
+-    return [sys.executable, SCRIPT_PATH] + runtime_flags(runtime) + words
++    from .system import binary_path, runtime_binary
++    return [runtime_binary(), binary_path() or SCRIPT_PATH] + runtime_flags(runtime) + words
+ 
+ 
+ def self_environment(config_path=None, environ=None):
++    """Child environment; it records the runtime binary used to launch appctl."""
++    from .system import RUNTIME_BIN_USED_ENV, runtime_binary
+     env = dict(os.environ if environ is None else environ)
++    env[RUNTIME_BIN_USED_ENV] = runtime_binary(env)
+     if config_path:
+         env[CONFIG_PATH_ENV] = str(config_path)
+     return env
+
+### appctl_cli/self_update.py (created)
+--- appctl_cli/self_update.py
++++ appctl_cli/self_update.py
+@@ -0,0 +1,451 @@
++"""Release lookup, self-update of the appctl binary and the periodic update check."""
++
++import hashlib
++import json
++import os
++import shutil
++import stat
++import tempfile
++import time
++import urllib.error
++import urllib.request
++
++from . import PROGRAM_NAME, __version__
++from .arguments import END_OF_OPTIONS, is_assoc_token, parse_assoc_token
++from .config_loader import CONFIG_PATH_ENV, PACKAGES_DIR_ENV, ROOT_DIR_ENV
++from .container import is_truthy
++from .errors import AppctlError
++from .file_cache import CACHE_DIR_ENV, get_cache
++from .output import _isatty
++from .process import run_command
++from .system import PRODUCT_NAME, binary_path, is_binary_writable, is_darwin, runtime_binary
++from .upgrade import _SEMVER_RE, compare_semver, is_nightly, parse_semver
++
++RELEASES_URL_ENV = "APPCTL_RELEASES_URL"
++NIGHTLY_VERSION_URL_ENV = "APPCTL_NIGHTLY_VERSION_URL"
++NIGHTLY_URL_ENV = "APPCTL_NIGHTLY_URL"
++AUTO_CHECK_DAYS_ENV = "APPCTL_AUTO_CHECK_UPDATE_DAYS"
++DISABLE_AUTO_CHECK_ENV = "APPCTL_DISABLE_AUTO_CHECK_UPDATE"
++
++RELEASES_URL = f"https://api.github.com/repos/{PROGRAM_NAME}/{PROGRAM_NAME}/releases?per_page=100"
++NIGHTLY_BASE_URL = f"https://raw.githubusercontent.com/{PROGRAM_NAME}/{PROGRAM_NAME}-builds/main/nightly"
++NIGHTLY_VERSION_URL = f"{NIGHTLY_BASE_URL}/NIGHTLY_VERSION"
++NIGHTLY_URL = f"{NIGHTLY_BASE_URL}/{PROGRAM_NAME}-nightly.pyz"
++
++MAJOR, MINOR, PATCH, NIGHTLY = "major", "minor", "patch", "nightly"
++UPDATE_TYPES = (MAJOR, MINOR, PATCH)
++STABLE = "stable"
++CHANNELS = (STABLE, NIGHTLY)
++UPDATE_FIELDS = ["version", "update_type", "package_url"]
++UPDATE_ALL_FIELDS = UPDATE_FIELDS + ["status"]
++
++DEFAULT_CHECK_DAYS = 1
++SECONDS_PER_DAY = 86400
++UPDATE_CHECK_KEY = f"{PROGRAM_NAME}-update-check"
++
++CHECKSUM_ALGORITHMS = ("sha512", "sha256", "md5")
++HTTP_TIMEOUT = 30
++DOWNLOAD_TIMEOUT = 600
++VALIDATION_TIMEOUT = 120
++
++DARWIN_ERROR = ("Self-update is not available. "
++                "Please use your system package manager to update.")
++BROKEN_UPDATE = ("The downloaded update is broken; the existing installation was kept. "
++                 f"Please try running '{PROGRAM_NAME} cli update' again.")
++
++
++# -- HTTP ------------------------------------------------------------------------------
++
++
++def _request(url):
++    return urllib.request.Request(str(url), headers={
++        "User-Agent": f"{PROGRAM_NAME}/{__version__}",
++        "Accept": "application/vnd.github+json, application/json;q=0.9, */*;q=0.8",
++    })
++
++
++def _reason(exc):
++    if isinstance(exc, urllib.error.HTTPError):
++        return f"HTTP code {exc.code}"
++    if isinstance(exc, urllib.error.URLError):
++        return str(exc.reason)
++    return getattr(exc, "strerror", None) or str(exc) or exc.__class__.__name__
++
++
++def fetch(url, timeout=HTTP_TIMEOUT):
++    """The body of ``url`` as bytes."""
++    try:
++        with urllib.request.urlopen(_request(url), timeout=timeout) as response:
++            return response.read()
++    except (urllib.error.URLError, OSError, ValueError) as exc:
++        raise AppctlError(f"Failed to fetch '{url}' ({_reason(exc)}).") from exc
++
++
++def download(url, destination, timeout=DOWNLOAD_TIMEOUT):
++    try:
++        with urllib.request.urlopen(_request(url), timeout=timeout) as response, \
++                open(destination, "wb") as handle:
++            shutil.copyfileobj(response, handle)
++    except (urllib.error.URLError, OSError, ValueError) as exc:
++        raise AppctlError(f"Unable to download the update from '{url}' ({_reason(exc)}).") from exc
++
++
++# -- releases ------------------------------------------------------------------------------
++
++
++def releases_url(environ):
++    return environ.get(RELEASES_URL_ENV) or RELEASES_URL
++
++
++def nightly_version_url(environ):
++    return environ.get(NIGHTLY_VERSION_URL_ENV) or NIGHTLY_VERSION_URL
++
++
++def nightly_package_url(environ):
++    return environ.get(NIGHTLY_URL_ENV) or NIGHTLY_URL
++
++
++def _clean_version(text):
++    text = str(text or "").strip()
++    return text[1:] if text[:1] in ("v", "V") else text
++
++
++def _package_url(release):
++    for asset in release.get("assets") or ():
++        if isinstance(asset, dict) and asset.get("browser_download_url"):
++            return str(asset["browser_download_url"])
++    for key in ("package_url", "download_url"):
++        if release.get(key):
++            return str(release[key])
++    return None
++
++
++def stable_releases(environ):
++    """Published stable releases as ``[{"version", "package_url"}]``."""
++    url = releases_url(environ)
++    try:
++        data = json.loads(fetch(url).decode("utf-8", "replace"))
++    except AppctlError as exc:
++        raise AppctlError(f"Failed to get the latest version: {exc.message}") from exc
++    except ValueError as exc:
++        raise AppctlError(f"Failed to get the latest version: invalid response from '{url}'.") from exc
++    if isinstance(data, dict):
++        data = data.get("releases", [data])
++    if not isinstance(data, list):
++        raise AppctlError(f"Failed to get the latest version: invalid response from '{url}'.")
++    found = []
++    for release in data:
++        if not isinstance(release, dict) or release.get("draft") or release.get("prerelease"):
++            continue
++        version = _clean_version(release.get("tag_name") or release.get("version")
++                                 or release.get("name"))
++        parsed = parse_semver(version)
++        if parsed is None or parsed[1] or _SEMVER_RE.fullmatch(version) is None:
++            continue
++        found.append({"version": version, "package_url": _package_url(release)})
++    return found
++
++
++def update_type(new, current=__version__):
++    """``major``, ``minor`` or ``patch`` when ``new`` is newer than ``current``, else ``None``."""
++    try:
++        if compare_semver(new, current) <= 0:
++            return None
++    except ValueError:
++        return None
++    new_release, current_release = parse_semver(new)[0], parse_semver(current)[0]
++    if new_release[0] != current_release[0]:
++        return MAJOR
++    if new_release[1] != current_release[1]:
++        return MINOR
++    return PATCH
++
++
++def _entry(version, kind, package_url):
++    return {"version": version, "update_type": kind, "package_url": package_url,
++            "status": "available"}
++
++
++def nightly_version(environ):
++    url = nightly_version_url(environ)
++    try:
++        text = fetch(url).decode("utf-8", "replace").strip()
++    except AppctlError as exc:
++        raise AppctlError(f"Failed to get the latest nightly version: {exc.message}") from exc
++    if not text:
++        raise AppctlError(f"Failed to get the latest nightly version from '{url}'.")
++    return _clean_version(text.split()[0])
++
++
++def nightly_updates(environ, current=__version__):
++    latest = nightly_version(environ)
++    try:
++        newer = compare_semver(latest, current) > 0
++    except ValueError:
++        newer = latest != current
++    return [_entry(latest, NIGHTLY, nightly_package_url(environ))] if newer else []
++
++
++def available_updates(environ, current=__version__, only=None):
++    """Newest release per update type (major, minor, patch order), optionally one type only.
++
++    Nightly builds consult the nightly version source instead of the releases.
++    """
++    if is_nightly(current):
++        return nightly_updates(environ, current)
++    best = {}
++    for release in stable_releases(environ):
++        kind = update_type(release["version"], current)
++        if kind is None:
++            continue
++        if kind in best and compare_semver(release["version"], best[kind]["version"]) <= 0:
++            continue
++        best[kind] = _entry(release["version"], kind, release["package_url"])
++    types = [only] if only else UPDATE_TYPES
++    return [best[kind] for kind in types if kind in best]
++
++
++def latest_stable(environ):
++    latest = None
++    for release in stable_releases(environ):
++        if latest is None or compare_semver(release["version"], latest["version"]) > 0:
++            latest = release
++    if latest is None:
++        raise AppctlError("Failed to get the latest stable release: no release found.")
++    return latest
++
++
++def last_flag(argv, assoc, names):
++    """The last of ``names`` given as an enabled flag, in command-line order."""
++    last = None
++    for token in argv or ():
++        if token == END_OF_OPTIONS:
++            break
++        if is_assoc_token(token):
++            key, value = parse_assoc_token(token)
++            if key in names and value is not False:
++                last = key
++    if last is not None and assoc.get(last):
++        return last
++    enabled = [name for name in assoc if name in names and assoc[name]]
++    return enabled[-1] if enabled else None
++
++
++def selected_update_type(argv, assoc):
++    """The ``--patch``/``--minor``/``--major`` filter; the last one given wins."""
++    return last_flag(argv, assoc, UPDATE_TYPES)
++
++
++def up_to_date_message(only=None):
++    level = f"latest {only} version" if only else "latest version"
++    return f"{PRODUCT_NAME} is up to date: it is at the {level}."
++
++
++# -- self-update ------------------------------------------------------------------------------
++
++
++def verify_checksum(path, url, output):
++    """Check the download against a published ``<url>.<algorithm>`` hash, when there is one."""
++    for algorithm in CHECKSUM_ALGORITHMS:
++        try:
++            published = fetch(f"{url}.{algorithm}").decode("utf-8", "replace").split()
++        except AppctlError:
++            continue
++        if not published:
++            continue
++        expected = published[0].lower()
++        digest = hashlib.new(algorithm)
++        with open(path, "rb") as handle:
++            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
++                digest.update(chunk)
++        actual = digest.hexdigest()
++        if actual != expected:
++            raise AppctlError(f"The {algorithm} hash of the download ({actual}) is different "
++                              f"than the release hash ({expected}).")
++        output.log(f"{algorithm} hash verified: {expected}")
++        return True
++    output.debug("No release hash published, skipping the hash verification.", group="update")
++    return False
++
++
++def validation_environment(environ, workdir):
++    """Run the new binary against throwaway state, never the user's."""
++    env = {k: v for k, v in environ.items()
++           if k not in (CONFIG_PATH_ENV, PACKAGES_DIR_ENV, CACHE_DIR_ENV)}
++    env[ROOT_DIR_ENV] = workdir
++    env[DISABLE_AUTO_CHECK_ENV] = "1"
++    return env
++
++
++def validate_binary(path, environ, output):
++    """Run ``<runtime> <path> cli version``; return the version it reports or raise."""
++    workdir = tempfile.mkdtemp(prefix=f"{PROGRAM_NAME}-update-")
++    try:
++        result = run_command([runtime_binary(environ), path, "cli", "version"], output,
++                             cwd=workdir, env=validation_environment(environ, workdir),
++                             timeout=VALIDATION_TIMEOUT)
++    finally:
++        shutil.rmtree(workdir, ignore_errors=True)
++    match = _SEMVER_RE.search(result.stdout or "")
++    if not result.succeeded or not match:
++        details = [line for line in (result.stderr or "").strip().splitlines() if line.strip()]
++        for line in details[-5:]:
++            output.debug(f"Validation: {line}", group="update")
++        raise AppctlError(BROKEN_UPDATE)
++    return match.group(0).lstrip("vV")
++
++
++def install_binary(source, target):
++    """Atomically replace ``target`` with ``source``, keeping the permissions of ``target``."""
++    try:
++        mode = stat.S_IMODE(os.stat(target).st_mode)
++    except OSError:
++        mode = 0o755
++    try:
++        os.chmod(source, mode)
++    except OSError as exc:
++        raise AppctlError(f"Cannot chmod {source}.") from exc
++    try:
++        os.replace(source, target)
++    except OSError as exc:
++        raise AppctlError(f"Cannot move {source} to {target} ({exc.strerror or exc}).") from exc
++
++
++def _check_target(target):
++    if not target or not os.path.isfile(target):
++        raise AppctlError(f"Unable to locate the {PRODUCT_NAME} binary.")
++    if not os.access(target, os.W_OK):
++        raise AppctlError(f"{target} is not writable by current user.")
++    directory = os.path.dirname(target) or "."
++    if not os.access(directory, os.W_OK):
++        raise AppctlError(f"{directory} is not writable by current user.")
++
++
++def self_update(environ, output, assoc=None, argv=(), current=__version__, platform_name=None,
++                target=None):
++    """``cli update``: download, validate and install a newer distribution archive."""
++    assoc = dict(assoc or {})
++    if is_darwin(platform_name):
++        raise AppctlError(DARWIN_ERROR)
++    target = target or binary_path()
++    _check_target(target)
++    channel = last_flag(argv, assoc, CHANNELS)
++    if channel == NIGHTLY:
++        try:
++            version = nightly_version(environ)
++        except AppctlError as exc:
++            output.debug(exc.message, group="update")
++            version = None
++        url = nightly_package_url(environ)
++        question = (f"You are currently using {PRODUCT_NAME} version {current}. "
++                    "Would you like to update to the latest nightly version?")
++    elif channel == STABLE:
++        release = latest_stable(environ)
++        version, url = release["version"], release["package_url"]
++        question = (f"You are currently using {PRODUCT_NAME} version {current}. "
++                    f"Would you like to update to the latest stable release ({version})?")
++    else:
++        only = selected_update_type(argv, assoc)
++        updates = available_updates(environ, current, only)
++        if not updates:
++            output.success(up_to_date_message(only))
++            return 0
++        newest = updates[0]
++        version, url = newest["version"], newest["package_url"]
++        question = f"You have version {current}. Would you like to update to {version}?"
++    if not url:
++        raise AppctlError(f"No download is available for {PRODUCT_NAME} {version}.")
++    if not output.confirm(question, assoc):
++        return 0
++
++    output.log(f"Downloading from {url}...")
++    handle, temp = tempfile.mkstemp(prefix=f".{os.path.basename(target)}.", suffix=".download",
++                                    dir=os.path.dirname(target) or ".")
++    os.close(handle)
++    try:
++        download(url, temp)
++        verify_checksum(temp, url, output)
++        reported = validate_binary(temp, environ, output)
++        output.log("New version works. Proceeding to replace.")
++        install_binary(temp, target)
++    finally:
++        if os.path.exists(temp):
++            os.unlink(temp)
++    output.success(f"Updated {PRODUCT_NAME} to {version or reported}.")
++    return 0
++
++
++# -- automatic update check ------------------------------------------------------------------------
++
++
++def check_interval(environ):
++    """Whole days between automatic checks (``APPCTL_AUTO_CHECK_UPDATE_DAYS``, default 1)."""
++    raw = environ.get(AUTO_CHECK_DAYS_ENV)
++    if raw is None or str(raw).strip() == "":
++        return DEFAULT_CHECK_DAYS
++    try:
++        days = int(float(str(raw).strip()))
++    except ValueError:
++        return DEFAULT_CHECK_DAYS
++    return days if days >= 0 else DEFAULT_CHECK_DAYS
++
++
++def auto_check_disabled(environ):
++    return is_truthy(environ.get(DISABLE_AUTO_CHECK_ENV, ""))
++
++
++def is_interactive(output):
++    return _isatty(output.stdout) and _isatty(output.stdin)
++
++
++def elapsed_days(last_check, now=None):
++    now = time.time() if now is None else now
++    return int((now - last_check) // SECONDS_PER_DAY)
++
++
++def _read_last_check(cache):
++    raw = cache.read(UPDATE_CHECK_KEY, ttl=0)
++    if raw is False:
++        return None
++    try:
++        return float(str(raw).strip())
++    except ValueError:
++        return None
++
++
++def auto_check_update(environ, output, current=__version__, now=None, interactive=None,
++                      writable=None, update=None, platform_name=None):
++    """Periodic update check; returns the update's exit code when one was triggered.
++
++    Only runs for a human at an interactive terminal with a writable binary.
++    The first check only records its timestamp; later checks run once the
++    configured number of whole days has elapsed since the last one.
++    """
++    if auto_check_disabled(environ):
++        return None
++    if not (is_interactive(output) if interactive is None else interactive):
++        return None
++    if not (is_binary_writable() if writable is None else writable):
++        return None
++    if is_darwin(platform_name):
++        return None
++    now = time.time() if now is None else now
++    cache = get_cache(environ, output)
++    last_check = _read_last_check(cache)
++    if last_check is None:
++        cache.write(UPDATE_CHECK_KEY, str(int(now)))
++        return None
++    if elapsed_days(last_check, now) < check_interval(environ):
++        return None
++    cache.write(UPDATE_CHECK_KEY, str(int(now)))
++    try:
++        updates = available_updates(environ, current)
++    except AppctlError as exc:
++        output.debug(f"Automatic update check failed: {exc.message}", group="update")
++        return None
++    if not updates:
++        return None
++    output.log(f"A new version of {PRODUCT_NAME} is available: {updates[0]['version']}.")
++    update = update or (lambda: self_update(environ, output, {}, current=current,
++                                            platform_name=platform_name))
++    return update()
+
+### appctl_cli/startup.py (created)
+--- appctl_cli/startup.py
++++ appctl_cli/startup.py
+@@ -0,0 +1,115 @@
++"""Work done before every command: first-run setup and the version comparison."""
++
++import io
++
++from . import __version__, upgrade
++from .config_loader import root_dir
++from .errors import AppctlError
++from .system import PRODUCT_NAME, is_darwin
++
++CLI_FAMILY = "cli"
++MIGRATE_COMMAND = "cli migrate"
++# Commands that must never print anything besides their own (possibly empty) payload.
++SILENT_COMMANDS = ("cli completions", "cli has-command")
++MACHINE_FORMATS = ("json", "csv", "yaml", "count", "ids", "var_export")
++MACHINE_FLAGS = ("field", "porcelain")
++
++FIRST_RUN_SUCCESS = f"{PRODUCT_NAME} has been set up successfully."
++
++
++def family(command):
++    if command is None or command.is_root or not command.path:
++        return None
++    return command.path[0]
++
++
++def is_silent(command):
++    return command is not None and command.full_name in SILENT_COMMANDS
++
++
++def is_machine_readable(command, assoc=None):
++    """Whether the command's documented output is a machine-readable payload."""
++    if command is None or command.is_root:
++        return False
++    if command.machine_output or is_silent(command):
++        return True
++    assoc = assoc or {}
++    fmt = assoc.get("format", command.defaults.get("format"))
++    if isinstance(fmt, str) and fmt in MACHINE_FORMATS:
++        return True
++    return any(assoc.get(flag) not in (None, False, "") for flag in MACHINE_FLAGS)
++
++
++def darwin_instructions(environ):
++    return [
++        "Please configure the container runtime (Docker Desktop) before using "
++        f"{PRODUCT_NAME}:",
++        "  1. Open Docker Desktop > Settings > Resources > File sharing.",
++        f"  2. Add '{root_dir(environ)}' and the directories of your projects to the shared paths.",
++        "  3. Click 'Apply & restart' and wait for the container runtime to be running again.",
++    ]
++
++
++def older_binary_message(stored, current=__version__):
++    return (f"{PRODUCT_NAME} {current} is older than the version that last used this "
++            f"installation ({stored}).")
++
++
++class Startup:
++    """First run, version comparison and migration for one invocation."""
++
++    def __init__(self, environ, output, db, command=None, assoc=None, platform_name=None,
++                 current=__version__):
++        self.environ = environ
++        self.output = output
++        self.db = db
++        self.command = command
++        self.assoc = assoc or {}
++        self.platform_name = platform_name
++        self.current = current
++
++    @property
++    def messages(self):
++        """Writer for startup messages that keeps the command's payload intact.
++
++        Silent commands discard them all; machine-readable commands drop the
++        informational (STDOUT) ones and keep warnings and errors on STDERR.
++        """
++        if is_silent(self.command):
++            sink = io.StringIO()
++            return self.output.redirected(stdout=sink, stderr=sink)
++        if is_machine_readable(self.command, self.assoc):
++            return self.output.redirected(stdout=io.StringIO())
++        return self.output
++
++    def run(self):
++        stored = upgrade.stored_version(self.db)
++        if stored is None:
++            return self.first_run()
++        status = upgrade.version_status(stored, self.current)
++        if status == upgrade.VERSION_NEWER:
++            if self.command is None or self.command.full_name != MIGRATE_COMMAND:
++                self.output.debug("Version changed, running the upgrade.", group="bootstrap")
++                upgrade.run_upgrade(self.environ, self.messages)
++        elif status == upgrade.VERSION_OLDER:
++            self.older_binary(stored)
++        return True
++
++    def first_run(self):
++        output = self.messages
++        output.debug("First run, setting up.", group="bootstrap")
++        upgrade.run_setup(self.environ, output, self.db)
++        output.success(FIRST_RUN_SUCCESS)
++        if is_darwin(self.platform_name):
++            for line in darwin_instructions(self.environ):
++                output.log(line)
++        return True
++
++    def older_binary(self, stored):
++        message = older_binary_message(stored, self.current)
++        if family(self.command) == CLI_FAMILY:
++            if not is_silent(self.command):
++                self.output.warning(f"{message} Please update {PRODUCT_NAME}.")
++            return
++        raise AppctlError(f"{message} Please update {PRODUCT_NAME} to version {stored} or newer "
++                          "with 'appctl cli update' before running this command.")
+
+### appctl_cli/system.py (created)
+--- appctl_cli/system.py
++++ appctl_cli/system.py
+@@ -0,0 +1,219 @@
++"""Host environment: system requirements, the runtime binary and the install location."""
++
++import os
++import platform
++import re
++import shutil
++import subprocess
++import sys
++import time
++import zipfile
++import zipimport
++
++from . import PROGRAM_NAME, container
++from .errors import AppctlError
++from .process import run_command
++from .upgrade import MIN_COMPOSE_VERSION, compare_semver, compose_version
++
++PRODUCT_NAME = "AppCtl"
++
++RUNTIME_BIN_ENV = "APPCTL_RUNTIME_BIN"
++RUNTIME_BIN_USED_ENV = "APPCTL_RUNTIME_BIN_USED"
++FALLBACK_RUNTIME = "python3"
++MIN_RUNTIME_VERSION = "3.8.0"
++RUNTIME_NAME = "Python"
++
++# The container runtime is probed up to RUNTIME_CHECK_ATTEMPTS times; the
++# delay before each retry starts at RUNTIME_CHECK_BACKOFF seconds and doubles.
++RUNTIME_CHECK_ATTEMPTS = 3
++RUNTIME_CHECK_BACKOFF = 0.5
++RUNTIME_CHECK_TIMEOUT = 30
++
++RUNTIME_DOWN = "Container runtime is either not installed or not running."
++RUNTIME_DARWIN_HINT = ("Please install it with your system package manager "
++                       "(e.g. `brew install --cask docker`) and make sure it is running.")
++RUNTIME_LINUX_HINT = "Please install and start the container runtime (docker)."
++
++EXEMPT_FAMILIES = ("cli", "config", "help")
++
++PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
++INSTALL_DIR = os.path.dirname(PACKAGE_DIR)
++ENTRY_SCRIPT = os.path.join(INSTALL_DIR, f"{PROGRAM_NAME}.py")
++
++_VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
++
++
++def is_darwin(platform_name=None):
++    return container.is_darwin(platform_name)
++
++
++# -- install location -------------------------------------------------------------
++
++
++def archive_path():
++    """The archive appctl runs from (archive mode), or ``None`` when run from source."""
++    loader = globals().get("__loader__")
++    if isinstance(loader, zipimport.zipimporter):
++        return os.path.abspath(loader.archive)
++    path = PACKAGE_DIR
++    while path and not os.path.exists(path):
++        parent = os.path.dirname(path)
++        if parent == path:
++            return None
++        path = parent
++    if os.path.isfile(path) and zipfile.is_zipfile(path):
++        return path
++    return None
++
++
++def is_archive_mode():
++    return archive_path() is not None
++
++
++def binary_path():
++    """The file that is replaced by self-update: the archive, else the entry script."""
++    archive = archive_path()
++    if archive:
++        return os.path.realpath(archive)
++    if os.path.isfile(ENTRY_SCRIPT):
++        return os.path.realpath(ENTRY_SCRIPT)
++    return os.path.realpath(sys.argv[0]) if sys.argv and sys.argv[0] else None
++
++
++def is_binary_writable(path=None):
++    path = path or binary_path()
++    if not path or not os.path.isfile(path):
++        return False
++    return os.access(path, os.W_OK) and os.access(os.path.dirname(path) or ".", os.W_OK)
++
++
++# -- runtime binary ----------------------------------------------------------------
++
++
++def runtime_binary(environ=None):
++    """``APPCTL_RUNTIME_BIN``, ``APPCTL_RUNTIME_BIN_USED``, the running interpreter, ``python3``."""
++    environ = os.environ if environ is None else environ
++    for name in (RUNTIME_BIN_ENV, RUNTIME_BIN_USED_ENV):
++        value = environ.get(name)
++        if value and str(value).strip():
++            return str(value).strip()
++    if sys.executable:
++        return sys.executable
++    return FALLBACK_RUNTIME
++
++
++def runtime_binary_path(environ=None):
++    """Absolute path of the runtime binary, when it can be found."""
++    binary = runtime_binary(environ)
++    if os.path.isabs(binary):
++        return binary
++    found = shutil.which(binary)
++    return os.path.abspath(found) if found else None
++
++
++def _is_running_interpreter(binary):
++    if not sys.executable:
++        return False
++    try:
++        return os.path.realpath(binary) == os.path.realpath(sys.executable)
++    except OSError:
++        return False
++
++
++def runtime_version(environ=None):
++    """Version of the runtime binary; the running interpreter's when it cannot be queried."""
++    binary = runtime_binary(environ)
++    if _is_running_interpreter(binary) or not (os.path.isabs(binary) or shutil.which(binary)):
++        return platform.python_version()
++    try:
++        completed = subprocess.run([binary, "--version"], capture_output=True, text=True,
++                                   timeout=RUNTIME_CHECK_TIMEOUT, errors="replace")
++    except (OSError, subprocess.SubprocessError):
++        return platform.python_version()
++    match = _VERSION_RE.search(completed.stdout + " " + completed.stderr)
++    if completed.returncode != 0 or not match:
++        return platform.python_version()
++    return match.group(0)
++
++
++# -- requirements ------------------------------------------------------------------
++
++
++def runtime_responsive(output=None, attempts=RUNTIME_CHECK_ATTEMPTS,
++                       backoff=RUNTIME_CHECK_BACKOFF, sleep=None):
++    """Probe the container runtime, retrying with exponential backoff."""
++    sleep = sleep or time.sleep
++    delay = backoff
++    for attempt in range(1, attempts + 1):
++        result = run_command([container.RUNTIME_BINARY, "ps", "-q"], output,
++                             timeout=RUNTIME_CHECK_TIMEOUT)
++        if result.succeeded:
++            return True
++        if attempt < attempts:
++            if output is not None:
++                output.debug(f"Container runtime check failed (attempt {attempt} of {attempts}),"
++                             f" retrying in {delay:g}s.", group="bootstrap")
++            sleep(delay)
++            delay *= 2
++    return False
++
++
++def runtime_error(platform_name=None):
++    hint = RUNTIME_DARWIN_HINT if is_darwin(platform_name) else RUNTIME_LINUX_HINT
++    return f"{RUNTIME_DOWN} {hint}"
++
++
++def compose_errors(output=None):
++    container._compose_binary.clear()
++    try:
++        binary = container.compose_binary(output)
++    except AppctlError:
++        return [f"{PRODUCT_NAME} requires the compose tool (docker compose or docker-compose)."
++                " Please install it."]
++    version = compose_version(binary, output)
++    if version is None:
++        return ["Unable to determine the version of the compose tool."]
++    if compare_semver(version, MIN_COMPOSE_VERSION) < 0:
++        return [f"{PRODUCT_NAME} requires compose tool version {MIN_COMPOSE_VERSION} or greater"
++                f" (installed: {version})."]
++    return []
++
++
++def runtime_version_errors(environ=None):
++    version = runtime_version(environ)
++    try:
++        too_old = compare_semver(version, MIN_RUNTIME_VERSION) < 0
++    except ValueError:
++        too_old = True
++    if too_old:
++        return [f"{PRODUCT_NAME} requires {RUNTIME_NAME} {MIN_RUNTIME_VERSION} or greater"
++                f" (current: {version})."]
++    return []
++
++
++def requirement_errors(environ=None, output=None, platform_name=None, sleep=None):
++    """Every unmet system requirement, as error messages (empty when all are met)."""
++    errors = []
++    if not runtime_responsive(output, sleep=sleep):
++        errors.append(runtime_error(platform_name))
++    errors += compose_errors(output)
++    errors += runtime_version_errors(environ)
++    return errors
++
++
++def ensure_requirements(environ=None, output=None, platform_name=None, sleep=None):
++    """Raise (after reporting every other problem) unless all requirements are met."""
++    errors = requirement_errors(environ, output, platform_name, sleep)
++    if not errors:
++        return True
++    for message in errors[:-1]:
++        if output is not None:
++            output.error(message)
++    raise AppctlError(errors[-1])
++
++
++def requires_system_check(command):
++    """Every command outside the ``cli``, ``config`` and ``help`` families."""
++    if command is None or command.is_root or not command.path:
++        return False
++    return command.path[0] not in EXEMPT_FAMILIES
+
+### appctl_cli/upgrade.py (modified)
+--- appctl_cli/upgrade.py
++++ appctl_cli/upgrade.py
+@@ -12,6 +12,7 @@
+ import inspect
+ import json
+ import os
++import pkgutil
+ import platform
+ import re
+ import shutil
+@@ -339,8 +340,13 @@
+ 
+ def target_image_versions(path=None):
+     """``{image: tag}`` of the images managed by this appctl version."""
+-    with open(path or IMAGE_VERSIONS_FILE, encoding="utf-8") as handle:
+-        data = json.load(handle)
++    if path is None and not os.path.isfile(IMAGE_VERSIONS_FILE):
++        # Running from an archive: the file is package data, not a real file.
++        raw = pkgutil.get_data(__package__, os.path.basename(IMAGE_VERSIONS_FILE))
++        data = json.loads(raw.decode("utf-8"))
++    else:
++        with open(path or IMAGE_VERSIONS_FILE, encoding="utf-8") as handle:
++            data = json.load(handle)
+     return {str(image): str(tag) for image, tag in sorted(data.items())}
+ 
+ 
+@@ -658,10 +664,57 @@
+ # -- orchestration ---------------------------------------------------------------------------
+ 
+ 
++NIGHTLY_MARKER = "nightly"
++
++VERSION_CURRENT = "current"
++VERSION_NEWER = "newer"      # the binary is newer than the stored version: migrate
++VERSION_OLDER = "older"      # the binary is older than the stored version
++
++
++def is_nightly(version=__version__):
++    return NIGHTLY_MARKER in str(version).lower()
++
++
++def version_status(stored, current=__version__):
++    """How the running binary relates to the stored version.
++
++    Nightly builds always migrate. A stored version that cannot be parsed
++    is treated as older than the binary.
++    """
++    if is_nightly(current):
++        return VERSION_NEWER
++    try:
++        comparison = compare_semver(current, stored)
++    except ValueError:
++        comparison = 0 if str(stored) == str(current) else 1
++    if comparison > 0:
++        return VERSION_NEWER
++    if comparison < 0:
++        return VERSION_OLDER
++    return VERSION_CURRENT
++
++
++def stored_version(db):
++    """The persisted appctl version, or ``None`` before the first run."""
++    stored = db.get_option(VERSION_OPTION)
++    return None if stored is False else stored
++
++
+ def needs_upgrade(db):
+-    """Whether a recorded appctl version differs from the running one."""
+-    stored = db.get_option(VERSION_OPTION)
+-    return stored is not False and stored != __version__
++    """Whether the stored version calls for a migration of the running binary."""
++    stored = stored_version(db)
++    return stored is not None and version_status(stored) == VERSION_NEWER
++
++
++RUNTIME_UNAVAILABLE = ("The container runtime is not available: skipping the image and "
++                       "container upgrades.")
++
++
++def runtime_available(output=None):
++    """Whether the container runtime is installed and responds."""
++    if not shutil.which(container.RUNTIME_BINARY):
++        return False
++    return exec_command([container.RUNTIME_BINARY, "ps", "-q"], output)
+ 
+ 
+ class Upgrade:
+@@ -676,23 +729,31 @@
+         self.global_upgrade = None
+         self.project_upgrades = []
+         self.previous_state = {}
++        self.runtime_available = True
+ 
+     def run(self):
+         check_disk_space(self.environ, self.output)
+         if self.targets is None:
+             self.targets = target_image_versions()
+         self.targets = dict(sorted(self.targets.items()))
+-        current = current_image_versions(self.db, self.targets, self.output)
+-        self.changed = changed_images(current, self.targets)
++        self.runtime_available = runtime_available(self.output)
+         processor = RevertableStepProcessor(self.output, "upgrade")
+         for type in MIGRATION_TYPES:
+             processor.add_step(f"{type} migrations", self._migrate, self._unmigrate,
+                                (type,), (type,))
+-        processor.add_step("pull images", pull_images, None, (self.changed, self.output))
+-        processor.add_step("compose tool upgrade", self.compose_tool.run,
+-                           self.compose_tool.rollback)
+-        processor.add_step("global containers", self._upgrade_global, self._revert_global)
+-        processor.add_step("project containers", self._upgrade_projects, self._revert_projects)
++        if self.runtime_available:
++            current = current_image_versions(self.db, self.targets, self.output)
++            self.changed = changed_images(current, self.targets)
++            processor.add_step("pull images", pull_images, None, (self.changed, self.output))
++            processor.add_step("compose tool upgrade", self.compose_tool.run,
++                               self.compose_tool.rollback)
++            processor.add_step("global containers", self._upgrade_global, self._revert_global)
++            processor.add_step("project containers", self._upgrade_projects,
++                               self._revert_projects)
++        else:
++            # Images are left unrecorded so they are pulled once the runtime is back.
++            self.targets = {}
++            self.output.warning(RUNTIME_UNAVAILABLE)
+         processor.add_step("save versions", self._save_state, self._restore_state)
+         if not processor.execute():
+             error = processor.error
+@@ -763,7 +824,7 @@
+     def _cleanup(self):
+         """Cleanup-only work: its failures never fail the upgrade."""
+         self.compose_tool.cleanup()
+-        if not shutil.which(container.RUNTIME_BINARY):
++        if not self.runtime_available or not shutil.which(container.RUNTIME_BINARY):
+             return
+         for action, args in ((prune_images, (self.targets, self.output)),
+                              (prune_networks, (self.output,))):
+@@ -775,3 +836,40 @@
+ 
+ def run_upgrade(environ=None, output=None):
+     return Upgrade(environ, output).run()
++
++
++class Setup:
++    """First-run setup: run every pending migration, then record the version."""
++
++    def __init__(self, environ=None, output=None, db=None):
++        self.environ = os.environ if environ is None else environ
++        self.output = _output(output)
++        self.db = db or database.get_db(self.environ)
++        self.batches = {}
++
++    def run(self):
++        processor = RevertableStepProcessor(self.output, "setup")
++        for type in MIGRATION_TYPES:
++            processor.add_step(f"{type} migrations", self._migrate, self._unmigrate,
++                               (type,), (type,))
++        processor.add_step("save version", self.db.set_option, self.db.delete_option,
++                           (VERSION_OPTION, __version__), (VERSION_OPTION,))
++        if not processor.execute():
++            error = processor.error
++            if not isinstance(error, ReportedError):
++                reason = error.message if isinstance(error, AppctlError) else str(error)
++                self.output.error(f"{processor.failed_step.id} failed: {reason or repr(error)}")
++            raise AppctlError(MIGRATION_ERROR)
++        return True
++
++    def _migrate(self, type):
++        self.batches[type] = MigrationBatch(type, self.db, self.output, self.environ)
++        self.batches[type].run()
++
++    def _unmigrate(self, type):
++        if type in self.batches:
++            self.batches.pop(type).rollback()
++
++
++def run_setup(environ=None, output=None, db=None):
++    return Setup(environ, output, db).run()
+
+### build_archive.py (created)
+--- build_archive.py
++++ build_archive.py
+@@ -0,0 +1,40 @@
++#!/usr/bin/env python3
++"""Build the appctl distribution archive: a Python zip application (``appctl.pyz``)."""
++
++import argparse
++import os
++import shutil
++import sys
++import tempfile
++import zipapp
++
++ROOT = os.path.dirname(os.path.abspath(__file__))
++PACKAGE = "appctl_cli"
++MAIN = "import sys\n\nfrom appctl_cli.app import main\n\nsys.exit(main(sys.argv[1:]))\n"
++
++
++def build(target, interpreter="/usr/bin/env python3"):
++    workdir = tempfile.mkdtemp(prefix="appctl-build-")
++    try:
++        shutil.copytree(os.path.join(ROOT, PACKAGE), os.path.join(workdir, PACKAGE),
++                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
++        with open(os.path.join(workdir, "__main__.py"), "w", encoding="utf-8") as handle:
++            handle.write(MAIN)
++        directory = os.path.dirname(os.path.abspath(target))
++        os.makedirs(directory, exist_ok=True)
++        zipapp.create_archive(workdir, target, interpreter=interpreter, compressed=True)
++    finally:
++        shutil.rmtree(workdir, ignore_errors=True)
++    return target
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("target", nargs="?", default=os.path.join(ROOT, "dist", "appctl.pyz"))
++    args = parser.parse_args(argv)
++    print(build(args.target))
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+
+### tests/helpers.py (created)
+--- tests/helpers.py
++++ tests/helpers.py
+@@ -0,0 +1,47 @@
++"""Shared fixtures: a fake container runtime and an already set-up appctl root."""
++
++import atexit
++import os
++import shutil
++import subprocess
++import sys
++import tempfile
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++SCRIPT = os.path.join(ROOT, "appctl.py")
++
++# Responds to everything; reports a compose tool recent enough for the requirement checks.
++FAKE_DOCKER = """#!/bin/sh
++case "$*" in
++  "compose version"*) echo "${FAKE_COMPOSE_VERSION:-2.29.7}"; exit 0 ;;
++esac
++exit 0
++"""
++
++_bin_dir = None
++
++
++def fake_bin_dir():
++    """A directory holding the fake ``docker`` binary, created once per test run."""
++    global _bin_dir
++    if _bin_dir is None:
++        _bin_dir = tempfile.mkdtemp(prefix="appctl-fake-bin-")
++        atexit.register(shutil.rmtree, _bin_dir, True)
++        path = os.path.join(_bin_dir, "docker")
++        with open(path, "w", encoding="utf-8") as handle:
++            handle.write(FAKE_DOCKER)
++        os.chmod(path, 0o755)
++    return _bin_dir
++
++
++def runtime_env(env=None, **extra):
++    """``env`` (default: ``os.environ``) with the fake container runtime first on PATH."""
++    env = dict(os.environ if env is None else env, **extra)
++    env["PATH"] = fake_bin_dir() + os.pathsep + env.get("PATH", "")
++    return env
++
++
++def initialize(env, cwd=None):
++    """Complete the first run so later invocations only print their own output."""
++    subprocess.run([sys.executable, SCRIPT, "cli", "version"], env=env, cwd=cwd,
++                   capture_output=True, check=True)
+
+### tests/test_cli.py (modified)
+--- tests/test_cli.py
++++ tests/test_cli.py
+@@ -4,14 +4,33 @@
+ import re
+ import subprocess
+ import sys
++import tempfile
+ import unittest
++
++from tests.helpers import initialize, runtime_env
+ 
+ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ SCRIPT = os.path.join(ROOT, "appctl.py")
++_home = None
++
++
++def setUpModule():
++    global _home
++    _home = tempfile.TemporaryDirectory()
++    initialize(environment())
++
++
++def tearDownModule():
++    _home.cleanup()
++
++
++def environment():
++    env = {k: v for k, v in os.environ.items() if not k.startswith("APPCTL_")}
++    return runtime_env(env, APPCTL_ROOT_DIR=_home.name)
+ 
+ 
+ def run(*args, strict=False):
+-    env = {k: v for k, v in os.environ.items() if k != "APPCTL_STRICT_ARGS_MODE"}
++    env = environment()
+     if strict:
+         env["APPCTL_STRICT_ARGS_MODE"] = "1"
+     return subprocess.run([sys.executable, SCRIPT, *args], capture_output=True, text=True,
+
+### tests/test_config.py (modified)
+--- tests/test_config.py
++++ tests/test_config.py
+@@ -12,6 +12,7 @@
+ from appctl_cli.config_loader import load_config_file
+ from appctl_cli.remote import parse_ssh_url
+ from appctl_cli.runtime_config import build_runtime_config
++from tests.helpers import initialize, runtime_env
+ 
+ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ SCRIPT = os.path.join(ROOT, "appctl.py")
+@@ -29,6 +30,8 @@
+         self.project = self.mkdir("project")
+         self.env = {k: v for k, v in os.environ.items() if not k.startswith("APPCTL_")}
+         self.env["APPCTL_ROOT_DIR"] = self.mkdir("root")
++        self.env = runtime_env(self.env)
++        initialize(self.env, cwd=self.project)
+ 
+     def tearDown(self):
+         self.tmp.cleanup()
+
+### tests/test_container.py (modified)
+--- tests/test_container.py
++++ tests/test_container.py
+@@ -14,6 +14,7 @@
+ from appctl_cli import container
+ from appctl_cli.errors import AppctlError
+ from appctl_cli.output import Output
++from tests.helpers import runtime_env
+ 
+ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ SCRIPT = os.path.join(ROOT, "appctl.py")
+@@ -226,8 +227,8 @@
+     def run_cli(self, *args, config=""):
+         config_path = os.path.join(self.tmp, "home", "config.yml")
+         write(config_path, config)
+-        env = dict(os.environ, APPCTL_CONFIG_PATH=config_path,
+-                   APPCTL_ROOT_DIR=os.path.join(self.tmp, "home"))
++        env = runtime_env(APPCTL_CONFIG_PATH=config_path,
++                          APPCTL_ROOT_DIR=os.path.join(self.tmp, "home"))
+         return subprocess.run([sys.executable, SCRIPT, *args], capture_output=True, text=True,
+                               env=env, cwd=self.tmp)
+ 
+
+### tests/test_output.py (modified)
+--- tests/test_output.py
++++ tests/test_output.py
+@@ -4,6 +4,7 @@
+ import json
+ import os
+ import re
++import shutil
+ import subprocess
+ import sys
+ import tempfile
+@@ -15,6 +16,7 @@
+ from appctl_cli.formatter import format_items, resolve_field, select_fields
+ from appctl_cli.logger import FileLogger, redact_argv
+ from appctl_cli.output import Output
++from tests.helpers import initialize, runtime_env
+ 
+ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ SCRIPT = os.path.join(ROOT, "appctl.py")
+@@ -26,6 +28,11 @@
+         self.tmp = tempfile.TemporaryDirectory()
+         self.env = {k: v for k, v in os.environ.items() if not k.startswith("APPCTL_")}
+         self.env["APPCTL_ROOT_DIR"] = self.tmp.name
++        self.env = runtime_env(self.env)
++        initialize(self.env, cwd=self.tmp.name)
++        # Keep only the persisted state of the first run: no log file, no global config.
++        shutil.rmtree(os.path.join(self.tmp.name, "logs"))
++        shutil.rmtree(os.path.join(self.tmp.name, "config"))
+         self.log_path = os.path.join(self.tmp.name, "logs", "appctl.log")
+ 
+     def tearDown(self):
+
+### tests/test_self_management.py (created)
+--- tests/test_self_management.py
++++ tests/test_self_management.py
+@@ -0,0 +1,826 @@
++"""System requirements, first run, version checks, self-update, cli commands and completion."""
++
++import io
++import json
++import os
++import pprint
++import shutil
++import sqlite3
++import subprocess
++import sys
++import tempfile
++import textwrap
++import time
++import unittest
++from unittest import mock
++
++import yaml
++
++from appctl_cli import __version__, container, database, self_update, startup, system, upgrade
++from appctl_cli.errors import AppctlError
++from appctl_cli.file_cache import reset_cache
++from appctl_cli.output import Output
++from build_archive import build
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++SCRIPT = os.path.join(ROOT, "appctl.py")
++
++# Logs every call; FAKE_PS_FAIL makes the responsiveness probe fail; FAKE_IDS_<KIND>
++# lists the ids returned for labeled resources.
++FAKE_DOCKER = textwrap.dedent("""\
++    #!/bin/sh
++    [ -n "$FAKE_DOCKER_LOG" ] && echo "$*" >> "$FAKE_DOCKER_LOG"
++    case "$*" in
++      "ps -q") [ -n "$FAKE_PS_FAIL" ] && exit 1; exit 0 ;;
++      "compose version"*)
++        [ -n "$FAKE_NO_COMPOSE" ] && exit 1
++        echo "${FAKE_COMPOSE_VERSION:-2.29.7}"; exit 0 ;;
++      "ps -aq --filter"*) printf "%s" "$FAKE_IDS_CONTAINERS" ;;
++      "network ls -q --filter"*) printf "%s" "$FAKE_IDS_NETWORKS" ;;
++      "volume ls -q --filter"*) printf "%s" "$FAKE_IDS_VOLUMES" ;;
++      "images -q --filter"*) printf "%s" "$FAKE_IDS_IMAGES" ;;
++    esac
++    exit 0
++""")
++
++MIGRATION = textwrap.dedent("""\
++    def up(ctx):
++        with open(ctx.environ["MIG_LOG"], "a") as handle:
++            handle.write(ctx.name + "\\n")
++""")
++
++
++def write(path, text, mode=None):
++    os.makedirs(os.path.dirname(path), exist_ok=True)
++    with open(path, "w", encoding="utf-8") as handle:
++        handle.write(text)
++    if mode:
++        os.chmod(path, mode)
++    return path
++
++
++def read(path):
++    with open(path, encoding="utf-8") as handle:
++        return handle.read()
++
++
++class Case(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.mkdtemp()
++        self.addCleanup(shutil.rmtree, self.tmp, True)
++        self.bin = os.path.join(self.tmp, "bin")
++        write(os.path.join(self.bin, "docker"), FAKE_DOCKER, 0o755)
++        self.root = os.path.join(self.tmp, "root")
++        self.docker_log = os.path.join(self.tmp, "docker.log")
++        self.env = {k: v for k, v in os.environ.items() if not k.startswith(("APPCTL_", "FAKE_"))}
++        self.env.update({
++            "PATH": self.bin + os.pathsep + "/bin:/usr/bin",
++            "HOME": self.tmp,
++            "APPCTL_ROOT_DIR": self.root,
++            "APPCTL_PACKAGES_DIR": os.path.join(self.tmp, "packages"),
++            "FAKE_DOCKER_LOG": self.docker_log,
++        })
++        self.addCleanup(database.close_all)
++        self.addCleanup(container._compose_binary.clear)
++        self.addCleanup(reset_cache)
++
++    def cli(self, *args, input="", script=SCRIPT, **env):
++        database.close_all()
++        return subprocess.run([sys.executable, script, *args], capture_output=True, text=True,
++                              input=input, env=dict(self.env, **env), cwd=self.tmp)
++
++    def init(self):
++        result = self.cli("cli", "version")
++        self.assertEqual(result.returncode, 0, result.stderr)
++
++    def docker_calls(self):
++        return read(self.docker_log).splitlines() if os.path.exists(self.docker_log) else []
++
++    def set_stored_version(self, version):
++        connection = sqlite3.connect(database.db_path(self.env))
++        with connection:
++            connection.execute('UPDATE options SET value = ? WHERE "key" = ?', (version, "version"))
++        connection.close()
++
++    def stored_version(self):
++        connection = sqlite3.connect(database.db_path(self.env))
++        row = connection.execute('SELECT value FROM options WHERE "key" = ?',
++                                 ("version",)).fetchone()
++        connection.close()
++        return row and row[0]
++
++    def output(self):
++        self.out, self.err = io.StringIO(), io.StringIO()
++        return Output(stdout=self.out, stderr=self.err, stdin=io.StringIO())
++
++
++# -- system requirements ---------------------------------------------------------------------
++
++
++class RequirementsTest(Case):
++    def test_all_met(self):
++        self.init()
++        result = self.cli("site", "list")
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertIn("ps -q", self.docker_calls())
++
++    def test_runtime_down_retries_with_backoff(self):
++        self.init()
++        started = time.monotonic()
++        result = self.cli("site", "list", FAKE_PS_FAIL="1")
++        elapsed = time.monotonic() - started
++        self.assertEqual(result.returncode, 1)
++        self.assertEqual(result.stdout, "")
++        self.assertIn("Error: Container runtime is either not installed or not running.",
++                      result.stderr)
++        self.assertNotIn("brew", result.stderr)
++        self.assertEqual(self.docker_calls().count("ps -q"), system.RUNTIME_CHECK_ATTEMPTS)
++        self.assertGreaterEqual(elapsed, system.RUNTIME_CHECK_BACKOFF * 3)
++
++    def test_backoff_doubles_and_is_bounded(self):
++        sleeps = []
++        with mock.patch.object(system, "run_command") as run:
++            run.return_value.succeeded = False
++            self.assertFalse(system.runtime_responsive(sleep=sleeps.append))
++        self.assertEqual(run.call_count, 3)
++        self.assertEqual(sleeps, [0.5, 1.0])
++
++    def test_runtime_recovers_on_retry(self):
++        results = iter([False, True])
++        sleeps = []
++        with mock.patch.object(system, "run_command") as run:
++            run.side_effect = lambda *a, **k: mock.Mock(succeeded=next(results))
++            self.assertTrue(system.runtime_responsive(sleep=sleeps.append))
++        self.assertEqual(sleeps, [0.5])
++
++    def test_darwin_hint(self):
++        self.assertIn("brew", system.runtime_error("Darwin"))
++        self.assertNotIn("brew", system.runtime_error("Linux"))
++        with mock.patch.object(system, "runtime_responsive", return_value=False), \
++                mock.patch.object(system, "compose_errors", return_value=[]), \
++                mock.patch.object(system, "runtime_version_errors", return_value=[]):
++            with self.assertRaises(AppctlError) as ctx:
++                system.ensure_requirements({}, self.output(), platform_name="Darwin")
++        self.assertIn("system package manager", ctx.exception.message)
++        self.assertIn("brew install", ctx.exception.message)
++
++    def test_compose_missing(self):
++        self.init()
++        # Only a shell besides the fake runtime: no legacy compose binary either.
++        tools = os.path.join(self.tmp, "tools")
++        os.makedirs(tools)
++        os.symlink("/bin/sh", os.path.join(tools, "sh"))
++        result = self.cli("site", "list", FAKE_NO_COMPOSE="1",
++                          PATH=self.bin + os.pathsep + tools)
++        self.assertEqual(result.returncode, 1)
++        self.assertIn("requires the compose tool", result.stderr)
++
++    def test_compose_too_old(self):
++        self.init()
++        result = self.cli("site", "list", FAKE_COMPOSE_VERSION="2.26.1-4")
++        self.assertEqual(result.returncode, 1)
++        self.assertIn("compose tool version 2.27.0 or greater (installed: 2.26.1-4)", result.stderr)
++        self.assertEqual(self.cli("site", "list", FAKE_COMPOSE_VERSION="2.100.0").returncode, 0)
++
++    def test_runtime_too_old(self):
++        self.init()
++        fake = write(os.path.join(self.tmp, "oldpython"), "#!/bin/sh\necho Python 3.6.9\n", 0o755)
++        result = self.cli("site", "list", APPCTL_RUNTIME_BIN=fake)
++        self.assertEqual(result.returncode, 1)
++        self.assertIn("requires Python 3.8.0 or greater (current: 3.6.9)", result.stderr)
++
++    def test_every_problem_reported(self):
++        self.init()
++        result = self.cli("site", "list", FAKE_PS_FAIL="1", FAKE_NO_COMPOSE="1")
++        self.assertEqual(result.returncode, 1)
++        self.assertEqual(result.stderr.count("Error: "), 2)
++
++    def test_exempt_families(self):
++        self.init()
++        for args in (("cli", "info"), ("config", "path"), ("help",), ("help", "site"), ()):
++            result = self.cli(*args, FAKE_PS_FAIL="1", FAKE_NO_COMPOSE="1")
++            self.assertEqual(result.returncode, 0, (args, result.stderr))
++        self.assertNotIn("ps -q", self.docker_calls())
++
++    def test_command_alias_is_not_exempt(self):
++        self.init()
++        self.assertEqual(self.cli("cfg", "path", FAKE_PS_FAIL="1").returncode, 0)  # config
++        self.assertEqual(self.cli("user", "list", FAKE_NO_COMPOSE="1").returncode, 1)
++
++
++class RuntimeBinaryTest(unittest.TestCase):
++    def test_precedence(self):
++        env = {"APPCTL_RUNTIME_BIN": "/opt/a", "APPCTL_RUNTIME_BIN_USED": "/opt/b"}
++        self.assertEqual(system.runtime_binary(env), "/opt/a")
++        self.assertEqual(system.runtime_binary({"APPCTL_RUNTIME_BIN_USED": "/opt/b"}), "/opt/b")
++        self.assertEqual(system.runtime_binary({"APPCTL_RUNTIME_BIN": " "}), sys.executable)
++        with mock.patch.object(system.sys, "executable", ""):
++            self.assertEqual(system.runtime_binary({}), "python3")
++
++    def test_child_processes_record_the_binary(self):
++        from appctl_cli.process import self_command, self_environment
++        env = self_environment(environ={"APPCTL_RUNTIME_BIN": "/opt/py"})
++        self.assertEqual(env["APPCTL_RUNTIME_BIN_USED"], "/opt/py")
++        self.assertEqual(self_command("cli info")[0], sys.executable)
++
++
++# -- first run and version checks ----------------------------------------------------------
++
++
++class FirstRunTest(Case):
++    def setUp(self):
++        super().setUp()
++        self.core = os.path.join(self.tmp, "core")
++        write(os.path.join(self.core, "migrations", "db", "1_first.py"), MIGRATION)
++        write(os.path.join(self.core, "migrations", "container", "2_second.py"), MIGRATION)
++        self.mig_log = os.path.join(self.tmp, "mig.log")
++        self.env["MIG_LOG"] = self.mig_log
++
++    def migrations_run(self):
++        return read(self.mig_log).splitlines() if os.path.exists(self.mig_log) else []
++
++    def test_setup_runs_migrations_and_reports(self):
++        output = self.output()
++        with mock.patch.dict(os.environ, self.env), \
++                mock.patch.object(upgrade, "CORE_MIGRATIONS_DIR",
++                                  os.path.join(self.core, "migrations")):
++            db = database.get_db(self.env)
++            startup.Startup(self.env, output, db).run()
++            self.assertEqual(db.get_option("version"), __version__)
++            self.assertEqual(sorted(db.get_migration_names()), ["appctl:1_first",
++                                                                "appctl:2_second"])
++        self.assertEqual(self.migrations_run(), ["1_first", "2_second"])
++        self.assertEqual(self.out.getvalue(), f"Success: {startup.FIRST_RUN_SUCCESS}\n")
++
++    def test_darwin_instructions(self):
++        output = self.output()
++        db = database.get_db(self.env)
++        startup.Startup(self.env, output, db, platform_name="Darwin").run()
++        self.assertIn("Docker Desktop", self.out.getvalue())
++        self.assertIn(self.root, self.out.getvalue())
++
++    def test_first_run_cli(self):
++        self.assertFalse(os.path.exists(database.db_path(self.env)))
++        result = self.cli("cli", "info")
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertTrue(result.stdout.startswith("Success: AppCtl has been set up successfully.\n"))
++        self.assertEqual(self.stored_version(), __version__)
++        self.assertNotIn("set up", self.cli("cli", "info").stdout)
++
++    def test_first_run_preserves_machine_output(self):
++        result = self.cli("cli", "version")
++        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, f"{__version__}\n", ""))
++        for args in (("cli", "info", "--format=json"), ("cli", "cmd-dump"),
++                     ("cli", "param-dump"), ("cli", "alias", "--format=json"),
++                     ("site", "list", "--format=json")):
++            shutil.rmtree(self.root)
++            result = self.cli(*args)
++            self.assertEqual(result.returncode, 0, (args, result.stderr))
++            json.loads(result.stdout)
++            self.assertEqual(self.stored_version(), __version__)
++
++    def test_first_run_silent_commands(self):
++        result = self.cli("cli", "has-command", "site list")
++        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
++        shutil.rmtree(self.root)
++        result = self.cli("cli", "completions", "--line=appctl cli ver", "--point=14")
++        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "version \n", ""))
++
++
++class VersionCheckTest(Case):
++    def setUp(self):
++        super().setUp()
++        self.init()
++
++    def test_older_binary_cli_warns(self):
++        self.set_stored_version("99.0.0")
++        result = self.cli("cli", "version")
++        self.assertEqual((result.returncode, result.stdout), (0, f"{__version__}\n"))
++        self.assertTrue(result.stderr.startswith("Warning: "))
++        self.assertIn("99.0.0", result.stderr)
++        self.assertEqual(self.stored_version(), "99.0.0")
++
++    def test_older_binary_other_commands_fail(self):
++        self.set_stored_version("1.10.0")  # semantic, not lexical: 1.10.0 > 1.0.0
++        for args in (("site", "list"), ("help",), ("config", "path")):
++            result = self.cli(*args)
++            self.assertEqual(result.returncode, 1)
++            self.assertEqual(result.stdout, "")
++            self.assertTrue(result.stderr.startswith("Error: "))
++            self.assertIn("update", result.stderr)
++
++    def test_older_binary_silent_commands(self):
++        self.set_stored_version("99.0.0")
++        result = self.cli("cli", "has-command", "site")
++        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
++
++    def test_newer_binary_migrates(self):
++        self.set_stored_version("0.9.0")
++        result = self.cli("cli", "version")
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertEqual(self.stored_version(), __version__)
++
++    def test_version_status(self):
++        self.assertEqual(upgrade.version_status("0.9.9", "1.0.0"), upgrade.VERSION_NEWER)
++        self.assertEqual(upgrade.version_status("1.0.0", "1.0.0"), upgrade.VERSION_CURRENT)
++        self.assertEqual(upgrade.version_status("1.0.10", "1.0.9"), upgrade.VERSION_OLDER)
++        for stored in ("1.0.0", "2.0.0", "1.0.0-nightly"):
++            self.assertEqual(upgrade.version_status(stored, "1.0.0-nightly"),
++                             upgrade.VERSION_NEWER)
++
++    def test_nightly_always_migrates(self):
++        output = self.output()
++        db = database.get_db(self.env)
++        with mock.patch.object(upgrade, "run_upgrade") as run:
++            startup.Startup(self.env, output, db, current="1.0.0-nightly").run()
++            startup.Startup(self.env, output, db, current="1.0.0").run()
++        self.assertEqual(run.call_count, 1)
++
++
++# -- automatic update check ------------------------------------------------------------------
++
++
++class AutoUpdateTest(Case):
++    def setUp(self):
++        super().setUp()
++        self.updates = []
++        patcher = mock.patch.object(self_update, "available_updates",
++                                    side_effect=lambda *a, **k: list(self.updates))
++        self.available = patcher.start()
++        self.addCleanup(patcher.stop)
++        self.triggered = mock.Mock(return_value=0)
++
++    def check(self, now, interactive=True, writable=True, **env):
++        environ = dict(self.env, **env)
++        return self_update.auto_check_update(environ, self.output(), now=now,
++                                             interactive=interactive, writable=writable,
++                                             update=self.triggered, platform_name="Linux")
++
++    def test_first_check_only_caches(self):
++        self.updates = [{"version": "9.0.0"}]
++        self.assertIsNone(self.check(1000))
++        self.available.assert_not_called()
++        self.assertIsNone(self.check(1000 + 86399))  # less than one whole day
++        self.available.assert_not_called()
++        self.assertEqual(self.check(1000 + 86400), 0)
++        self.triggered.assert_called_once()
++        self.assertIsNone(self.check(1000 + 86400 + 3600))  # timestamp updated
++
++    def test_no_update_found(self):
++        self.check(0)
++        self.assertIsNone(self.check(86400 * 3))
++        self.available.assert_called_once()
++        self.triggered.assert_not_called()
++
++    def test_interval_override(self):
++        self.updates = [{"version": "9.0.0"}]
++        self.check(0, APPCTL_AUTO_CHECK_UPDATE_DAYS="3")
++        self.assertIsNone(self.check(86400 * 2 + 86399, APPCTL_AUTO_CHECK_UPDATE_DAYS="3"))
++        self.assertEqual(self.check(86400 * 3, APPCTL_AUTO_CHECK_UPDATE_DAYS="3"), 0)
++        self.assertEqual(self_update.check_interval({}), 1)
++        self.assertEqual(self_update.check_interval({"APPCTL_AUTO_CHECK_UPDATE_DAYS": "x"}), 1)
++
++    def test_disabled_and_non_interactive(self):
++        self.updates = [{"version": "9.0.0"}]
++        for kwargs in ({"APPCTL_DISABLE_AUTO_CHECK_UPDATE": "1"}, {"interactive": False},
++                       {"writable": False}):
++            self.check(0, **kwargs)
++            self.assertIsNone(self.check(86400 * 10, **kwargs))
++        self.available.assert_not_called()
++        self.assertFalse(os.path.exists(os.path.join(self.root, ".cache")))
++
++    def test_piped_invocations_never_check(self):
++        result = self.cli("cli", "info")
++        self.assertEqual(result.returncode, 0)
++        self.assertFalse(os.path.exists(os.path.join(self.root, ".cache",
++                                                     self_update.UPDATE_CHECK_KEY)))
++
++
++# -- cli commands ------------------------------------------------------------------------------
++
++
++class InfoTest(Case):
++    def setUp(self):
++        super().setUp()
++        self.init()
++
++    def test_version(self):
++        result = self.cli("cli", "version")
++        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, f"{__version__}\n", ""))
++        self.assertEqual(self.cli("--version").stdout, f"{__version__}\n")
++
++    def test_list_and_json(self):
++        result = self.cli("cli", "info", APPCTL_RUNTIME_BIN="/opt/custom/python", SHELL="/bin/zsh")
++        lines = dict(line.split(":\t", 1) for line in result.stdout.splitlines())
++        self.assertEqual(lines["Shell"], "/bin/zsh")
++        self.assertEqual(lines["Runtime binary"], "/opt/custom/python")
++        self.assertEqual(lines["AppCtl root dir"], self.root)
++        self.assertEqual(lines["AppCtl packages dir"], "")
++        self.assertEqual(lines["AppCtl version"], __version__)
++        self.assertIn("OS", lines)
++        data = json.loads(self.cli("cli", "info", "--format=json").stdout)
++        self.assertIsNone(data["appctl_packages_dir_path"])
++        self.assertEqual(data["appctl_version"], __version__)
++        self.assertEqual(data["appctl_root_dir"], self.root)
++        self.assertEqual(data["global_config_path"],
++                         os.path.join(self.root, "config", "config.yml"))
++        self.assertEqual(data["runtime_binary"], sys.executable)
++        os.makedirs(self.env["APPCTL_PACKAGES_DIR"])
++        data = json.loads(self.cli("cli", "info", "--format=json").stdout)
++        self.assertEqual(data["appctl_packages_dir_path"], self.env["APPCTL_PACKAGES_DIR"])
++
++    def test_invalid_format(self):
++        self.assertEqual(self.cli("cli", "info", "--format=xml").returncode, 1)
++
++
++class DumpTest(Case):
++    def setUp(self):
++        super().setUp()
++        self.init()
++
++    def test_cmd_dump(self):
++        data = json.loads(self.cli("cli", "cmd-dump").stdout)
++        self.assertEqual(data["name"], "appctl")
++        paths = []
++
++        def walk(entry, prefix):
++            for key in ("name", "description", "longdesc", "subcommands"):
++                self.assertIn(key, entry)
++            if entry["subcommands"]:
++                self.assertNotIn("synopsis", entry)
++            else:
++                self.assertIn("synopsis", entry)
++            for sub in entry["subcommands"]:
++                paths.append(prefix + [sub["name"]])
++                walk(sub, prefix + [sub["name"]])
++
++        walk(data, [])
++        self.assertEqual(paths, sorted(paths))
++        self.assertIn(["cli", "has-command"], paths)
++        cli = next(c for c in data["subcommands"] if c["name"] == "cli")
++        info = next(c for c in cli["subcommands"] if c["name"] == "info")
++        self.assertEqual(info["synopsis"], "[--format=<format>]")
++
++    def test_param_dump(self):
++        data = json.loads(self.cli("cli", "param-dump").stdout)
++        self.assertEqual(list(data), sorted(data))
++        self.assertNotIn("current", data["url"])
++        self.assertEqual(data["url"]["synopsis"], "--url=<url>")
++        data = json.loads(self.cli("cli", "param-dump", "--with-values", "--url=x.test").stdout)
++        self.assertEqual(data["url"]["current"], "x.test")
++        self.assertEqual(data["color"]["current"], "auto")
++        text = self.cli("cli", "param-dump", "--format=var_export").stdout
++        self.assertTrue(text.startswith("{'admin-email': {"))
++        self.assertIn(pprint.pformat("--url=<url>"), text)
++
++    def test_has_command(self):
++        for args in (["site"], ["site", "create"], ["site create"], ["cli", "has-command"],
++                     ["cfg", "get"]):
++            result = self.cli("cli", "has-command", *args)
++            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""), args)
++        for args in (["sitee"], ["site", "nope"], ["site create extra"], [""]):
++            result = self.cli("cli", "has-command", *args)
++            self.assertEqual((result.returncode, result.stdout, result.stderr), (1, "", ""), args)
++
++    def test_aliases(self):
++        write(os.path.join(self.root, "config", "config.yml"), textwrap.dedent("""\
++            locale: en_US
++            installer_version: stable
++            "@prod":
++              ssh: deploy@prod.example.com/var/www
++            "@dev":
++              path: /srv/dev
++        """))
++        result = self.cli("cli", "alias")
++        self.assertEqual(result.returncode, 0, result.stderr)
++        data = yaml.safe_load(result.stdout)
++        self.assertEqual(list(data), ["@all", "@dev", "@prod"])
++        self.assertEqual(data["@prod"], {"ssh": "deploy@prod.example.com/var/www"})
++        self.assertEqual(json.loads(self.cli("cli", "alias", "--format=json").stdout), data)
++        self.assertEqual(self.cli("cli", "aliases").stdout, result.stdout)
++        self.assertEqual(self.cli("cli", "aliases", "--format=json").stdout,
++                         self.cli("cli", "alias", "--format=json").stdout)
++
++
++class CompletionTest(Case):
++    def setUp(self):
++        super().setUp()
++        self.init()
++
++    def complete(self, line, point=None, shell=None, **env):
++        args = ["cli", "completions", f"--line={line}",
++                f"--point={len(line) if point is None else point}"]
++        if shell:
++            args.append(f"--shell={shell}")
++        result = self.cli(*args, **env)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        return result.stdout.splitlines()
++
++    def test_root_includes_aliases_sorted(self):
++        write(os.path.join(self.root, "config", "config.yml"), '"@prod":\n  ssh: h\n')
++        found = self.complete("appctl ")
++        self.assertEqual(found, sorted(found, key=lambda s: (s.lower(), s)))
++        self.assertIn("@prod ", found)
++        self.assertIn("@all ", found)
++        self.assertIn("site ", found)
++        self.assertEqual(self.complete("appctl @p"), ["@prod "])
++        self.assertIn("list ", self.complete("appctl @prod site "))
++
++    def test_subcommands_and_flags(self):
++        self.assertEqual(self.complete("appctl site cr"), ["create "])
++        flags = self.complete("appctl site create foo --")
++        self.assertEqual(flags, sorted(flags))
++        self.assertIn("--type=", flags)
++        self.assertIn("--porcelain ", flags)
++        self.assertIn("--url=", flags)
++        self.assertNotIn("--type=", self.complete("appctl site create foo --type=x --"))
++
++    def test_point(self):
++        self.assertEqual(self.complete("appctl si create", point=9), ["site "])
++
++    def test_file_marker(self):
++        self.assertEqual(self.complete("appctl db import "), ["<file> "])
++        self.assertIn("--porcelain ", self.complete("appctl db export --"))
++
++    def test_zsh_descriptions(self):
++        found = self.complete("appctl site cr", shell="zsh")
++        self.assertEqual(found, ["create:Creates a site."])
++        for line in self.complete("appctl ", shell="zsh"):
++            self.assertRegex(line, r"^[^ :]+:\S")
++        self.assertEqual(self.cli("cli", "completions", "--line=x", "--point=1",
++                                  "--shell=fish").returncode, 1)
++
++    def test_not_logged(self):
++        log = os.path.join(self.root, "logs", "appctl.log")
++        before = read(log)
++        self.complete("appctl site ")
++        self.assertEqual(read(log), before)
++
++
++# -- updates --------------------------------------------------------------------------------------
++
++
++class UpdateCase(Case):
++    def releases(self, *versions, url=None, extra=()):
++        data = [{"tag_name": f"v{v}",
++                 "assets": [{"browser_download_url": url or f"https://example.test/{v}.pyz"}]}
++                for v in versions]
++        data += list(extra)
++        path = write(os.path.join(self.tmp, "releases.json"), json.dumps(data))
++        self.env["APPCTL_RELEASES_URL"] = "file://" + path
++
++
++class CheckUpdateTest(UpdateCase):
++    def setUp(self):
++        super().setUp()
++        self.init()
++        self.releases("1.0.1", "1.0.3", "1.2.0", "1.1.5", "2.0.0", "3.1.0", "0.9.0", "1.0.0",
++                      extra=[{"tag_name": "v9.0.0", "prerelease": True, "assets": []},
++                             {"tag_name": "v8.0.0", "draft": True, "assets": []}])
++
++    def check(self, *args):
++        result = self.cli("cli", "check-update", *args)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        return result.stdout
++
++    def test_all_types(self):
++        rows = json.loads(self.check("--format=json"))
++        self.assertEqual([(r["version"], r["update_type"]) for r in rows],
++                         [("3.1.0", "major"), ("1.2.0", "minor"), ("1.0.3", "patch")])
++        self.assertEqual(list(rows[0]), ["version", "update_type", "package_url"])
++        self.assertEqual(rows[0]["package_url"], "https://example.test/3.1.0.pyz")
++        self.assertEqual(self.check("--format=count"), "3\n")
++        self.assertEqual(self.check("--field=version"), "3.1.0\n1.2.0\n1.0.3\n")
++        self.assertEqual(yaml.safe_load(self.check("--format=yaml")), rows)
++        self.assertEqual(self.check("--format=csv").splitlines()[0],
++                         "version,update_type,package_url")
++        self.assertIn("| version | update_type | package_url", self.check())
++
++    def test_filters_last_wins(self):
++        def versions(*args):
++            return [r["version"] for r in json.loads(self.check("--format=json", *args))]
++        self.assertEqual(versions("--patch"), ["1.0.3"])
++        self.assertEqual(versions("--minor"), ["1.2.0"])
++        self.assertEqual(versions("--major"), ["3.1.0"])
++        self.assertEqual(versions("--patch", "--major"), ["3.1.0"])
++        self.assertEqual(versions("--major", "--patch"), ["1.0.3"])
++        self.assertEqual(versions("--patch", "--major", "--patch"), ["1.0.3"])
++        # single result stays a horizontal table
++        self.assertIn("| 1.2.0   | minor", self.check("--minor"))
++
++    def test_up_to_date(self):
++        self.releases("1.0.0", "0.5.0")
++        self.assertEqual(self.check(), "Success: AppCtl is up to date: it is at the latest version.\n")
++        self.assertEqual(self.check("--format=table", "--minor"),
++                         "Success: AppCtl is up to date: it is at the latest minor version.\n")
++        self.assertEqual(self.check("--format=json"), "[]\n")
++        self.assertEqual(self.check("--format=count"), "0\n")
++        self.releases("1.0.1")
++        self.assertIn("latest major version", self.check("--major"))
++
++    def test_errors(self):
++        self.assertEqual(self.cli("cli", "check-update", "--format=ids").returncode, 1)
++        result = self.cli("cli", "check-update",
++                          APPCTL_RELEASES_URL="file://" + os.path.join(self.tmp, "missing.json"))
++        self.assertEqual(result.returncode, 1)
++        self.assertIn("Failed to get the latest version", result.stderr)
++
++    def test_update_types(self):
++        self.assertEqual(self_update.update_type("1.0.1", "1.0.0"), "patch")
++        self.assertEqual(self_update.update_type("1.10.0", "1.9.9"), "minor")
++        self.assertEqual(self_update.update_type("2.0.0", "1.9.9"), "major")
++        self.assertIsNone(self_update.update_type("1.0.0", "1.0.0"))
++        self.assertIsNone(self_update.update_type("1.0.0", "1.0.1"))
++
++    def test_nightly_source(self):
++        version_file = write(os.path.join(self.tmp, "NIGHTLY_VERSION"), "1.0.1-nightly.20261111\n")
++        env = {"APPCTL_NIGHTLY_VERSION_URL": "file://" + version_file,
++               "APPCTL_NIGHTLY_URL": "https://example.test/nightly.pyz"}
++        with mock.patch.object(self_update, "stable_releases") as stable:
++            updates = self_update.available_updates(env, "1.0.1-nightly.20261101")
++            stable.assert_not_called()
++        self.assertEqual(updates, [{"version": "1.0.1-nightly.20261111", "update_type": "nightly",
++                                    "package_url": "https://example.test/nightly.pyz",
++                                    "status": "available"}])
++        self.assertEqual(self_update.available_updates(env, "1.0.1-nightly.20261111"), [])
++
++
++class SelfUpdateTest(UpdateCase):
++    def setUp(self):
++        super().setUp()
++        self.target = write(os.path.join(self.tmp, "install", "appctl"), "old binary\n", 0o755)
++
++    def new_binary(self, version="1.1.0", name="new.pyz"):
++        return write(os.path.join(self.tmp, "dl", name),
++                     f"import sys\nprint({version!r} if sys.argv[1:] == ['cli', 'version'] "
++                     f"else 'unexpected')\n")
++
++    def update(self, assoc=None, argv=(), platform_name="Linux", stdin=""):
++        output = self.output()
++        output._stdin = io.StringIO(stdin)
++        assoc = {"yes": True} if assoc is None else assoc
++        return self_update.self_update(self.env, output, assoc, argv,
++                                       current="1.0.0", platform_name=platform_name,
++                                       target=self.target)
++
++    def test_darwin_refused(self):
++        with self.assertRaises(AppctlError) as ctx:
++            self.update(platform_name="Darwin")
++        self.assertEqual(ctx.exception.message, "Self-update is not available. "
++                                                "Please use your system package manager to update.")
++        self.assertEqual(read(self.target), "old binary\n")
++
++    def test_success(self):
++        new = self.new_binary()
++        self.releases("1.1.0", "1.0.1", url="file://" + new)
++        self.assertEqual(self.update(), 0)
++        self.assertEqual(read(self.target), read(new))
++        self.assertTrue(os.access(self.target, os.X_OK))
++        self.assertTrue(self.out.getvalue().endswith("Success: Updated AppCtl to 1.1.0.\n"))
++        self.assertEqual(os.listdir(os.path.dirname(self.target)), ["appctl"])
++
++    def test_filter(self):
++        new = self.new_binary("1.0.1")
++        self.releases("1.1.0", "1.0.1", url="file://" + new)
++        self.update({"yes": True, "patch": True}, ["--patch"])
++        self.assertIn("Updated AppCtl to 1.0.1.", self.out.getvalue())
++
++    def test_confirmation(self):
++        self.releases("1.1.0", url="file://" + self.new_binary())
++        self.assertEqual(self.update({}, stdin="n\n"), 0)
++        self.assertEqual(read(self.target), "old binary\n")
++        self.assertIn("Would you like to update to 1.1.0? [y/n]", self.out.getvalue())
++        self.update({}, stdin="y\n")
++        self.assertIn("Updated AppCtl to 1.1.0.", self.out.getvalue())
++
++    def test_validation_failure_keeps_old_binary(self):
++        broken = write(os.path.join(self.tmp, "dl", "broken.pyz"), "raise SystemExit(3)\n")
++        garbage = write(os.path.join(self.tmp, "dl", "garbage.pyz"), "\x00\x01 not python")
++        for path in (broken, garbage):
++            self.releases("1.1.0", url="file://" + path)
++            with self.assertRaises(AppctlError) as ctx:
++                self.update()
++            self.assertIn("broken", ctx.exception.message)
++            self.assertEqual(read(self.target), "old binary\n")
++            self.assertEqual(os.listdir(os.path.dirname(self.target)), ["appctl"])
++
++    def test_checksum_mismatch(self):
++        new = self.new_binary()
++        write(new + ".sha256", "0" * 64 + "  new.pyz\n")
++        self.releases("1.1.0", url="file://" + new)
++        with self.assertRaises(AppctlError) as ctx:
++            self.update()
++        self.assertIn("sha256 hash", ctx.exception.message)
++        self.assertEqual(read(self.target), "old binary\n")
++
++    def test_already_latest(self):
++        self.releases("1.0.0")
++        self.assertEqual(self.update(), 0)
++        self.assertIn("up to date", self.out.getvalue())
++
++    def test_stable_and_nightly(self):
++        stable = self.new_binary("1.1.0", "stable.pyz")
++        self.releases("1.1.0", "0.9.0", url="file://" + stable)
++        self.update({"yes": True, "stable": True}, ["--stable"])
++        self.assertIn("Updated AppCtl to 1.1.0.", self.out.getvalue())
++        nightly = self.new_binary("1.2.0-nightly.1", "nightly.pyz")
++        self.env["APPCTL_NIGHTLY_URL"] = "file://" + nightly
++        self.env["APPCTL_NIGHTLY_VERSION_URL"] = "file://" + os.path.join(self.tmp, "missing")
++        self.update({"yes": True, "nightly": True}, ["--nightly"])
++        self.assertIn("Updated AppCtl to 1.2.0-nightly.1.", self.out.getvalue())
++        self.assertEqual(read(self.target), read(nightly))
++
++    def test_archive_end_to_end(self):
++        archive = build(os.path.join(self.tmp, "install", "appctl.pyz"))
++        source = os.path.join(self.tmp, "src")
++        shutil.copytree(os.path.join(ROOT, "appctl_cli"), os.path.join(source, "appctl_cli"))
++        init = os.path.join(source, "appctl_cli", "__init__.py")
++        write(init, read(init).replace(f'"{__version__}"', '"1.5.0"'))
++        sys.path.insert(0, source)
++        try:
++            import importlib
++            builder = importlib.import_module("build_archive")
++            builder.ROOT = source
++            new = builder.build(os.path.join(self.tmp, "dl", "appctl-1.5.0.pyz"))
++            builder.ROOT = ROOT
++        finally:
++            sys.path.remove(source)
++        self.releases("1.5.0", url="file://" + new)
++        result = self.cli("cli", "update", "--yes", script=archive)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertIn("Success: Updated AppCtl to 1.5.0.", result.stdout)
++        result = self.cli("cli", "version", script=archive)
++        self.assertEqual(result.stdout, "1.5.0\n")
++
++
++class ArchiveModeTest(Case):
++    def test_info_and_paths(self):
++        archive = build(os.path.join(self.tmp, "dist", "appctl.pyz"))
++        result = self.cli("cli", "info", "--format=json", script=archive)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        data = json.loads(result.stdout)
++        self.assertEqual(data["appctl_archive_path"], archive)
++        self.assertEqual(data["appctl_binary_path"], os.path.realpath(archive))
++        source = json.loads(self.cli("cli", "info", "--format=json").stdout)
++        self.assertIsNone(source["appctl_archive_path"])
++
++
++# -- self-uninstall ------------------------------------------------------------------------------
++
++
++class SelfUninstallTest(Case):
++    def setUp(self):
++        super().setUp()
++        self.init()
++        self.project = os.path.join(self.tmp, "sites", "blog")
++        write(os.path.join(self.project, "docker-compose.yml"), "services: {}\n")
++        db = database.get_db(self.env)
++        db.add_project("blog", self.project)
++        database.close_all()
++        self.env.update(FAKE_IDS_CONTAINERS="c1\nc2\n", FAKE_IDS_NETWORKS="n1\n",
++                        FAKE_IDS_VOLUMES="v1\nv2\n", FAKE_IDS_IMAGES="i1\ni1\n")
++
++    def test_removes_everything(self):
++        result = self.cli("cli", "self-uninstall", "--yes")
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertIn("Success: AppCtl has been removed successfully.", result.stdout)
++        calls = self.docker_calls()
++        self.assertIn("rm -f c1 c2", calls)
++        self.assertIn("network rm n1", calls)
++        self.assertIn("volume rm -f v1 v2", calls)
++        self.assertIn("rmi -f i1", calls)
++        label = f"label={container.VENDOR_LABEL}"
++        self.assertIn(f"ps -aq --filter {label}", calls)
++        self.assertFalse(os.path.exists(self.project))
++        self.assertFalse(os.path.exists(self.root))
++
++    def test_prompt(self):
++        result = self.cli("cli", "self-uninstall", input="n\n")
++        self.assertEqual(result.returncode, 0)
++        self.assertIn("irreversible", result.stdout)
++        self.assertTrue(os.path.isdir(self.root))
++        self.assertTrue(os.path.isdir(self.project))
++        self.assertFalse([c for c in self.docker_calls() if c.startswith(("rm", "network rm"))])
++        result = self.cli("cli", "self-uninstall", input="y\n")
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertFalse(os.path.exists(self.root))
++
++    def test_requirements_checked_first(self):
++        result = self.cli("cli", "self-uninstall", "--yes", FAKE_PS_FAIL="1")
++        self.assertEqual(result.returncode, 1)
++        self.assertIn("Error: Container runtime is either not installed or not running.",
++                      result.stderr)
++        self.assertTrue(os.path.isdir(self.root))
++        self.assertTrue(os.path.isdir(self.project))
++        self.assertNotIn("irreversible", result.stdout)
++
++    def test_removes_archive(self):
++        archive = build(os.path.join(self.tmp, "dist", "appctl.pyz"))
++        result = self.cli("cli", "self-uninstall", "--yes", script=archive)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertFalse(os.path.exists(archive))
++        self.assertFalse(os.path.exists(self.root))
++
++
++if __name__ == "__main__":
++    unittest.main()
+
+### tests/test_upgrade.py (modified)
+--- tests/test_upgrade.py
++++ tests/test_upgrade.py
+@@ -408,15 +408,16 @@
+     def test_automatic_on_version_change(self):
+         self.migration("ext", "db", "1_a.py")
+         self.assertEqual(self.cli("cli", "version").returncode, 0)
+-        self.assertEqual(self.mig_calls(), [])  # fresh install: nothing automatic
++        self.assertEqual(self.mig_calls(), ["up ext 1_a"])  # first run: pending migrations
++        self.migration("ext", "db", "2_b.py")
+         self.db.set_option("version", "0.0.1")
+         result = self.cli("cli", "version")
+         self.assertEqual(result.returncode, 0, result.stderr)
+-        self.assertEqual(result.stdout, f"appctl {__version__}\n")
+-        self.assertEqual(self.mig_calls(), ["up ext 1_a"])
++        self.assertEqual(result.stdout, f"{__version__}\n")
++        self.assertEqual(self.mig_calls(), ["up ext 1_a", "up ext 2_b"])
+         self.assertEqual(self.db.get_option("version"), __version__)
+         self.cli("cli", "version")
+-        self.assertEqual(self.mig_calls(), ["up ext 1_a"])
++        self.assertEqual(self.mig_calls(), ["up ext 1_a", "up ext 2_b"])
+ 
+ 
+ if __name__ == "__main__":
+

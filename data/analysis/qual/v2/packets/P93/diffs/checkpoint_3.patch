@@ -1,0 +1,920 @@
+### appctl.py (modified)
+--- appctl.py
++++ appctl.py
+@@ -5,10 +5,14 @@
+     python appctl.py [@<alias>] [<command>] [<subcommand>] [<args>] [--<flags>]
+ """
+ 
++import csv
++import datetime
++import io
+ import json
+ import os
+ import re
+ import sys
++import time
+ 
+ VERSION = "1.0.0"
+ PROG = "appctl"
+@@ -35,11 +39,108 @@
+ class Runtime:
+     quiet = False
+     debug = False
++    debug_group = None
+     config = {}
+     aliases = {}
+     global_config_path = None
+     project_config_path = None
+-
++    start_time = time.time()
++
++
++# ANSI color codes for message prefixes.
++COLORS = {
++    "Error": "\033[31;1m",
++    "Warning": "\033[33;1m",
++    "Success": "\033[32;1m",
++    "Debug": "\033[34;1m",
++}
++COLOR_RESET = "\033[0m"
++BOX_COLOR = "\033[37;41;1m"
++LOG_DELIMITER = "=" * 80
++STDIN_TIMEOUT = 1.0
++PROMPT_TIMEOUT = 2.0
++SENSITIVE_KEY_RE = re.compile(r"pass|secret|token", re.IGNORECASE)
++
++
++def use_color():
++    """Return whether colorized output is enabled (``color`` config: auto/true/false)."""
++    value = Runtime.config.get("color", "auto")
++    if isinstance(value, str):
++        lowered = value.strip().lower()
++        if lowered in ("true", "1", "yes", "on", "always"):
++            value = True
++        elif lowered in ("false", "0", "no", "off", "never"):
++            value = False
++    if value is True:
++        return True
++    if value is False or value is None:
++        return False
++    if os.name == "nt" or sys.platform.startswith("win"):
++        return False
++    try:
++        return sys.stdout.isatty()
++    except (AttributeError, ValueError):
++        return False
++
++
++def colorize_prefix(label):
++    """Return ``<label>:`` colorized according to its message category."""
++    text = label + ":"
++    if not use_color():
++        return text
++    return COLORS[label.split()[0]] + text + COLOR_RESET
++
++
++# ---------------------------------------------------------------------------
++# File logging
++# ---------------------------------------------------------------------------
++
++class FileLog:
++    enabled = True
++
++
++def log_file_path():
++    return os.path.join(root_dir(), "logs", "%s.log" % PROG)
++
++
++def log_timestamp():
++    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
++
++
++def write_log(text, delimiter=False):
++    """Append ``text`` to the log file; every line gets a UTC timestamp."""
++    if not FileLog.enabled:
++        return
++    stamp = log_timestamp()
++    lines = [LOG_DELIMITER] if delimiter else []
++    lines.extend("[%s] %s" % (stamp, line) for line in str(text).split("\n"))
++    try:
++        path = log_file_path()
++        os.makedirs(os.path.dirname(path), exist_ok=True)
++        with open(path, "a", encoding="utf-8") as handle:
++            handle.write("\n".join(lines) + "\n")
++    except (OSError, ValueError):
++        pass
++
++
++def redact_argv(argv):
++    """Hide the values of password-like options before they reach the log file."""
++    redacted = []
++    for token in argv:
++        parsed = parse_token(token)
++        if parsed is not None and isinstance(parsed[1], str) and SENSITIVE_KEY_RE.search(parsed[0]):
++            token = "--%s=[REDACTED]" % parsed[0]
++        redacted.append(token)
++    return redacted
++
++
++def log_invocation(argv):
++    write_log("Command: %s" % " ".join([PROG] + redact_argv(argv)), delimiter=True)
++
++
++# ---------------------------------------------------------------------------
++# Output helpers
++# ---------------------------------------------------------------------------
+ 
+ def out(text=""):
+     sys.stdout.write(text + "\n")
+@@ -47,26 +148,122 @@
+ 
+ def success(message):
+     if not Runtime.quiet:
+-        out("Success: " + message)
+-
+-
+-def log(message):
+-    if not Runtime.quiet:
+-        out(message)
++        out(colorize_prefix("Success") + " " + message)
++
++
++def log(message, sensitive=False):
++    """Informational output: STDOUT plus the log file (unless sensitive)."""
++    if Runtime.quiet:
++        return
++    out(message)
++    if not sensitive:
++        write_log(message)
+ 
+ 
+ def warning(message):
+-    sys.stderr.write("Warning: " + message + "\n")
+-
+-
+-def debug(message):
+-    if Runtime.debug:
+-        sys.stderr.write("Debug: " + message + "\n")
+-
+-
+-def error(message, code=1):
+-    sys.stderr.write("Error: " + message + "\n")
++    sys.stderr.write(colorize_prefix("Warning") + " " + message + "\n")
++    write_log("Warning: " + message)
++
++
++def debug(message, group=None):
++    if not Runtime.debug:
++        return
++    if Runtime.debug_group and group != Runtime.debug_group:
++        return
++    label = "Debug (%s)" % group if Runtime.debug_group else "Debug"
++    text = "%s (%.3fs)" % (message, time.time() - Runtime.start_time)
++    sys.stderr.write(colorize_prefix(label) + " " + text + "\n")
++    write_log("%s: %s" % (label, text))
++
++
++def error_box(lines):
++    """Write ``lines`` to STDERR inside a highlighted box."""
++    lines = [line.replace("\t", "    ") for line in lines]
++    width = max(len(line) for line in lines)
++    border = "+" + "-" * (width + 2) + "+"
++    rows = [border] + ["| %s |" % line.ljust(width) for line in lines] + [border]
++    if use_color():
++        rows = [BOX_COLOR + row + COLOR_RESET for row in rows]
++    sys.stderr.write("\n".join(rows) + "\n")
++
++
++def error(message, code=1, sensitive=False, box=None):
++    """Report an error and exit. Sensitive errors are never written to the log file."""
++    message = str(message)
++    lines = message.split("\n")
++    if box is None:
++        box = len(lines) > 1
++    if box:
++        error_box(["Error: " + lines[0]] + lines[1:])
++    else:
++        sys.stderr.write(colorize_prefix("Error") + " " + message + "\n")
++    if not sensitive:
++        write_log("Error: " + message)
+     raise AppctlExit(code)
++
++
++# ---------------------------------------------------------------------------
++# User input
++# ---------------------------------------------------------------------------
++
++def _stdin_ready(timeout):
++    """Return False when STDIN is a pipe that stays empty for ``timeout`` seconds."""
++    if os.name == "nt":
++        return True
++    import select
++    try:
++        ready, _, _ = select.select([sys.stdin], [], [], timeout)
++    except (OSError, ValueError, TypeError):
++        return True
++    return bool(ready)
++
++
++def _stdin_is_tty():
++    try:
++        return sys.stdin.isatty()
++    except (AttributeError, ValueError):
++        return False
++
++
++def prompt(question):
++    """Display ``question``, read one line from STDIN, return it lowercased and trimmed."""
++    sys.stdout.write(question)
++    sys.stdout.flush()
++    if sys.stdin is None:
++        return ""
++    if not _stdin_is_tty() and not _stdin_ready(PROMPT_TIMEOUT):
++        return ""
++    try:
++        answer = sys.stdin.readline()
++    except (OSError, ValueError):
++        answer = ""
++    if not answer.endswith("\n") or not _stdin_is_tty():
++        sys.stdout.write("\n")
++    return answer.strip().lower()
++
++
++def confirm(question, assoc=None):
++    """Ask a ``[y/n]`` question; ``--yes`` auto-confirms. Returns True when confirmed."""
++    if assoc and assoc.get("yes"):
++        return True
++    if prompt(question + " [y/n] ") != "y":
++        warning("Operation cancelled.")
++        return False
++    return True
++
++
++def read_stdin():
++    """Read all of STDIN for a missing positional argument (None when unavailable)."""
++    if sys.stdin is None or _stdin_is_tty():
++        return None
++    if not _stdin_ready(STDIN_TIMEOUT):
++        return None
++    try:
++        data = sys.stdin.read()
++    except (OSError, ValueError):
++        return None
++    data = data.rstrip("\r\n")
++    return data if data != "" else None
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -681,7 +878,7 @@
+ 
+ class Command:
+     def __init__(self, name, parent=None, description="", synopsis="", alias=None,
+-                 handler=None, defaults=None, longdesc=""):
++                 handler=None, defaults=None, longdesc="", stdin_args=()):
+         self.name = name
+         self.parent = parent
+         self.description = description
+@@ -690,6 +887,9 @@
+         self.handler = handler
+         self.defaults = dict(defaults or {})
+         self.longdesc = longdesc
++        # Positional value arguments that may be read from STDIN (JSON-decoded
++        # when --format=json is active).
++        self.stdin_args = set(stdin_args)
+         self.subcommands = {}
+         self.params = parse_synopsis(self.synopsis, strict=True)
+ 
+@@ -752,7 +952,7 @@
+ 
+ 
+ def register(path, description="", synopsis="", alias=None, handler=None,
+-             defaults=None, longdesc=""):
++             defaults=None, longdesc="", stdin_args=()):
+     """Register a command (and any missing parent namespaces)."""
+     parse_synopsis(synopsis, strict=True)
+     parts = path.split()
+@@ -765,7 +965,8 @@
+         node = child
+     existing = node.subcommands.get(parts[-1])
+     command = Command(parts[-1], description=description, synopsis=synopsis,
+-                      alias=alias, handler=handler, defaults=defaults, longdesc=longdesc)
++                      alias=alias, handler=handler, defaults=defaults, longdesc=longdesc,
++                      stdin_args=stdin_args)
+     if existing is not None:
+         for sub in existing.subcommands.values():
+             command.add_subcommand(sub)
+@@ -933,11 +1134,40 @@
+ # Validation
+ # ---------------------------------------------------------------------------
+ 
++def fill_from_stdin(command, args, positional_specs, assoc_list):
++    if len(args) >= len(positional_specs):
++        return args
++    spec = positional_specs[len(args)]
++    is_value = spec["name"] in command.stdin_args
++    if spec["optional"] and not is_value:
++        return args
++    raw = read_stdin()
++    if raw is None:
++        return args
++    fmt = command.defaults.get("format")
++    for key, value in assoc_list:
++        if key == "format":
++            fmt = value
++    if is_value and fmt == "json":
++        try:
++            args.append(json.loads(raw))
++        except ValueError:
++            error("Invalid JSON: %s" % raw, sensitive=True, box=False)
++    elif spec["repeating"]:
++        args.extend(raw.split())
++    else:
++        args.append(raw)
++    return args
++
++
+ def validate_and_prepare(command, args, assoc_list):
+     params = command.params
+     positional_specs = [p for p in params if p["type"] == "positional"]
+     assoc_specs = [p for p in params if p["type"] in ("assoc", "flag")]
+     has_generic = any(p["type"] == "generic" for p in params)
++
++    # 0. A missing positional may be supplied through STDIN.
++    args = fill_from_stdin(command, list(args), positional_specs, assoc_list)
+ 
+     # 1. Required positionals.
+     required = 0
+@@ -1007,49 +1237,160 @@
+ # Output formatting helpers for handlers
+ # ---------------------------------------------------------------------------
+ 
+-def format_items(fmt, items, fields):
+-    fmt = fmt or "table"
+-    if fmt == "count":
+-        out(str(len(items)))
+-    elif fmt == "ids":
+-        out(" ".join(str(item.get(fields[0], "")) for item in items))
+-    elif fmt == "json":
+-        out(json.dumps([{f: item.get(f) for f in fields} for item in items]))
+-    elif fmt == "csv":
+-        out(",".join(fields))
++FORMATS = ("table", "csv", "json", "yaml", "count", "ids")
++
++
++def cell_value(value):
++    """Render a value for table/CSV output; complex values become JSON strings."""
++    if value is None:
++        return ""
++    if value is True:
++        return "true"
++    if value is False:
++        return "false"
++    if isinstance(value, (dict, list, tuple)):
++        return json.dumps(value)
++    return str(value)
++
++
++def dump_json(value):
++    return json.dumps(value, indent=4)
++
++
++def ascii_table(headers, rows):
++    """Fixed-width table; each column is as wide as its widest value."""
++    widths = [max([len(h)] + [len(row[i]) for row in rows]) for i, h in enumerate(headers)]
++    sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
++    lines = [sep, "| " + " | ".join(h.ljust(w) for h, w in zip(headers, widths)) + " |", sep]
++    for row in rows:
++        lines.append("| " + " | ".join(c.ljust(w) for c, w in zip(row, widths)) + " |")
++    lines.append(sep)
++    return lines
++
++
++class Formatter:
++    """Render command results according to --format, --fields and --field."""
++
++    def __init__(self, assoc, fields, prefix=None):
++        self.format = assoc.get("format") if isinstance(assoc.get("format"), str) else None
++        self.format = self.format or "table"
++        field = assoc.get("field")
++        self.field = field if isinstance(field, str) and field != "" else None
++        fields_arg = assoc.get("fields")
++        self.requested = None
++        if isinstance(fields_arg, str) and fields_arg.strip():
++            self.requested = [f.strip() for f in fields_arg.split(",") if f.strip()]
++        self.default_fields = list(fields)
++        self.prefix = prefix
++
++    def find_key(self, item, field):
++        """Return the item key matching ``field`` (prefix-aware, case-insensitive)."""
++        candidates = [field]
++        if self.prefix:
++            candidates.append("%s_%s" % (self.prefix, field))
++        for candidate in candidates:
++            if candidate in item:
++                return candidate
++        for candidate in candidates:
++            for key in item:
++                if key.lower() == candidate.lower():
++                    return key
++        error("Invalid field: %s." % field)
++
++    def reference(self, items):
++        return items[0] if items else dict.fromkeys(self.default_fields)
++
++    def columns(self, items):
++        if self.requested is None:
++            return list(self.default_fields)
++        reference = self.reference(items)
++        return [self.find_key(reference, f) for f in self.requested]
++
++    def check_format(self):
++        if self.format not in FORMATS:
++            error("Invalid format: %s" % self.format)
++
++    def id_key(self, item, columns):
++        for key in item:
++            if key.lower() == "id":
++                return key
++        if self.prefix:
++            for key in item:
++                if key.lower() == "%s_id" % self.prefix.lower():
++                    return key
++        return columns[0] if columns else None
++
++    def display_field(self, items, single):
++        values = []
+         for item in items:
+-            out(",".join(str(item.get(f, "")) for f in fields))
+-    elif fmt == "yaml":
+-        out("---")
+-        for item in items:
+-            for i, f in enumerate(fields):
+-                out(("- " if i == 0 else "  ") + "%s: %s" % (f, item.get(f, "")))
+-    elif fmt == "table":
+-        widths = {f: max([len(f)] + [len(str(item.get(f, ""))) for item in items]) for f in fields}
+-        sep = "+" + "+".join("-" * (widths[f] + 2) for f in fields) + "+"
+-        out(sep)
+-        out("| " + " | ".join(f.ljust(widths[f]) for f in fields) + " |")
+-        out(sep)
+-        for item in items:
+-            out("| " + " | ".join(str(item.get(f, "")).ljust(widths[f]) for f in fields) + " |")
+-        out(sep)
+-    else:
+-        error("Invalid format: %s" % fmt)
+-
+-
+-def render_items(assoc, items, default_fields):
+-    if assoc.get("field"):
+-        for item in items:
+-            out(str(item.get(assoc["field"], "")))
+-        return
+-    fields = default_fields
+-    if isinstance(assoc.get("fields"), str) and assoc["fields"]:
+-        fields = [f.strip() for f in assoc["fields"].split(",") if f.strip()]
+-    format_items(assoc.get("format"), items, fields)
++            key = self.find_key(item, self.field)
++            values.append(item.get(key))
++        if not items:
++            self.find_key(self.reference(items), self.field)
++        if self.format == "json":
++            out(dump_json(values[0] if single else values))
++            return
++        for value in values:
++            out(cell_value(value))
++
++    def display_items(self, items, single=False):
++        items = list(items)
++        if self.field:
++            self.display_field(items, single)
++            return
++        self.check_format()
++        columns = self.columns(items)
++        rows = [{c: item.get(c) for c in columns} for item in items]
++        fmt = self.format
++        if fmt == "count":
++            out(str(len(items)))
++        elif fmt == "ids":
++            ids = []
++            for item in items:
++                key = self.id_key(item, columns)
++                ids.append(cell_value(item.get(key)) if key else "")
++            out(" ".join(ids))
++        elif fmt == "json":
++            out(dump_json(rows[0] if single and rows else rows))
++        elif fmt == "yaml":
++            data = rows[0] if single and rows else rows
++            out("---")
++            lines = yaml_dump_lines(data) if data else [_yaml_inline_dump(data)]
++            for line in lines:
++                out(line)
++        elif fmt == "csv":
++            buffer = io.StringIO()
++            writer = csv.writer(buffer, lineterminator="\n")
++            writer.writerow(columns)
++            for row in rows:
++                writer.writerow([cell_value(row[c]) for c in columns])
++            sys.stdout.write(buffer.getvalue())
++        elif len(rows) == 1:
++            table_rows = [[c, cell_value(rows[0][c])] for c in columns]
++            for line in ascii_table(["Field", "Value"], table_rows):
++                out(line)
++        else:
++            table_rows = [[cell_value(row[c]) for c in columns] for row in rows]
++            for line in ascii_table(columns, table_rows):
++                out(line)
++
++    def display_item(self, item):
++        self.display_items([item], single=True)
++
++
++def render_items(assoc, items, default_fields, prefix=None):
++    Formatter(assoc, default_fields, prefix).display_items(items)
++
++
++def render_item(assoc, item, default_fields=None, prefix=None):
++    fields = default_fields if default_fields is not None else list(item.keys())
++    Formatter(assoc, fields, prefix).display_item(item)
+ 
+ 
+ def render_value(value, fmt):
+     if fmt == "json":
++        out(dump_json(value))
++    elif isinstance(value, (dict, list)):
+         out(json.dumps(value))
+     else:
+         out(str(value))
+@@ -1162,11 +1503,53 @@
+         "packages_dir": packages_dir(),
+     }
+     if assoc.get("format") == "json":
+-        out(json.dumps(info))
++        out(dump_json(info))
+     else:
+         width = max(len(k) for k in info)
+         for key, value in info.items():
+             out("%s  %s" % (key.ljust(width), format_default(value)))
++
++
++def completion_candidates(words, current):
++    node = ROOT
++    used = set()
++    for word in words:
++        parsed = parse_token(word)
++        if parsed is not None:
++            used.add(parsed[0])
++            continue
++        child = node.find_subcommand(word) if node.can_have_subcommands() else None
++        if child is not None and not is_command_disabled(child):
++            node = child
++    if node.can_have_subcommands() and not current.startswith("-"):
++        names = [sub.name for sub in node.enabled_subcommands()]
++    else:
++        params = list(node.params) + list(GLOBAL_PARAMS) if node.handler else []
++        names = []
++        for spec in params:
++            if spec["type"] not in ("assoc", "flag") or spec["name"] in used:
++                continue
++            names.append("--%s%s" % (spec["name"], "=" if spec["type"] == "assoc" else ""))
++    seen = []
++    for name in names:
++        if name.startswith(current) and name not in seen:
++            seen.append(name)
++    return seen
++
++
++def cmd_cli_completions(args, assoc):
++    line = assoc.get("line") if isinstance(assoc.get("line"), str) else ""
++    point = assoc.get("point")
++    if isinstance(point, str) and point.isdigit():
++        line = line[:int(point)]
++    words = line.split()
++    if words:
++        words = words[1:]
++    current = ""
++    if words and not line[-1:].isspace():
++        current = words.pop()
++    for name in completion_candidates(words, current):
++        out(name)
+ 
+ 
+ def cmd_cli_has_command(args, assoc):
+@@ -1233,8 +1616,8 @@
+ 
+ 
+ def cmd_site_delete(args, assoc):
+-    if not assoc.get("yes"):
+-        out("Deleting site '%s' (pass --yes to skip confirmation)." % args[0])
++    if not confirm("Are you sure you want to delete the '%s' site?" % args[0], assoc):
++        return
+     success("Deleted site '%s'." % args[0])
+ 
+ 
+@@ -1260,7 +1643,11 @@
+ 
+ 
+ def cmd_site_empty(args, assoc):
+-    success("The site at '%s' was emptied." % (Runtime.config.get("url") or "default"))
++    url = Runtime.config.get("url") or "default"
++    if not confirm("Are you sure you want to empty the site at '%s' of all posts, links, "
++                   "comments, and terms?" % url, assoc):
++        return
++    success("The site at '%s' was emptied." % url)
+ 
+ 
+ def cmd_site_meta_get(args, assoc):
+@@ -1336,10 +1723,14 @@
+ 
+ 
+ def cmd_db_drop(args, assoc):
++    if not confirm("Are you sure you want to drop the '%s' database?" % CONFIG["DB_NAME"], assoc):
++        return
+     success("Database dropped.")
+ 
+ 
+ def cmd_db_reset(args, assoc):
++    if not confirm("Are you sure you want to reset the '%s' database?" % CONFIG["DB_NAME"], assoc):
++        return
+     success("Database reset.")
+ 
+ 
+@@ -1390,7 +1781,7 @@
+     pattern = assoc.get("search")
+     items = [{"option_name": k, "option_value": v} for k, v in OPTIONS.items()
+              if not pattern or fnmatch.fnmatch(k, pattern)]
+-    render_items(assoc, items, ["option_name", "option_value"])
++    render_items(assoc, items, ["option_name", "option_value"], prefix="option")
+ 
+ 
+ SAMPLE_PLUGINS = [
+@@ -1409,23 +1800,23 @@
+ 
+ def cmd_plugin_install(args, assoc):
+     for name in args:
+-        out("Installing %s%s" % (name, " (%s)" % assoc["version"] if assoc.get("version") else ""))
++        log("Installing %s%s" % (name, " (%s)" % assoc["version"] if assoc.get("version") else ""))
+         if assoc.get("activate"):
+-            out("Activating '%s'..." % name)
++            log("Activating '%s'..." % name)
+     success("Installed %d of %d plugins." % (len(args), len(args)))
+ 
+ 
+ def cmd_plugin_activate(args, assoc):
+     targets = _plugin_targets(args, assoc, "activate")
+     for name in targets:
+-        out("Plugin '%s' activated." % name)
++        log("Plugin '%s' activated." % name)
+     success("Activated %d of %d plugins." % (len(targets), len(targets)))
+ 
+ 
+ def cmd_plugin_deactivate(args, assoc):
+     targets = _plugin_targets(args, assoc, "deactivate")
+     for name in targets:
+-        out("Plugin '%s' deactivated." % name)
++        log("Plugin '%s' deactivated." % name)
+     success("Deactivated %d of %d plugins." % (len(targets), len(targets)))
+ 
+ 
+@@ -1442,7 +1833,7 @@
+ def cmd_plugin_update(args, assoc):
+     targets = _plugin_targets(args, assoc, "update")
+     if assoc.get("dry-run"):
+-        out("Available plugin updates: none")
++        log("Available plugin updates: none")
+         return
+     success("Plugins already updated: %d." % len(targets))
+ 
+@@ -1480,7 +1871,7 @@
+ 
+ def cmd_theme_install(args, assoc):
+     for name in args:
+-        out("Installing %s" % name)
++        log("Installing %s" % name)
+     success("Installed %d of %d themes." % (len(args), len(args)))
+ 
+ 
+@@ -1511,11 +1902,8 @@
+ 
+ def cmd_post_get(args, assoc):
+     for post in SAMPLE_POSTS:
+-        if str(post["ID"]) == args[0]:
+-            if assoc.get("field"):
+-                out(str(post.get(assoc["field"], "")))
+-            else:
+-                render_items(assoc, [post], list(post.keys()))
++        if str(post["ID"]) == str(args[0]):
++            render_item(assoc, post, prefix="post")
+             return
+     error("Could not find the post with ID %s." % args[0])
+ 
+@@ -1525,7 +1913,7 @@
+     filters = {k: v for k, v in assoc.items() if k not in ("format", "field", "fields")}
+     for key, value in filters.items():
+         items = [p for p in items if str(p.get(key)) == str(value)]
+-    render_items(assoc, items, ["ID", "post_title", "post_type", "post_status"])
++    render_items(assoc, items, ["ID", "post_title", "post_type", "post_status"], prefix="post")
+ 
+ 
+ def cmd_post_update(args, assoc):
+@@ -1554,9 +1942,16 @@
+         out("2")
+         return
+     success("Created user 2 (%s)." % describe(login=args[0], email=args[1], role=assoc.get("role")))
++    if not assoc.get("user_pass"):
++        import secrets
++        log("Password: %s" % secrets.token_urlsafe(18), sensitive=True)
+ 
+ 
+ def cmd_user_delete(args, assoc):
++    if not assoc.get("reassign") and not confirm(
++            "--reassign parameter not passed. All associated posts will be deleted. Proceed?",
++            assoc):
++        return
+     for user in args:
+         success("Removed user %s%s." % (user, " (reassigned to %s)" % assoc["reassign"]
+                                          if assoc.get("reassign") else ""))
+@@ -1564,11 +1959,8 @@
+ 
+ def cmd_user_get(args, assoc):
+     for user in SAMPLE_USERS:
+-        if args[0] in (str(user["ID"]), user["user_login"], user["user_email"]):
+-            if assoc.get("field"):
+-                out(str(user.get(assoc["field"], "")))
+-            else:
+-                render_items(assoc, [user], list(user.keys()))
++        if str(args[0]) in (str(user["ID"]), user["user_login"], user["user_email"]):
++            render_item(assoc, user, prefix="user")
+             return
+     error("Invalid user ID, email or login: '%s'" % args[0])
+ 
+@@ -1577,7 +1969,7 @@
+     items = SAMPLE_USERS
+     if isinstance(assoc.get("role"), str):
+         items = [u for u in items if u["roles"] == assoc["role"]]
+-    render_items(assoc, items, ["ID", "user_login", "user_email", "roles"])
++    render_items(assoc, items, ["ID", "user_login", "user_email", "roles"], prefix="user")
+ 
+ 
+ def cmd_user_update(args, assoc):
+@@ -1605,6 +1997,8 @@
+              handler=cmd_cli_check_update, defaults={"format": "table"})
+     register("cli has-command", "Detect if a command exists.", "<command_name>",
+              handler=cmd_cli_has_command)
++    register("cli completions", "Generate tab completion strings.",
++             "--line=<line> [--point=<point>]", handler=cmd_cli_completions)
+     register("cli cmd-dump", "Dump the list of installed commands, as JSON.", "",
+              handler=cmd_cli_cmd_dump)
+     register("cli alias", "Retrieve, set, and delete appctl aliases.")
+@@ -1636,7 +2030,7 @@
+     register("site meta get", "Get a meta field.", "<site-name> <key> [--format=<format>]",
+              handler=cmd_site_meta_get, defaults={"format": "var_export"})
+     register("site meta set", "Set a meta field.", "<site-name> <key> <value> [--format=<format>]",
+-             handler=cmd_site_meta_set, defaults={"format": "plaintext"})
++             handler=cmd_site_meta_set, defaults={"format": "plaintext"}, stdin_args=("value",))
+     register("site meta delete", "Delete a meta field.", "<site-name> <key> [--all]",
+              handler=cmd_site_meta_delete)
+     register("site meta list", "List all metadata associated with a site.",
+@@ -1649,7 +2043,7 @@
+              handler=cmd_config_get, defaults={"type": "all", "format": "var_export"})
+     register("config set", "Set the value of a specific constant or variable.",
+              "<name> <value> [--add] [--raw] [--anchor=<anchor>] [--type=<type>]",
+-             handler=cmd_config_set, defaults={"type": "all"})
++             handler=cmd_config_set, defaults={"type": "all"}, stdin_args=("value",))
+     register("config delete", "Delete a specific constant or variable.",
+              "<name> [--type=<type>]", handler=cmd_config_delete, defaults={"type": "all"})
+     register("config list", "List variables, constants, and file includes.",
+@@ -1668,7 +2062,7 @@
+              handler=cmd_cache_get, defaults={"group": "default"})
+     register("cache set", "Set a value to the object cache.",
+              "<key> <value> [<group>] [<expiration>]", handler=cmd_cache_set,
+-             defaults={"group": "default", "expiration": 0})
++             defaults={"group": "default", "expiration": 0}, stdin_args=("value",))
+     register("cache delete", "Remove a value from the object cache.", "<key> [<group>]",
+              handler=cmd_cache_delete, defaults={"group": "default"})
+ 
+@@ -1683,7 +2077,7 @@
+              "[<file>] [--skip-optimization]", handler=cmd_db_import,
+              defaults={"file": "database.sql"})
+     register("db query", "Execute a SQL query against the database.", "[<sql>]",
+-             handler=cmd_db_query)
++             handler=cmd_db_query, stdin_args=("sql",))
+     register("db size", "Display the database name and size.",
+              "[--size_format=<format>] [--tables] [--format=<format>]",
+              handler=cmd_db_size, defaults={"format": "table"})
+@@ -1693,10 +2087,11 @@
+              handler=cmd_option_get, defaults={"format": "var_export"})
+     register("option add", "Add a new option value.",
+              "<key> [<value>] [--format=<format>] [--autoload=<autoload>]",
+-             handler=cmd_option_add, defaults={"format": "plaintext", "autoload": "yes"})
++             handler=cmd_option_add, defaults={"format": "plaintext", "autoload": "yes"},
++             stdin_args=("value",))
+     register("option update", "Update an option value.",
+              "<key> [<value>] [--autoload=<autoload>] [--format=<format>]",
+-             handler=cmd_option_update, defaults={"format": "plaintext"})
++             handler=cmd_option_update, defaults={"format": "plaintext"}, stdin_args=("value",))
+     register("option delete", "Delete an option.", "<key>...", handler=cmd_option_delete)
+     register("option list", "List options and their values.",
+              "[--search=<pattern>] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+@@ -1865,7 +2260,7 @@
+         if explicit:
+             error("Unable to write the global config file '%s': %s."
+                   % (path, exc.strerror or exc))
+-        debug("Unable to write the global config file '%s'." % path)
++        debug("Unable to write the global config file '%s'." % path, "bootstrap")
+ 
+ 
+ ALIAS_RE = re.compile(r"^@[A-Za-z0-9_.\-]+$")
+@@ -1954,16 +2349,16 @@
+     loader = ConfigLoader()
+     global_path = global_config_path()
+     if os.path.isfile(global_path):
+-        debug("Using global config: %s" % global_path)
++        debug("Using global config: %s" % global_path, "bootstrap")
+         loader.merge_file(global_path)
+     else:
+-        debug("No readable global config found")
++        debug("No readable global config found", "bootstrap")
+     project_path = project_config_path()
+     if project_path:
+-        debug("Using project config: %s" % project_path)
++        debug("Using project config: %s" % project_path, "bootstrap")
+         loader.merge_file(project_path)
+     else:
+-        debug("No project config found")
++        debug("No project config found", "bootstrap")
+     runtime_aliases = os.environ.get("APPCTL_RUNTIME_ALIAS")
+     if runtime_aliases:
+         loader.merge_runtime_aliases(runtime_aliases)
+@@ -2083,7 +2478,7 @@
+     if args:
+         command += " " + " ".join(escapeshellarg(arg) for arg in args)
+     full_command = generate_ssh_command(bits, command, config)
+-    debug("Running SSH command: %s" % full_command)
++    debug("Running SSH command: %s" % full_command, "ssh")
+     sys.stdout.flush()
+     sys.stderr.flush()
+     code = subprocess.call(full_command, shell=True)
+@@ -2125,7 +2520,9 @@
+ def apply_runtime_config(config, runtime):
+     Runtime.config = config
+     Runtime.quiet = bool(runtime.get("quiet"))
+-    Runtime.debug = runtime.get("debug") not in (None, False)
++    value = runtime.get("debug")
++    Runtime.debug = value not in (None, False)
++    Runtime.debug_group = value if isinstance(value, str) and value else None
+ 
+ 
+ def dispatch(alias, invocation, stack=()):
+@@ -2178,8 +2575,8 @@
+     config = compose_config(invocation.file_config, alias_config, invocation.runtime)
+     apply_runtime_config(config, invocation.runtime)
+     if alias:
+-        debug("Using alias: %s" % alias)
+-    debug("Resolved config: %s" % json.dumps(config, sort_keys=True, default=str))
++        debug("Using alias: %s" % alias, "bootstrap")
++    debug("Resolved config: %s" % json.dumps(config, sort_keys=True, default=str), "bootstrap")
+ 
+     if config.get("ssh"):
+         return run_remote(invocation, config, alias, alias_config)
+@@ -2190,7 +2587,7 @@
+         return 0
+ 
+     command, remaining = resolve_command(positionals)
+-    debug("Running command: %s" % command.path)
++    debug("Running command: %s" % command.path, "commands")
+ 
+     if command.handler is None:
+         command.show_usage()
+@@ -2199,6 +2596,11 @@
+     args, assoc = validate_and_prepare(command, remaining, invocation.assoc_list)
+     command.handler(args, assoc)
+     return 0
++
++
++def is_completion(positionals):
++    """Tab completion invocations never write to the log file."""
++    return positionals[:2] == ["cli", "completions"]
+ 
+ 
+ def run(argv):
+@@ -2207,9 +2609,11 @@
+     alias = extract_alias(argv)
+     tokens = rewrite_args(argv)
+     positionals, assoc_list, runtime = split_args(tokens, strict)
++    FileLog.enabled = not is_completion(positionals)
++    log_invocation(argv if alias is None else [alias] + argv)
+     apply_runtime_config(dict(runtime), runtime)
+     if Runtime.debug:
+-        debug("Runtime config: %s" % json.dumps(runtime, sort_keys=True))
++        debug("Runtime config: %s" % json.dumps(runtime, sort_keys=True), "bootstrap")
+     for name in runtime:
+         if GLOBAL_SPEC[name]["deprecated"]:
+             warning("The --%s global parameter is deprecated." % name)
+@@ -2223,6 +2627,7 @@
+ def main(argv=None):
+     if argv is None:
+         argv = sys.argv[1:]
++    Runtime.start_time = time.time()
+     try:
+         code = run(argv)
+     except AppctlExit as exc:
+

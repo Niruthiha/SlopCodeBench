@@ -1,0 +1,1141 @@
+{
+ "run": "runs/recli/c2_modular_s1_20261110T2205",
+ "checkpoints": {
+  "checkpoint_1": {
+   "pass_counts": {
+    "Core": 11,
+    "Functionality": 15,
+    "Regression": 0,
+    "Error": 6
+   },
+   "total_counts": {
+    "Core": 11,
+    "Functionality": 17,
+    "Regression": 0,
+    "Error": 6
+   },
+   "failed": {
+    "checkpoint_1-Functionality": [
+     {
+      "test": "TestFunctionality::test_required_associative_empty_value_is_rejected",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_required_associative_missing_error",
+      "reason": ""
+     }
+    ]
+   },
+   "agent_final_message": "I've built `appctl.py` and its supporting package, and all 45 tests pass (unit tests plus end-to-end runs of the real script). It uses only the Python standard library, so `requirements.txt` holds just a comment saying that. A virtual environment is set up in `.venv`.\n\n**What it does (each behaviour was run and checked):**\n- **No arguments / `appctl help`:** prints the top-level commands in case-insensitive alphabetical order, as aligned name/description columns, and exits 0.\n- **Command lookup:** commands are matched one level at a time (`site create`, `user meta get`). A command with subcommands but no handler, like `appctl site`, prints a `usage:` / `   or:` block listing its subcommands. Aliases are checked before any synonym suggestion, so `user remove 2` runs `user delete`.\n- **Rewrites:** `<cmd> --help` becomes `help <cmd>`. `--version` becomes `cli version`, but only when no command is given, so `plugin install x --version=1.2` is left alone.\n- **Unknown commands:** the error messages match the spec exactly and go to stderr with exit code 1, plus `Did you mean '\u2026'?` when there is a close match.\n- **Suggestions:** they come either from a fixed synonym list (`new`/`add` \u2192 `create`, `remove` \u2192 `delete`, \u2026), used only when the target command exists, or from edit distance. Ties are broken alphabetically, so the same input always gives the same suggestion.\n- **Argument checks:**\n  - A missing required positional prints the usage line to stdout (exit 1).\n  - Extra positionals give `Error: Too many positional arguments: \u2026`.\n  - Missing or empty required `--key` values and unknown `--key` values are all listed under one `Error: Parameter errors:` header, one per line, with `Did you mean '--type'?` where there's a close match.\n  - Defaults for optional arguments are filled in before the handler runs.\n- **Strict mode:** when `APPCTL_STRICT_ARGS_MODE` is set, global flags like `--url` only count as global before the first command word. So `site create x --url=a` succeeds normally but fails in strict mode with `unknown --url parameter`.\n\n**Choices of mine you might want to change:**\n- **Commands are simulated.** The spec doesn't define a command set, so I made a set: `cache`, `cli`, `config`, `db`, `help`, `option`, `plugin`, `post`, `site`, `theme`, `user`. Their handlers work on built-in sample data and change nothing real.\n- **Short typos get no suggestion if every character would change.** For example, `appctl v` would otherwise produce `Did you mean 'db'?`. I added this rule on top of the usual \"within 2 edits\" check.\n- **Destructive commands need `--yes`.** `db drop`, `db reset`, `site delete` and `site empty` fail with an error instead of asking for confirmation. That keeps them from hanging when run non-interactively.\n- **The parent command is shown by its canonical name in errors,** even if the user typed an alias (`cfg foo` reports `'config'`).\n\nThe code is split into a package, `appctl_cli/`, with one module per job: the synopsis parser, the command tree and registry, argument parsing, rewrites, command lookup, the validator, suggestions, help rendering, output formatting and the entry point. Each top-level command has its own file under `appctl_cli/commands/`.\n\nTo run the tests:\n```\n.venv/bin/python -m unittest discover -s tests -t .\n```"
+  },
+  "checkpoint_2": {
+   "pass_counts": {
+    "Core": 9,
+    "Functionality": 22,
+    "Regression": 32,
+    "Error": 3
+   },
+   "total_counts": {
+    "Core": 9,
+    "Functionality": 23,
+    "Regression": 34,
+    "Error": 5
+   },
+   "failed": {
+    "checkpoint_1-Regression": [
+     {
+      "test": "TestFunctionality::test_required_associative_empty_value_is_rejected",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_required_associative_missing_error",
+      "reason": ""
+     }
+    ],
+    "checkpoint_2-Functionality": [
+     {
+      "test": "TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command",
+      "reason": ""
+     }
+    ],
+    "checkpoint_2-Error": [
+     {
+      "test": "TestErrors::test_all_no_aliases_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_unknown_alias_error",
+      "reason": ""
+     }
+    ]
+   },
+   "agent_final_message": "I've implemented config loading, aliases and the global parameters in the existing `appctl_cli` code. The 45 existing tests and 19 new ones in `tests/test_config.py` all pass. I also ran the spec's example scenarios by hand, using a stand-in `ssh` script because this machine has no `ssh`, and the error messages and exit codes match the spec.\n\n**What's in place**\n- **Config loading** (`appctl_cli/config_loader.py`): runtime flags override the project file, which overrides the global file, which overrides defaults. The project file is found by searching upward, with `appctl.local.yml` beating `appctl.yml`. `_: {inherit, merge}` works, and missing `locale` / `installer_version` keys are added to the global config. If that file can't be written, the tool prints an `Error:` and exits 1.\n- **Global parameters** (`runtime_config.py`): the 13 from the table, with the runtime and file rules applied. So `--locale` is still passed to `config create` as a command option, and `debug`/`quiet` in a file are ignored. Deprecated parameters print the spec's warning when used as flags, and hidden ones are left out of `cli param-dump`.\n- **Disabled commands**: disabling a parent such as `db` also blocks `db query`, and the error names the entry that matched.\n- **Aliases** (`app.py`): single aliases, groups (deduplicated, in order of first appearance), `@all`, runtime aliases from `APPCTL_RUNTIME_ALIAS`, local `path` resolved against the config file's folder, and the unknown-alias suggestion.\n- **Remote execution** (`remote.py`): runs over `ssh`, or `docker`, `docker-compose` or `vagrant` if the connection string names them. `APPCTL_SSH_PRE_CMD` is supported, and exit code 255 gives the spec's error and is passed on.\n- **Packages dir**: shown in `cli info`, along with the global and project config paths.\n- `requirements.txt` now lists `PyYAML>=6.0`, which was already installed in the venv.\n\n**Decisions where the spec was silent**\n- **`@all` and groups:** each alias's name is printed on stdout before its output (suppressed by `--quiet`). `@all` skips group aliases so their members don't run twice. If any member fails, the run finishes and exits with the failing code.\n- **Default config location:** if neither `APPCTL_CONFIG_PATH` nor `APPCTL_ROOT_DIR` is set, the global config goes in `~/.appctl/config/config.yml`, and a failure to write it is ignored rather than stopping every command. Running the test suite creates that file in your home directory.\n- **Paths:** only alias paths are made absolute. A top-level `path:` in a config file is used as written.\n- **No deprecated or hidden parameters yet:** none are defined, because the spec's table doesn't mark any. The mechanism works: a temporary deprecated, hidden parameter printed the warning and was left out of `param-dump`.\n- **What runs remotely:** the command run on the server is `appctl <args>`. If the alias has settings other than `ssh`, they are sent along in `APPCTL_RUNTIME_ALIAS`, and a path in the ssh URL is added as `--path=`."
+  },
+  "checkpoint_3": {
+   "pass_counts": {
+    "Core": 7,
+    "Functionality": 19,
+    "Regression": 66,
+    "Error": 3
+   },
+   "total_counts": {
+    "Core": 7,
+    "Functionality": 23,
+    "Regression": 71,
+    "Error": 4
+   },
+   "failed": {
+    "checkpoint_1-Regression": [
+     {
+      "test": "TestFunctionality::test_required_associative_empty_value_is_rejected",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_required_associative_missing_error",
+      "reason": ""
+     }
+    ],
+    "checkpoint_2-Regression": [
+     {
+      "test": "TestErrors::test_all_no_aliases_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_unknown_alias_error",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command",
+      "reason": ""
+     }
+    ],
+    "checkpoint_3-Error": [
+     {
+      "test": "TestErrors::test_confirmation_prompt_non_y_aborts",
+      "reason": ""
+     }
+    ],
+    "checkpoint_3-Functionality": [
+     {
+      "test": "TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_confirmation_blank_response_cancels",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_csv_serializes_complex_values_as_json_strings",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_json_stdin_supplies_missing_positional_argument",
+      "reason": ""
+     }
+    ]
+   },
+   "agent_final_message": "I implemented the whole spec on top of the existing `appctl_cli` package. All 92 tests pass: the 64 that were already there plus 28 new ones in `tests/test_output.py`. `requirements.txt` is unchanged because PyYAML was already listed and nothing new was needed.\n\n**What changed**\n- **Output formats** (`formatter.py`): JSON is now pretty-printed with 4-space indentation and keeps column order. YAML is real block style via PyYAML. Arrays and objects appear as JSON strings in `table` and `csv` output. A table with exactly one result switches to a vertical Field/Value layout.\n- **Field selection**: `--field` and `--fields` match names case-insensitively and accept a per-command prefix, so `post get 1 --field=title` finds `post_title`. I set prefixes for posts (`post`), users (`user`) and options (`option`). Unknown names give `Error: Invalid field: <name>.` and exit 1.\n- **Messages and color** (`output.py`): `Error:`, `Warning:`, `Success:` and `Debug:` each get their own color. Color follows `--color`, `--no-color` and the `color` config key; in auto mode it's on only when STDOUT is a terminal and the OS isn't Windows.\n- **Debug**: each line ends with elapsed seconds, e.g. `(0.003s)`. `--debug=<group>` shows only that group, labelled `Debug (<group>):`. I added `bootstrap` messages that report which config files were loaded.\n- **Multi-line errors**: there is a new boxed error output, but no command currently uses it. Existing multi-line errors such as \"Did you mean\u2026\" and \"Parameter errors\" stay plain text, because the existing tests pin that exact output.\n- **Log file** (new `logger.py`): writes to `<APPCTL_ROOT_DIR>/logs/appctl.log`. Each run starts with a dashed delimiter line and the command line, and every entry has a UTC timestamp like `[2026-11-11T03:32:57Z]`. Sensitive errors and sensitive informational output are not written to the file. If the log can't be written, the command still runs and logging is silently skipped.\n- **Tab completion**: I added a `cli completions --line=\u2026 [--point=\u2026]` command, since nothing existed for this before. It never writes to the log.\n- **Confirmations**: `db drop`, `db reset`, `site delete` and `site empty` now ask `[y/n]` instead of failing without `--yes`. Any answer other than `y` prints `Warning: Operation cancelled.` and exits 0.\n- **STDIN fallback**: if a positional argument is missing and data is piped in, the first missing value is read from STDIN. With `--format=json` it is parsed as JSON, and bad input gives `Error: Invalid JSON: <raw>`.\n\n**Choices the spec left open**\n- **Informational output under `--quiet`**: it is still written to the log file; only the screen output is suppressed.\n- **Warnings under `--quiet`**: they stay hidden on screen, as before, but are still logged.\n- **What counts as sensitive**: invalid-JSON errors are treated as sensitive, because the raw STDIN could contain secrets. In the logged command line, values of arguments whose names look like `pass`, `secret`, `token`, `auth` and similar are replaced with `[REDACTED]`.\n- **Exit code on cancel**: a cancelled confirmation exits 0.\n\n**One cost to know about:** the STDIN fallback applies to optional positionals too, so `help` or `plugin status` with nothing piped will check STDIN. If STDIN is a pipe that stays open with no data, those commands wait up to 1 second before carrying on. A terminal, `/dev/null` or a file adds no delay."
+  },
+  "checkpoint_4": {
+   "pass_counts": {
+    "Core": 4,
+    "Functionality": 19,
+    "Regression": 95,
+    "Error": 3
+   },
+   "total_counts": {
+    "Core": 5,
+    "Functionality": 19,
+    "Regression": 105,
+    "Error": 4
+   },
+   "failed": {
+    "checkpoint_1-Regression": [
+     {
+      "test": "TestFunctionality::test_required_associative_empty_value_is_rejected",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_required_associative_missing_error",
+      "reason": ""
+     }
+    ],
+    "checkpoint_2-Regression": [
+     {
+      "test": "TestErrors::test_all_no_aliases_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_unknown_alias_error",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command",
+      "reason": ""
+     }
+    ],
+    "checkpoint_3-Regression": [
+     {
+      "test": "TestErrors::test_confirmation_prompt_non_y_aborts",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_confirmation_blank_response_cancels",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_csv_serializes_complex_values_as_json_strings",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_json_stdin_supplies_missing_positional_argument",
+      "reason": ""
+     }
+    ],
+    "checkpoint_4-Core": [
+     {
+      "test": "TestCore::test_detailed_execution_captures_all_fields",
+      "reason": ""
+     }
+    ],
+    "checkpoint_4-Error": [
+     {
+      "test": "TestErrors::test_exit_code_negative_1_warning",
+      "reason": ""
+     }
+    ]
+   },
+   "agent_final_message": "I've added external command execution, the file cache and archive extraction to the existing `appctl` codebase. All 107 tests pass: the 92 that were already there and 15 new ones in `tests/test_process_cache_extract.py`. `requirements.txt` is unchanged because everything uses the Python standard library.\n\n**Command execution** (`appctl_cli/process.py`)\n- **Detailed run:** `run_command()` returns the output, error output, exit code and elapsed time. With `--debug` it logs `COMMAND: \u2026` before running, then any non-empty `STDOUT:` / `STDERR:`, then `RETURN CODE: \u2026`.\n- **Success-only run:** `exec_command()` returns true or false and logs the same way.\n- **Hiding secrets:** pass an obfuscation list and those strings show as `******` in every debug line. The command itself still runs with the real values, and the returned result has the real output.\n- **Exit code -1:** this produces a warning on STDERR about signal handling configuration and does not stop the tool. The existing SSH/Docker runner gives the same warning.\n- **Running itself as a child:** `launch_self()` / `runcommand()` pass on the config file path and any global flags that differ from the defaults. A JSON mode parses the child's output as JSON before returning it.\n\n**File cache** (`appctl_cli/file_cache.py`)\n- **Location:** the cache uses `APPCTL_CACHE_DIR`, or `<APPCTL_ROOT_DIR>/.cache/` if that isn't set, and creates the directory if needed. If it can't be created, it prints `Warning: Failed to create directory '<path>': <reason>.` and caching is turned off for that run.\n- **Limits:** entries expire after 180 days and the cache is capped at 300 MB.\n- **Reads and writes:** an expired entry is deleted and treated as a miss, and a miss returns `False`. Writing stores the content and sets the file's modification time to now.\n- **Cache keys:** keys are converted to safe file paths the same way every time. A key that needs changing gets a short hash added, so `a b` and `a-b` don't end up in the same file.\n- **Cleanup:** this runs at the end of every invocation except tab completion. It deletes expired entries, then removes the least recently used files until the cache is under the size limit. Ties are broken by path so the order is always the same.\n\n**Archive extraction** (`python appctl.py cli update --archive=<archive> [--path=<dest>]`)\n- `--archive` is checked first: missing value, then file extension, then whether the file exists. Any other extension stops with the exact required error message and exit code 1.\n- Files are unpacked to a temporary directory and then copied into the destination (the current directory if `--path` isn't given). Writable files are overwritten. Each file that can't be written gets `Warning: Unable to copy '<relative_path>' to current directory.` and the rest are still copied. Afterwards the command fails with `There was an error overwriting existing files.`\n- If Python can't unpack a `.tar.gz`, the tool prints a warning and then tries the system `tar` command.\n\nChoices the spec left open:\n- **Read-only check:** a file counts as non-writable if the current user can't write it or it has no write permission bits. That second part only matters when running as root.\n- **Archive contents:** files are unpacked as they are, without removing any top-level folder.\n- **Extension check:** `.ZIP` and `.TAR.GZ` are also accepted because the check ignores case.\n- **New settings:** `APPCTL_CACHE_TTL` and `APPCTL_CACHE_MAX_SIZE` can override the two cache limits."
+  },
+  "checkpoint_5": {
+   "pass_counts": {
+    "Core": 2,
+    "Functionality": 8,
+    "Regression": 121,
+    "Error": 2
+   },
+   "total_counts": {
+    "Core": 5,
+    "Functionality": 11,
+    "Regression": 133,
+    "Error": 2
+   },
+   "failed": {
+    "checkpoint_1-Regression": [
+     {
+      "test": "TestFunctionality::test_required_associative_empty_value_is_rejected",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_required_associative_missing_error",
+      "reason": ""
+     }
+    ],
+    "checkpoint_2-Regression": [
+     {
+      "test": "TestErrors::test_all_no_aliases_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_unknown_alias_error",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command",
+      "reason": ""
+     }
+    ],
+    "checkpoint_3-Regression": [
+     {
+      "test": "TestErrors::test_confirmation_prompt_non_y_aborts",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_confirmation_blank_response_cancels",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_csv_serializes_complex_values_as_json_strings",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_json_stdin_supplies_missing_positional_argument",
+      "reason": ""
+     }
+    ],
+    "checkpoint_4-Regression": [
+     {
+      "test": "TestCore::test_detailed_execution_captures_all_fields",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_exit_code_negative_1_warning",
+      "reason": ""
+     }
+    ],
+    "checkpoint_5-Core": [
+     {
+      "test": "TestCore::test_option_upsert_overwrites",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_option_write_insert_then_read",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_all_values_stored_as_strings",
+      "reason": ""
+     }
+    ],
+    "checkpoint_5-Functionality": [
+     {
+      "test": "TestFunctionality::test_empty_string_value_is_not_treated_as_missing",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_existing_db_opens_without_recreating",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_parameterized_queries",
+      "reason": ""
+     }
+    ]
+   },
+   "agent_final_message": "The persistent store is in place. All 107 existing tests still pass, and I tried each requirement by hand: by running the CLI for the error cases and by calling the store's functions from a Python script for the rest. I didn't add tests to the repo.\n\n**What I added**\n- **`appctl_cli/database.py`**: a SQLite database at `<APPCTL_ROOT_DIR>/db/appctl.sqlite`. It has two tables:\n  - `options`: `key` (the primary key), `value` and `modified_on`.\n  - `migrations`: `migration`, `type` and `timestamp`, with each name/type pair stored once.\n- **`appctl_cli/app.py`**: every run now opens the database (creating it if needed) before loading config, and closes it at the end.\n\n**How it behaves**\n- **Settings:** `get_option` returns the stored string, or `False` if the key is missing (no error). `set_option` adds a key or overwrites it, and always stores the value as a string (`5` comes back as `\"5\"`).\n- **Migration history:**\n  - `apply_migration` skips migrations already recorded, and only records one after it succeeds.\n  - `rollback_migration` removes the record.\n  - `run_migrations` runs the pending ones in name order. If one fails, it runs that migration's undo step, leaves no record for it, and passes the error on.\n- **Safe values:** all queries use bound parameters. A value like `a'; DROP TABLE options;--` is stored and read back unchanged.\n- **Times:** `modified_on` and `timestamp` are UTC in the form `2026-11-11T03:47:54Z`. Lists come back sorted (options by key, migrations by name then type).\n- **Errors:**\n  - \"Unable to initialize connection\u2026\" (exit 1) when `db` is a regular file or the database path is a directory.\n  - \"Encountered Error while creating table\u2026\" (exit 1) when the database file is corrupt or an existing table is missing required columns.\n\n**Things to know**\n- **Startup cost:** every command, including tab completion, now creates or opens the database, and a database failure stops the command. I put the database check before config loading so that, when both would fail, you see the database error. That means a broken root directory now reports the database error rather than the config error.\n- **`appctl option` is unchanged:** it still uses its built-in fixed list rather than this store. The spec doesn't say which commands should use the store, and changing it could break current behaviour. Right now the store is only reachable from code.\n\n`requirements.txt` is unchanged, because SQLite comes with Python."
+  },
+  "checkpoint_6": {
+   "pass_counts": {
+    "Core": 0,
+    "Functionality": 11,
+    "Regression": 133,
+    "Error": 2
+   },
+   "total_counts": {
+    "Core": 6,
+    "Functionality": 24,
+    "Regression": 151,
+    "Error": 3
+   },
+   "failed": {
+    "checkpoint_1-Regression": [
+     {
+      "test": "TestFunctionality::test_required_associative_empty_value_is_rejected",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_required_associative_missing_error",
+      "reason": ""
+     }
+    ],
+    "checkpoint_2-Regression": [
+     {
+      "test": "TestErrors::test_all_no_aliases_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_unknown_alias_error",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command",
+      "reason": ""
+     }
+    ],
+    "checkpoint_3-Regression": [
+     {
+      "test": "TestErrors::test_confirmation_prompt_non_y_aborts",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_confirmation_blank_response_cancels",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_csv_serializes_complex_values_as_json_strings",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_json_stdin_supplies_missing_positional_argument",
+      "reason": ""
+     }
+    ],
+    "checkpoint_4-Regression": [
+     {
+      "test": "TestCore::test_detailed_execution_captures_all_fields",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_exit_code_negative_1_warning",
+      "reason": ""
+     }
+    ],
+    "checkpoint_5-Regression": [
+     {
+      "test": "TestCore::test_option_upsert_overwrites",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_option_write_insert_then_read",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_all_values_stored_as_strings",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_empty_string_value_is_not_treated_as_missing",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_existing_db_opens_without_recreating",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_parameterized_queries",
+      "reason": ""
+     }
+    ],
+    "checkpoint_6-Core": [
+     {
+      "test": "TestCore::test_compose_merge_base_always_first",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_container_status_exited",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_container_status_false_not_exists",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_container_status_running",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_project_naming_prefix",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_volume_creation_with_labels",
+      "reason": ""
+     }
+    ],
+    "checkpoint_6-Error": [
+     {
+      "test": "TestErrors::test_container_runtime_not_installed_error",
+      "reason": ""
+     }
+    ],
+    "checkpoint_6-Functionality": [
+     {
+      "test": "TestFunctionality::test_boot_container_exited_starts",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_boot_container_not_exists_creates",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_boot_container_running_noop",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_compose_directory_ignores_non_compose_files_in_call_order",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_configured_custom_compose_applies_after_base",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_missing_custom_compose_warns_and_falls_back_to_base",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_network_create_with_label",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_network_disconnect_failure_warning",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_service_inspection_lists_names",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_site_delete_tears_down_containers_networks_and_volumes",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_skip_tty_flag_passed",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_skip_tty_string_truthy_disables_tty",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_volume_existing_is_silently_skipped",
+      "reason": ""
+     }
+    ]
+   },
+   "agent_final_message": "I've implemented the spec as a new module, `appctl_cli/container.py`, plus a new `site config` command. The full test suite passes: 125 tests, including a new `tests/test_container.py`. No Docker daemon is running here, so nothing was run against a real Docker. The new tests use a fake `docker` script that records the commands it receives.\n\n**`python appctl.py site config --services`**\n- It lists services in the order they appear in the files: base services first, then any new ones from overrides. It reads the YAML itself rather than calling `docker compose config --services`, because Docker's command reordered `zeta, alpha, mid` to `alpha, zeta, mid` when I tried it. As a side effect it works without Docker.\n- It looks for the compose file in the current directory and its parent directories. You can point it elsewhere with `--path`, or name a site, which it looks up under `projects_path`.\n- Without `--services`, it prints the whole merged configuration as YAML.\n- If no compose file is found, it exits with an error.\n\n**Compose file merging**\n- The base file is the first of `docker-compose.yml`, `docker-compose.yaml`, `compose.yml` or `compose.yaml` that exists. Later files override earlier ones.\n- If `custom-compose` is set, that file is applied last. If it doesn't exist, the tool prints the exact warning from the spec and uses only the base file.\n- Otherwise it picks up `docker-compose.override.yml` (and the `compose.override` variants), then every `.yml`/`.yaml` file in `user-docker-compose/`, sorted by name.\n- Anything that isn't a `.yml`/`.yaml` file containing a YAML mapping is ignored.\n\n**Containers**\n- Status is `running`, `exited` (any container that exists but isn't running) or missing.\n- If the `docker` binary isn't on the PATH, the tool prints the exact error from the spec and exits.\n- Booting a container starts it if it has exited, does nothing if it's running, and creates it with `docker run -d --name \u2026` if it doesn't exist.\n- Start, stop and restart are simple wrappers around the matching `docker` commands.\n\n**Compose operations**\n- Up runs detached, optionally for a chosen list of services. Down removes the project's containers, networks and volumes.\n- Exec supports a user, a shell and running the command through `<shell> -c`. It adds `-T` (no TTY) only when `skip-tty` is truthy; strings like `\"false\"` or `\"0\"` count as false.\n- It uses `docker compose` when available and falls back to `docker-compose`.\n\n**Volumes and networks**\n- **Names:** volumes are named `<prefix>_<name>`. The prefix is the project name, lowercased, with everything except letters and digits removed.\n- **Labels:** new volumes and networks get two labels: `org.label-schema.vendor=appctl` and `io.appctl.project=<prefix>`.\n- **Creating volumes:** volumes marked `skip_volume: true` and volumes that already exist are skipped silently. On Linux, the volume's data directory is symlinked to `path_to_symlink`; on macOS no symlink is made.\n- **Mount entries:** on macOS each entry is `path_to_symlink:container_path`; on Linux it's `name:container_path`. `skip_darwin` and `skip_linux` leave a volume out on the matching platform.\n- **Networks:** connect, disconnect, remove and exists-check are all there, with the messages the spec asks for. A failed connect raises the error; a failed disconnect only warns.\n\n**Gaps and side effects**\n- `site create` is still the simulated version and does not call Docker. The real creation step is a library function, `container.create_project`, which sets up the network and volumes; nothing in the CLI calls it yet.\n- The new warnings are hidden under `--quiet`, like every other warning in the tool.\n- To give `site config` the working directory, I added a `cwd` field to `Context` and passed it through `Runner` in `app.py`.\n- `requirements.txt` is unchanged, since PyYAML was already listed."
+  },
+  "checkpoint_7": {
+   "pass_counts": {
+    "Core": 1,
+    "Functionality": 10,
+    "Regression": 146,
+    "Error": 2
+   },
+   "total_counts": {
+    "Core": 5,
+    "Functionality": 21,
+    "Regression": 184,
+    "Error": 4
+   },
+   "failed": {
+    "checkpoint_1-Regression": [
+     {
+      "test": "TestFunctionality::test_required_associative_empty_value_is_rejected",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_required_associative_missing_error",
+      "reason": ""
+     }
+    ],
+    "checkpoint_2-Regression": [
+     {
+      "test": "TestErrors::test_all_no_aliases_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_unknown_alias_error",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command",
+      "reason": ""
+     }
+    ],
+    "checkpoint_3-Regression": [
+     {
+      "test": "TestErrors::test_confirmation_prompt_non_y_aborts",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_confirmation_blank_response_cancels",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_csv_serializes_complex_values_as_json_strings",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_json_stdin_supplies_missing_positional_argument",
+      "reason": ""
+     }
+    ],
+    "checkpoint_4-Regression": [
+     {
+      "test": "TestCore::test_detailed_execution_captures_all_fields",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_exit_code_negative_1_warning",
+      "reason": ""
+     }
+    ],
+    "checkpoint_5-Regression": [
+     {
+      "test": "TestCore::test_option_upsert_overwrites",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_option_write_insert_then_read",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_all_values_stored_as_strings",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_empty_string_value_is_not_treated_as_missing",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_existing_db_opens_without_recreating",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_parameterized_queries",
+      "reason": ""
+     }
+    ],
+    "checkpoint_6-Regression": [
+     {
+      "test": "TestCore::test_compose_merge_base_always_first",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_container_status_exited",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_container_status_false_not_exists",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_container_status_running",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_project_naming_prefix",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_volume_creation_with_labels",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_container_runtime_not_installed_error",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_boot_container_exited_starts",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_boot_container_not_exists_creates",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_boot_container_running_noop",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_compose_directory_ignores_non_compose_files_in_call_order",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_configured_custom_compose_applies_after_base",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_missing_custom_compose_warns_and_falls_back_to_base",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_network_create_with_label",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_network_disconnect_failure_warning",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_service_inspection_lists_names",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_site_delete_tears_down_containers_networks_and_volumes",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_skip_tty_flag_passed",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_skip_tty_string_truthy_disables_tty",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_volume_existing_is_silently_skipped",
+      "reason": ""
+     }
+    ],
+    "checkpoint_7-Core": [
+     {
+      "test": "TestCore::test_disk_space_check_blocks_upgrade",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_migration_discovery_and_ascending_sort",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_migration_execution_creates_record",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_migration_failure_triggers_batch_rollback",
+      "reason": ""
+     }
+    ],
+    "checkpoint_7-Error": [
+     {
+      "test": "TestErrors::test_image_pull_failure_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_migration_rollback_deletes_records",
+      "reason": ""
+     }
+    ],
+    "checkpoint_7-Functionality": [
+     {
+      "test": "TestFunctionality::test_container_migration_failure_blocks_image_pulls",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_container_migrations_after_db_migrations",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_disk_space_exact_threshold_allows_upgrade",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_disk_space_failure_blocks_upgrade_mutations",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_image_pulls_sequential",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_no_pending_migrations_do_not_duplicate_history",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_post_upgrade_saves_versions",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_rollback_no_undo_skipped",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_rollback_strict_reverse_order",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_rollback_undo_failure_logged_continues",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_runtime_disk_space_failure_blocks_upgrade_mutations",
+      "reason": ""
+     }
+    ]
+   },
+   "agent_final_message": "I've implemented the full upgrade flow from the spec. All 146 tests pass: the 125 that were already there plus 21 new ones in `tests/test_upgrade.py`, which use a fake `docker` binary. No new dependencies were needed, so `requirements.txt` is unchanged.\n\n**How it runs**\n- **When:** automatically before any command if the stored tool version differs from the running one, or explicitly with the new `appctl cli migrate`. On a fresh install with no stored version nothing runs automatically; this keeps every existing command from trying to upgrade in a new environment.\n- **Order:** disk-space check first, then database migrations, container migrations, image pulls, compose tool upgrade, global containers, per-project containers, and finally saving the new versions. If any step fails, every completed step is undone in reverse. Pruning old images and networks happens last and only produces warnings if it fails.\n- **Rollback rules:** an undo that fails is logged and the rollback continues; steps with no undo are skipped. A failed step's own undo also runs, so it can clean up partial work. The one exception is a failed migration: only the migrations that completed before it are rolled back, as the spec says.\n\n**Migrations**\n- Files live in `<source>/migrations/{db,container}/<number>_<name>.py`. The source is either the tool itself (`appctl_cli/migrations/`) or an extension under the packages directory.\n- They're recorded in the `migrations` table as `<source>:<file name>` with their type and a timestamp, so same-named migrations from different sources stay separate.\n- They run in order of number, then name, then source. A missing file reports its path.\n- I wrote the convention up in `appctl_cli/migrations/README.md`.\n\n**Containers**\n- Target image versions are in `appctl_cli/img_versions.json`. An image counts as changed if its tag differs from the stored version; if no version is stored, the tag found locally is used instead.\n- Changed images are pulled one at a time, sorted by name.\n- Global services (`<root>/services/docker-compose.yml`) and each project in the new `projects` table get their compose files updated to the new tags. Only the affected services are recreated, with `up -d --no-deps`; on failure the files are restored and the old containers brought back.\n\n**Compose tool:** if the installed version is below 2.27.0, it downloads 2.29.7, keeps a backup and checks the new version. If that fails it keeps the old tool and only warns.\n\n**Disk space:** at least 5 GiB must be free for both the tool root and Docker's data directory before anything changes. Otherwise it exits with code 1 and an error saying minimum 5GB disk space is required.\n\n**Choices you may want to revisit**\n- The version numbers (2.27.0 minimum, 2.29.7 download), the image list, the error wording and the `projects` table layout are my own picks, since the spec doesn't name them.\n- Nothing yet adds projects to the `projects` table; there's no command for it.\n- Running `cli migrate` on this machine hit the real Docker, whose compose is 2.26.1. The download was blocked by the sandbox network, so the old tool was kept and nothing was left behind. Pruning also only warned, presumably because the Docker daemon isn't running here.\n\nThe main code is in `appctl_cli/upgrade.py` and `appctl_cli/revertable.py`, with small changes to `database.py`, `app.py`, `context.py` and `commands/cli.py`."
+  },
+  "checkpoint_8": {
+   "pass_counts": {
+    "Core": 5,
+    "Functionality": 21,
+    "Regression": 139,
+    "Error": 2
+   },
+   "total_counts": {
+    "Core": 7,
+    "Functionality": 31,
+    "Regression": 214,
+    "Error": 3
+   },
+   "failed": {
+    "checkpoint_1-Regression": [
+     {
+      "test": "TestCore::test_help_rewrite",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_help_rewrite_for_multi_level_command",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_excess_positional_args_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_missing_required_positional_shows_usage",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_multiple_parameter_errors_collected",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_unknown_associative_no_suggestion",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_unknown_associative_with_suggestion",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_parent_command_no_handler_shows_subcommands",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_required_associative_empty_value_is_rejected",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_required_associative_missing_error",
+      "reason": ""
+     }
+    ],
+    "checkpoint_2-Regression": [
+     {
+      "test": "TestErrors::test_all_no_aliases_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_unknown_alias_error",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_project_config_local_yml_priority_overrides_project_disabled_command",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_project_config_search_stops_at_first_matching_directory",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command",
+      "reason": ""
+     }
+    ],
+    "checkpoint_3-Regression": [
+     {
+      "test": "TestCore::test_field_single_value_raw_output",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_json_format_4_space_indent",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_table_format_default",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_confirmation_prompt_non_y_aborts",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_invalid_field_name_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_invalid_fields_plural_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_invalid_json_stdin_error",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_complex_values_json_serialized_in_table",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_confirmation_blank_response_cancels",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_count_format_integer",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_csv_format_quoting",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_csv_serializes_complex_values_as_json_strings",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_fields_case_insensitive",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_fields_restricts_and_orders_columns",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_formats_preserve_same_underlying_values",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_ids_format_space_separated",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_json_stdin_supplies_missing_positional_argument",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_yaml_format_output",
+      "reason": ""
+     }
+    ],
+    "checkpoint_4-Regression": [
+     {
+      "test": "TestCore::test_detailed_execution_captures_all_fields",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_exit_code_negative_1_warning",
+      "reason": ""
+     }
+    ],
+    "checkpoint_5-Regression": [
+     {
+      "test": "TestCore::test_option_upsert_overwrites",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_option_write_insert_then_read",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_all_values_stored_as_strings",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_empty_string_value_is_not_treated_as_missing",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_existing_db_opens_without_recreating",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_parameterized_queries",
+      "reason": ""
+     }
+    ],
+    "checkpoint_6-Regression": [
+     {
+      "test": "TestCore::test_compose_merge_base_always_first",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_project_naming_prefix",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_volume_creation_with_labels",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_container_runtime_not_installed_error",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_boot_container_exited_starts",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_boot_container_not_exists_creates",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_compose_directory_ignores_non_compose_files_in_call_order",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_compose_legacy_custom_appended_last",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_configured_custom_compose_applies_after_base",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_missing_custom_compose_warns_and_falls_back_to_base",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_network_create_with_label",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_network_disconnect_failure_warning",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_service_inspection_lists_names",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_site_delete_tears_down_containers_networks_and_volumes",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_skip_tty_string_truthy_disables_tty",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_volume_existing_is_silently_skipped",
+      "reason": ""
+     }
+    ],
+    "checkpoint_7-Regression": [
+     {
+      "test": "TestCore::test_disk_space_check_blocks_upgrade",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_migration_discovery_and_ascending_sort",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_migration_execution_creates_record",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_migration_failure_triggers_batch_rollback",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_image_pull_failure_error",
+      "reason": ""
+     },
+     {
+      "test": "TestErrors::test_migration_rollback_deletes_records",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_container_migration_failure_blocks_image_pulls",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_container_migrations_after_db_migrations",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_disk_space_exact_threshold_allows_upgrade",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_disk_space_failure_blocks_upgrade_mutations",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_image_pulls_sequential",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_no_pending_migrations_do_not_duplicate_history",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_rollback_no_undo_skipped",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_rollback_strict_reverse_order",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_rollback_undo_failure_logged_continues",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_runtime_disk_space_failure_blocks_upgrade_mutations",
+      "reason": ""
+     }
+    ],
+    "checkpoint_8-Core": [
+     {
+      "test": "TestCore::test_sysreq_exponential_backoff_retries",
+      "reason": ""
+     },
+     {
+      "test": "TestCore::test_version_newer_binary_triggers_migration",
+      "reason": ""
+     }
+    ],
+    "checkpoint_8-Error": [
+     {
+      "test": "TestErrors::test_older_binary_non_cli_error",
+      "reason": ""
+     }
+    ],
+    "checkpoint_8-Functionality": [
+     {
+      "test": "TestFunctionality::test_cli_check_update_filtered_no_updates_mentions_filter",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_cli_check_update_last_filter_wins",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_cli_check_update_no_updates_success",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_cli_check_update_table_format_no_updates_success",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_cli_cmd_dump_alphabetical",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_cli_info_list_format_field_order",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_cli_info_packages_path_null_when_missing",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_cli_param_dump_with_values_reflects_runtime_config",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_cli_update_requires_confirmation",
+      "reason": ""
+     },
+     {
+      "test": "TestFunctionality::test_older_binary_cli_warning",
+      "reason": ""
+     }
+    ]
+   },
+   "agent_final_message": "I've implemented the full spec on top of the existing `appctl` codebase. The full suite passes: 208 tests, 62 of them new in `tests/test_self_management.py`. No new dependencies, so `requirements.txt` is unchanged (stdlib plus the existing PyYAML).\n\n**New modules**\n- **`system.py`** \u2013 the system checks:\n  - The Docker probe (`docker ps -q`) tries 3 times, waiting 0.5s then 1s between attempts.\n  - The compose tool must exist and be at least 2.27.0, compared as semantic versions.\n  - The Python runtime must be at least 3.8.\n  - Every failing check is reported on STDERR, and the macOS error includes a `brew install --cask docker` hint.\n  - Also here: runtime binary lookup (`APPCTL_RUNTIME_BIN`, then `APPCTL_RUNTIME_BIN_USED`, then the running interpreter, then `python3`) and archive-mode detection.\n- **`startup.py`** \u2013 first run (create the store, run pending migrations, print the success message, plus Docker Desktop instructions on macOS) and the version comparison on every invocation (newer migrates, older warns for `cli` and errors otherwise, nightly always migrates).\n- **`self_update.py`** \u2013 release lookup, `check-update`, `update` (download, optional checksum, then a test run of the new binary against a throwaway root before an atomic replace), and the periodic auto-update check.\n- **`build_archive.py`** \u2013 builds the distributable `appctl.pyz` (a Python zip app), which is what \"archive mode\" means here.\n\n**Decisions you may want to revisit**\n- **`cli version` now prints only `1.0.0`**, as the spec requires (it used to print `appctl 1.0.0`).\n- **`cli update --archive=\u2026`** still does the old local-archive extraction, because existing tests use it. Without `--archive` it self-updates.\n- **On first run, machine-readable commands drop the success message** instead of moving it to STDERR (the spec allows either), so their output stays clean. This covers JSON/CSV/YAML formats, `--field`, `--porcelain`, `cli version`, and value-printing commands like `config get`. `has-command` and `completions` print nothing extra at all.\n- **Upgrades skip the Docker-dependent steps when Docker isn't responding.** Without this, any version bump on a machine with Docker stopped would make every command fail, `cli version` included. Migrations still run and the version is recorded; image pulls happen once Docker is back.\n- **The spec gives no URLs for the releases or nightly sources**, so I added overrides: `APPCTL_RELEASES_URL`, `APPCTL_NIGHTLY_VERSION_URL` and `APPCTL_NIGHTLY_URL`. They accept `file://`, which is how the tests run without network access.\n- **Declining a confirmation exits with code 0**, matching the existing commands.\n\n**Changes to existing tests**\n- This machine has a real Docker client but the daemon isn't running, and compose is 2.26.1 (below the minimum). So any non-exempt command now correctly fails here. I added `tests/helpers.py` with a fake `docker` and pointed the subprocess tests at it.\n- Tests that assert exact output now complete the first run in their setup.\n- I also updated one upgrade test whose old expectations (\"fresh install runs no migrations\", `appctl 1.0.0`) contradict this spec.\n\nI saved a memory note about the Docker environment for future sessions."
+  }
+ }
+}

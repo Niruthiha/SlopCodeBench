@@ -1,0 +1,2099 @@
+### sith.py (modified)
+--- sith.py
++++ sith.py
+@@ -5,6 +5,10 @@
+     python sith.py complete <file> <line> <col> [--fuzzy] [--project DIR]
+     python sith.py infer <file> <line> <col> [--project DIR]
+     python sith.py goto <file> <line> <col> [--follow-imports] [--project DIR]
++    python sith.py signatures <file> <line> <col> [--project DIR]
++    python sith.py references <file> <line> <col> [--scope file|project] [--project DIR]
++    python sith.py search <query> [--project DIR]
++    python sith.py names <file> [--all-scopes] [--project DIR]
+ """
+ import sys
+ 
+
+### sithlib/cli.py (modified)
+--- sithlib/cli.py
++++ sithlib/cli.py
+@@ -7,7 +7,21 @@
+ 
+ from .completion import complete_file
+ from .errors import SithError
++from .listing import list_names, search_project
+ from .navigation import GOTO, INFER, navigate
++from .references import FILE, PROJECT, find_references
++from .signatures import signatures_at
++
++# The JSON key(s) holding each command's results.
++_RESULT_KEYS = {
++    "complete": ("completions",),
++    INFER: ("definitions",),
++    GOTO: ("definitions",),
++    "signatures": ("signatures",),
++    "references": ("references",),
++    "search": ("definitions", "results"),
++    "names": ("names", "definitions"),
++}
+ 
+ 
+ class _ArgumentParser(argparse.ArgumentParser):
+@@ -17,12 +31,15 @@
+         raise SithError(message)
+ 
+ 
++def _add_project_argument(parser, default="the directory containing the file"):
++    parser.add_argument("--project", default=None, help=f"project root (default: {default})")
++
++
+ def _add_position_arguments(parser):
+     parser.add_argument("file", help="Python source file")
+     parser.add_argument("line", type=int, help="1-based line number")
+     parser.add_argument("col", type=int, help="0-based column number")
+-    parser.add_argument("--project", default=None,
+-                        help="project root (default: the directory containing the file)")
++    _add_project_argument(parser)
+ 
+ 
+ def build_parser():
+@@ -37,33 +54,58 @@
+     _add_position_arguments(goto)
+     goto.add_argument("--follow-imports", action="store_true",
+                       help="follow imports to the definitions they import")
++    signatures = commands.add_parser("signatures", help="signatures of the call at a cursor position")
++    _add_position_arguments(signatures)
++    references = commands.add_parser("references",
++                                     help="find the references to the name at a cursor position")
++    _add_position_arguments(references)
++    references.add_argument("--scope", choices=(FILE, PROJECT), default=FILE,
++                            help="search the file only (default) or the whole project")
++    search = commands.add_parser("search", help="search the project for definitions by name")
++    search.add_argument("query", help="case-insensitive substring of the names to find")
++    _add_project_argument(search, default="the current directory")
++    names = commands.add_parser("names", help="list the names defined in a file")
++    names.add_argument("file", help="Python source file")
++    names.add_argument("--all-scopes", action="store_true",
++                       help="include names defined in nested scopes")
++    _add_project_argument(names)
+     return parser
+ 
+ 
+ def _run(args):
+-    if args.command == "complete":
+-        completions = complete_file(args.file, args.line, args.col, fuzzy=args.fuzzy,
+-                                    project=args.project)
+-        return "completions", [c.to_dict() for c in completions]
+-    definitions = navigate(args.command, args.file, args.line, args.col, project=args.project,
++    command = args.command
++    if command == "complete":
++        results = complete_file(args.file, args.line, args.col, fuzzy=args.fuzzy,
++                                project=args.project)
++    elif command == "signatures":
++        results = signatures_at(args.file, args.line, args.col, project=args.project)
++    elif command == "references":
++        results = find_references(args.file, args.line, args.col, scope=args.scope,
++                                  project=args.project)
++    elif command == "search":
++        return search_project(args.query, project=args.project)
++    elif command == "names":
++        return list_names(args.file, all_scopes=args.all_scopes, project=args.project)
++    else:
++        results = navigate(command, args.file, args.line, args.col, project=args.project,
+                            follow_imports=getattr(args, "follow_imports", False))
+-    return "definitions", [d.to_dict() for d in definitions]
++    return [result.to_dict() for result in results]
+ 
+ 
+ def main(argv=None):
+-    key = "completions"
++    keys = _RESULT_KEYS["complete"]
+     try:
+         args = build_parser().parse_args(argv)
+-        key = "completions" if args.command == "complete" else "definitions"
++        keys = _RESULT_KEYS[args.command]
+         # Introspected modules may print; keep STDOUT reserved for the JSON result.
+         with contextlib.redirect_stdout(io.StringIO()):
+-            key, results = _run(args)
++            results = _run(args)
+     except SithError as error:
+         print(f"error: {error}", file=sys.stderr)
+         return 1
+     except Exception as error:  # analysis must never crash an editor integration
+         print(f"warning: analysis failed: {error!r}", file=sys.stderr)
+         results = []
+-    payload = {key: results}
++    payload = {key: results for key in keys}
+     sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
+     return 0
+
+### sithlib/definitions.py (modified)
+--- sithlib/definitions.py
++++ sithlib/definitions.py
+@@ -101,7 +101,7 @@
+ 
+     def module_name(self, context):
+         """Dotted module name of a parsed file, relative to the project root."""
+-        if not context.path:
++        if not context.path or context.is_stub:
+             return context.name
+         relative = self.relative_path(context.path)
+         if os.path.isabs(relative):
+
+### sithlib/inference.py (modified)
+--- sithlib/inference.py
++++ sithlib/inference.py
+@@ -7,8 +7,10 @@
+ from .builtin_scope import builtin_entries
+ from .entries import BindingEntry
+ from .flow import Fact, FlowAnalyzer, initial_facts, merge
++from .locate import find_scope
+ from .members import MemberResolver
+-from .scopes import CLASS, FUNCTION, LAMBDA, MODULE, Binding, walk_local
++from .scopes import CLASS, FUNCTION, LAMBDA, MODULE, Binding, function_parameters, walk_local
++from .stubs import StubIndex, declared_overloads, decorator_names
+ from .values import (
+     LocalClass,
+     LocalFunction,
+@@ -91,6 +93,7 @@
+ class Inferrer:
+     def __init__(self, importer):
+         self.importer = importer
++        self.stubs = StubIndex(importer)
+         self.members = MemberResolver(self)
+         self._builtins = builtin_entries()
+         self._builtin_bindings = {}
+@@ -102,6 +105,8 @@
+         self._active = set()
+         self._frames = []
+         self._depth = 0
++        self._dynamic_cache = {}
++        self._call_index = {}
+ 
+     # -- scopes and name listing (completion) -------------------------------
+ 
+@@ -391,6 +396,10 @@
+         context = binding.scope.module
+         kind = binding.kind
+         extra = binding.extra
++        if kind not in ("def", "class", "import", "importfrom", "param"):
++            declared = self.stub_binding_values(binding)
++            if declared:
++                return declared
+         if kind == "def":
+             scope = context.scope_of(binding.node)
+             return [LocalFunction(scope)] if scope else []
+@@ -467,6 +476,136 @@
+         values = unique(self.resolve_from_values(context, module, level, attribute))
+         return values[0] if values else None
+ 
++    # -- stubs -------------------------------------------------------------------
++
++    def from_stub(self, values):
++        """`values` with classes and functions defined in stubs replaced by their source."""
++        result = []
++        for value in values:
++            if isinstance(value, LocalClass):
++                source = self.stubs.source_scope(value.scope)
++                value = LocalClass(source) if source is not None else value
++            elif isinstance(value, LocalInstance):
++                source = self.stubs.source_scope(value.cls.scope)
++                value = LocalInstance(LocalClass(source)) if source is not None else value
++            elif isinstance(value, LocalFunction) and isinstance(
++                    value.node, (ast.FunctionDef, ast.AsyncFunctionDef)):
++                source = self.stubs.source_scope(value.scope)
++                value = LocalFunction(source, value.bound) if source is not None else value
++            result.append(value)
++        return result
++
++    def stub_binding_values(self, binding):
++        """Values a stub declares for a module or class attribute bound by `binding`."""
++        owner = binding.extra.get("owner")
++        scope = owner if owner is not None else binding.scope
++        if scope.kind not in (MODULE, CLASS) or scope.module.is_stub:
++            return []
++        for declaration in reversed(self.stubs.bindings(scope, binding.name)):
++            values = self.declared_values(declaration)
++            if values:
++                return values
++        return []
++
++    def declared_values(self, binding):
++        """Values of a binding made in a stub, mapped back to source definitions."""
++        if binding.kind == "assign":
++            annotation = binding.extra.get("annotation")
++            if annotation is not None:
++                return self.annotation_values(annotation, binding.scope)
++            value = binding.value
++            if value is None or (isinstance(value, ast.Constant) and value.value is Ellipsis):
++                return []
++            return self.from_stub(self.infer_values(value, binding.scope))
++        if binding.kind in ("def", "class", "import", "importfrom"):
++            return self.from_stub(self.binding_values(binding))
++        return []
++
++    def declarations(self, scope):
++        """Function scopes declaring the signature of local function `scope`.
++
++        These are the stub's definitions when there is a stub, else the
++        `@overload` variants defined next to the function, else the function.
++        """
++        if scope.kind != FUNCTION:
++            return [scope]
++        stubbed = self.stubs.function_scopes(scope)
++        if stubbed:
++            return stubbed
++        overloads = [b for b in declared_overloads(scope.parent.bindings.get(scope.node.name, []))
++                     if "overload" in decorator_names(b.node)]
++        scopes = [scope.module.scope_of(b.node) for b in overloads]
++        return [s for s in scopes if s is not None] or [scope]
++
++    def declared_returns(self, function, call=None, scope=None, pos=None, strict=False,
++                         offset=0, awaited=False):
++        """Return values declared by a stub or overloads of `function` (None if undeclared).
++
++        With a `call`, the first overload accepting its arguments is used.
++        """
++        if not isinstance(function.node, (ast.FunctionDef, ast.AsyncFunctionDef)):
++            return None
++        declarations = self.declarations(function.scope)
++        if declarations == [function.scope]:
++            return None
++        chosen = declarations
++        if call is not None and len(declarations) > 1:
++            matching = [d for d in declarations
++                        if self._accepts(d, call, scope, pos, strict, offset)]
++            chosen = matching[:1] or declarations
++        values = []
++        for declaration in chosen:
++            node = declaration.node
++            if isinstance(node, ast.AsyncFunctionDef) and not awaited:
++                values.append(RuntimeInstance(types.CoroutineType))
++            elif node.returns is not None:
++                values += self.annotation_values(node.returns, declaration.parent)
++        return unique(values)
++
++    def _accepts(self, declaration, call, scope, pos, strict, offset):
++        """Whether the arguments of `call` fit the parameters of a declared overload."""
++        arguments = declaration.node.args
++        positional = (arguments.posonlyargs + arguments.args)[offset:]
++        keyword_names = {a.arg for a in arguments.args[max(0, offset - len(arguments.posonlyargs)):]}
++        keyword_names |= {a.arg for a in arguments.kwonlyargs}
++        provided = {}
++        if any(isinstance(a, ast.Starred) for a in call.args) or any(
++                k.arg is None for k in call.keywords):
++            return True
++        if len(call.args) > len(positional) and arguments.vararg is None:
++            return False
++        for index, argument in enumerate(call.args[:len(positional)]):
++            provided[positional[index].arg] = (positional[index], argument)
++        params = {a.arg: a for a in positional + arguments.kwonlyargs}
++        for keyword in call.keywords:
++            if keyword.arg in keyword_names and keyword.arg not in provided:
++                provided[keyword.arg] = (params[keyword.arg], keyword.value)
++            elif arguments.kwarg is None:
++                return False
++        defaults = len(arguments.defaults)
++        required = positional[:len(positional) - defaults] if defaults else positional
++        required += [a for a, d in zip(arguments.kwonlyargs, arguments.kw_defaults) if d is None]
++        if any(a.arg not in provided for a in required):
++            return False
++        for param, argument in provided.values():
++            if param.annotation is None:
++                continue
++            expected = self.annotation_values(param.annotation, declaration.parent)
++            classes = unique(c for c in map(self.class_of, expected) if c is not None)
++            actual = self.infer_values(argument, scope, pos, strict)
++            if classes and actual and not any(self._compatible(v, classes) for v in actual):
++                return False
++        return True
++
++    def _compatible(self, value, classes):
++        if self.is_instance(value, classes):
++            return True
++        if isinstance(value, RuntimeInstance) and value.cls in _NUMERIC_TOWER:
++            index = _NUMERIC_TOWER.index(value.cls)
++            return any(isinstance(c, RuntimeClass) and c.obj in _NUMERIC_TOWER[index:]
++                       for c in classes)
++        return False
++
+     def annotation_values(self, annotation, scope, pos=None):
+         """Instances described by a type annotation."""
+         if annotation is None:
+@@ -495,10 +634,14 @@
+             if special in ("ClassVar", "Final", "Annotated", "Required", "NotRequired"):
+                 return self.annotation_values(arguments[0], scope, pos)
+             if special == "Type":
+-                return [v for v in self.infer_values(arguments[0], scope, pos)
+-                        if isinstance(v, (LocalClass, RuntimeClass))]
++                classes = self.infer_values(arguments[0], scope, pos)
++                if scope.module.is_stub:
++                    classes = self.from_stub(classes)
++                return [v for v in classes if isinstance(v, (LocalClass, RuntimeClass))]
+             annotation = annotation.value
+         values = self.infer_values(annotation, scope, pos)
++        if scope.module.is_stub:
++            values = self.from_stub(values)
+         return unique(instance_of(v) for v in values if isinstance(v, (LocalClass, RuntimeClass)))
+ 
+     def _frame_for(self, scope):
+@@ -511,15 +654,18 @@
+         node = binding.node
+         arg = binding.extra["arg"]
+         outer = binding.scope.parent
+-        if arg.annotation is not None:
++        positional = node.args.posonlyargs + node.args.args
++        is_method = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and outer.kind == CLASS
++        is_receiver = is_method and positional and positional[0] is arg
++        values = [] if is_receiver else self._declared_param_values(binding)
++        if not values and arg.annotation is not None:
+             values = self.annotation_values(arg.annotation, outer)
+-            if values:
+-                if arg is node.args.vararg:
+-                    return [RuntimeInstance(tuple)]
+-                if arg is node.args.kwarg:
+-                    return [RuntimeInstance(dict)]
+-                return values
+-        positional = node.args.posonlyargs + node.args.args
++        if values:
++            if arg is node.args.vararg:
++                return [RuntimeInstance(tuple)]
++            if arg is node.args.kwarg:
++                return [RuntimeInstance(dict)]
++            return values
+         frame = self._frame_for(binding.scope)
+         if frame is not None:
+             if arg.arg in frame.args:
+@@ -530,19 +676,115 @@
+             return [RuntimeInstance(tuple)]
+         if arg is node.args.kwarg:
+             return [RuntimeInstance(dict)]
++        if is_receiver:
++            decorators = {_decorator_name(d) for d in node.decorator_list}
++            if "staticmethod" not in decorators:
++                cls = LocalClass(outer)
++                if "classmethod" in decorators or node.name in ("__new__", "__init_subclass__"):
++                    return [cls]
++                return [LocalInstance(cls)]
++        if frame is None:
++            values = self.dynamic_param_values(binding)
++            if values:
++                return values
+         default = _default_for(node.args, arg)
+         if default is not None:
+             return self.infer_values(default, outer)
+-        is_method = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and outer.kind == CLASS
+-        if is_method and positional and positional[0] is arg:
+-            decorators = {_decorator_name(d) for d in node.decorator_list}
+-            if "staticmethod" in decorators:
+-                return []
+-            cls = LocalClass(outer)
+-            if "classmethod" in decorators or node.name in ("__new__", "__init_subclass__"):
+-                return [cls]
+-            return [LocalInstance(cls)]
+         return []
++
++    def _declared_param_values(self, binding):
++        """Values of a parameter annotated in the stub declaring its function."""
++        if binding.scope.kind != FUNCTION:
++            return []
++        for declaration in self.stubs.function_scopes(binding.scope):
++            for param in function_parameters(declaration.node.args):
++                if param.arg == binding.name and param.annotation is not None:
++                    values = self.annotation_values(param.annotation, declaration.parent)
++                    if values:
++                        return values
++        return []
++
++    # -- dynamic parameter inference ------------------------------------------------
++
++    def dynamic_param_values(self, binding):
++        """Values passed for an unannotated parameter at call sites in the function's own module.
++
++        Only used for functions without any annotation and without a stub.
++        """
++        scope = binding.scope
++        node = scope.node
++        if scope.kind != FUNCTION or scope.module.is_stub or _is_annotated(node):
++            return []
++        if self.stubs.function_scopes(scope):
++            return []
++        key = (id(node), binding.name)
++        if key in self._dynamic_cache:
++            return self._dynamic_cache[key]
++        if key in self._active:
++            return []
++        self._active.add(key)
++        frames, self._frames = self._frames, []
++        try:
++            values = []
++            arg = binding.extra["arg"]
++            for call, call_scope, offset in self.call_sites(scope):
++                args = self.map_arguments(node, call, call_scope, None, False, offset)
++                if binding.name in args:
++                    values += args[binding.name]
++                else:
++                    default = _default_for(node.args, arg)
++                    if default is not None:
++                        values += self.infer_values(default, scope.parent)
++            values = unique(values)
++        finally:
++            self._frames = frames
++            self._active.discard(key)
++        self._dynamic_cache[key] = values
++        return values
++
++    def call_sites(self, scope):
++        """(call, scope of the call, number of implicit leading arguments) for calls of `scope`."""
++        node = scope.node
++        context = scope.module
++        names = {node.name}
++        constructor = node.name == "__init__" and scope.parent.kind == CLASS
++        if constructor:
++            names.add(scope.parent.node.name)
++        sites = []
++        for call in self._calls_named(context, names):
++            call_scope = self.scope_at(context, call)
++            for function in self.infer_values(call.func, call_scope):
++                if isinstance(function, LocalFunction) and function.scope is scope:
++                    sites.append((call, call_scope, 1 if function.bound is not None else 0))
++                    break
++                if constructor and isinstance(function, LocalClass):
++                    init = self.members.find_method(function, "__init__")
++                    if init is not None and init.scope is scope:
++                        sites.append((call, call_scope, 1))
++                        break
++        return sites
++
++    def _calls_named(self, context, names):
++        key = id(context)
++        if key not in self._call_index:
++            index = {}
++            for candidate in ast.walk(context.tree):
++                if isinstance(candidate, ast.Call):
++                    func = candidate.func
++                    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
++                    if name:
++                        index.setdefault(name, []).append(candidate)
++            self._call_index[key] = index
++        index = self._call_index[key]
++        return [call for name in sorted(names) for call in index.get(name, [])]
++
++    @staticmethod
++    def scope_at(context, node):
++        """The innermost scope of `context` containing expression `node`."""
++        line = node.lineno
++        text = context.lines[line - 1] if 0 < line <= len(context.lines) else ""
++        col = len(text.encode("utf-8")[:node.col_offset].decode("utf-8", errors="ignore"))
++        return find_scope(context, line, col, text)
+ 
+     # -- expressions -----------------------------------------------------------
+ 
+@@ -630,6 +872,9 @@
+             return []
+         node = function.node
+         offset = 1 if function.bound is not None else 0
++        declared = self.declared_returns(function, call, scope, pos, strict, offset, awaited)
++        if declared:
++            return declared
+         args = self.map_arguments(node, call, scope, pos, strict, offset)
+         if isinstance(node, ast.AsyncFunctionDef) and not awaited:
+             return [RuntimeInstance(types.CoroutineType)]
+@@ -666,10 +911,15 @@
+         try:
+             if isinstance(node, ast.Lambda):
+                 return self.infer_values(node.body, scope)
++            declared = self.declared_returns(function, awaited=True)
++            if declared:
++                return declared
+             if node.returns is not None:
+                 values = self.annotation_values(node.returns, scope.parent)
+                 if values:
+                     return values
++            if scope.module.is_stub:
++                return []
+             returns = []
+             for child in walk_local(node.body):
+                 if isinstance(child, (ast.Yield, ast.YieldFrom)):
+@@ -822,6 +1072,13 @@
+     return None
+ 
+ 
++def _is_annotated(node):
++    """Whether a function has a return or parameter annotation."""
++    if getattr(node, "returns", None) is not None:
++        return True
++    return any(p.annotation is not None for p in function_parameters(node.args))
++
++
+ def _decorator_name(node):
+     if isinstance(node, ast.Call):
+         node = node.func
+
+### sithlib/listing.py (created)
+--- sithlib/listing.py
++++ sithlib/listing.py
+@@ -0,0 +1,102 @@
++"""The `search` and `names` commands: definitions across a project or within a file."""
++import os
++
++from .definitions import DefinitionFactory
++from .errors import SithError
++from .inference import Inferrer
++from .modules import Importer
++from .project import project_files
++from .scopes import CLASS
++from .source import load_document
++from .values import LocalClass
++
++_SEARCHED_KINDS = ("def", "class")
++
++
++def search_project(query, project=None):
++    """Definitions in the project whose names contain `query` (case-insensitive).
++
++    Exact matches come first, then prefix matches, then other substring matches.
++    """
++    root = os.path.abspath(project or os.getcwd())
++    if not os.path.isdir(root):
++        raise SithError(f"not a directory: {root}")
++    importer = Importer(root)
++    inferrer = Inferrer(importer)
++    factory = DefinitionFactory(inferrer, root)
++    needle = query.lower()
++    ranked = []
++    for path in project_files(root):
++        context = importer.context_for_file(path)
++        if context is None:
++            continue
++        for binding in _searchable_bindings(context.root):
++            name = binding.name.lower()
++            if needle not in name:
++                continue
++            rank = 0 if name == needle else 1 if name.startswith(needle) else 2
++            definition = factory.from_binding(binding)
++            ranked.append(((rank,) + definition.sort_key, definition))
++    results = []
++    seen = set()
++    for _, definition in sorted(ranked, key=lambda pair: pair[0]):
++        entry = definition.to_dict()
++        del entry["docstring"]
++        identity = tuple(entry.items())
++        if identity not in seen:
++            seen.add(identity)
++            results.append(entry)
++    return results
++
++
++def _searchable_bindings(root):
++    """Module-level defs, classes and assignments, plus defs and classes nested in classes."""
++    result = []
++    for bindings in root.bindings.values():
++        result += [b for b in bindings if b.kind in _SEARCHED_KINDS + ("assign",)]
++    classes = [root.module.scope_of(b.node) for b in result if b.kind == "class"]
++    while classes:
++        scope = classes.pop()
++        if scope is None or scope.kind != CLASS:
++            continue
++        for bindings in scope.bindings.values():
++            for binding in bindings:
++                if binding.kind in _SEARCHED_KINDS:
++                    result.append(binding)
++                    if binding.kind == "class":
++                        classes.append(scope.module.scope_of(binding.node))
++    return result
++
++
++def list_names(path, all_scopes=False, project=None):
++    """Definitions made in the file at `path`, module-level only unless `all_scopes`."""
++    document = load_document(path)
++    root = os.path.abspath(project or document.directory)
++    importer = Importer(root)
++    context = importer.context_for_file(document.path)
++    if context is None:
++        raise SithError(f"cannot analyze {path}")
++    inferrer = Inferrer(importer)
++    factory = DefinitionFactory(inferrer, root)
++    scopes = [context.root]
++    if all_scopes:
++        index = 0
++        while index < len(scopes):
++            scopes += scopes[index].children
++            index += 1
++    bindings = []
++    for scope in scopes:
++        for found in scope.bindings.values():
++            bindings += found
++        if all_scopes and scope.kind == CLASS:
++            for found in inferrer.members.instance_attribute_bindings(LocalClass(scope)).values():
++                bindings += found
++    entries = {}
++    for binding in bindings:
++        definition = factory.from_binding(binding)
++        key = (definition.line, definition.column)
++        if key not in entries:
++            entry = definition.to_dict()
++            entry["is_definition"] = True
++            entries[key] = entry
++    return [entries[key] for key in sorted(entries)]
+
+### sithlib/members.py (modified)
+--- sithlib/members.py
++++ sithlib/members.py
+@@ -61,9 +61,13 @@
+         return {}
+ 
+     def namespace(self, value):
+-        """The names a module binds itself (no submodules that it does not import)."""
++        """The names a module binds itself (no submodules that it does not import).
++
++        Names only declared by the module's stub are included.
++        """
+         if isinstance(value, LocalModule):
+-            return self.inferrer.scope_entries(value.context.root)
++            root = value.context.root
++            return self._with_stub_entries(self.inferrer.scope_entries(root), root)
+         if isinstance(value, RuntimeModule):
+             return runtime_entries(value.obj)
+         return self.all(value)
+@@ -107,6 +111,9 @@
+             root = value.context.root
+             if inferrer.binds(root, name):
+                 return inferrer.scope_values(root, name)
++            stub = inferrer.stubs.stub_scope(root)
++            if stub is not None and inferrer.binds(stub, name):
++                return unique(inferrer.from_stub(inferrer.scope_values(stub, name)))
+             submodule = importer.local_submodule(value, name)
+             return [submodule] if submodule is not None else []
+         if isinstance(value, LocalClass):
+@@ -116,6 +123,9 @@
+                     for member in inferrer.scope_values(cls.scope, name):
+                         values += self._bind_member(member, cls, value, None)
+                     return unique(values)
++            stubbed = self._stub_member(value, name, None)
++            if stubbed is not None:
++                return stubbed
+             return self._runtime_base_member(value, name)
+         if isinstance(value, LocalInstance):
+             for cls in self.mro(value.cls):
+@@ -129,6 +139,9 @@
+                     for member in inferrer.scope_values(cls.scope, name):
+                         values += self._bind_member(member, cls, value.cls, value)
+                 return unique(values)
++            stubbed = self._stub_member(value.cls, name, value)
++            if stubbed is not None:
++                return stubbed
+             return self._runtime_base_member(value.cls, name)
+         entry = self.namespace(value).get(name)
+         if entry is not None:
+@@ -140,12 +153,18 @@
+         return []
+ 
+     def member_definitions(self, value, name):
+-        """Where attribute `name` of `value` is defined: bindings, or values for runtime objects."""
++        """Where attribute `name` of `value` is defined: bindings, or values for runtime objects.
++
++        Source definitions win; stub definitions are used for names only a stub declares.
++        """
+         inferrer = self.inferrer
+         if isinstance(value, LocalModule):
+             root = value.context.root
+             if inferrer.binds(root, name):
+                 return [fact.binding for fact in inferrer.scope_facts(root, name)]
++            stub = inferrer.stubs.stub_scope(root)
++            if stub is not None and inferrer.binds(stub, name):
++                return [fact.binding for fact in inferrer.scope_facts(stub, name)]
+             return self.member_values(value, name)
+         if isinstance(value, (LocalClass, LocalInstance)):
+             cls_value = value if isinstance(value, LocalClass) else value.cls
+@@ -158,6 +177,10 @@
+                               for fact in inferrer.scope_facts(cls.scope, name)]
+                 if found:
+                     return found
++            for cls in self.mro(cls_value):
++                stub = inferrer.stubs.stub_scope(cls.scope)
++                if stub is not None and name in stub.bindings:
++                    return [fact.binding for fact in inferrer.scope_facts(stub, name)]
+         return self.member_values(value, name)
+ 
+     def instance_attribute_values(self, binding, instance):
+@@ -193,6 +216,33 @@
+             return self.inferrer.return_values(LocalFunction(member.scope, instance))
+         return [LocalFunction(member.scope, instance)]
+ 
++    def _stub_member(self, cls, name, instance):
++        """Values of a member only declared by the stub of a class in the MRO of `cls` (or None)."""
++        inferrer = self.inferrer
++        for current in self.mro(cls):
++            stub = inferrer.stubs.stub_scope(current.scope)
++            if stub is None or name not in stub.bindings:
++                continue
++            owner = LocalClass(stub)
++            values = []
++            for member in inferrer.scope_values(stub, name):
++                values += self._bind_member(member, owner, cls, instance)
++            return unique(inferrer.from_stub(values))
++        return None
++
++    def _with_stub_entries(self, entries, scope):
++        """`entries` plus the names declared only in the stub of `scope` (stub imports excluded)."""
++        stub = self.inferrer.stubs.stub_scope(scope)
++        if stub is None:
++            return entries
++        entries = dict(entries)
++        for name, entry in self.inferrer.scope_entries(stub).items():
++            binding = getattr(entry, "binding", None)
++            if binding is None or binding.kind in ("import", "importfrom"):
++                continue
++            entries.setdefault(name, entry)
++        return entries
++
+     def find_method(self, cls, name):
+         """The (unbound) local function `name` defined in the MRO of `cls`, or None."""
+         for current in self.mro(cls):
+@@ -243,14 +293,16 @@
+     def class_members(self, cls):
+         members = {}
+         for current in reversed(self.mro(cls)):
+-            members.update(self.inferrer.scope_entries(current.scope))
++            members.update(self._with_stub_entries(self.inferrer.scope_entries(current.scope),
++                                                   current.scope))
+         return members
+ 
+     def instance_members(self, cls):
+         mro = self.mro(cls)
+         members = {}
+         for current in reversed(mro):
+-            members.update(self.inferrer.scope_entries(current.scope))
++            members.update(self._with_stub_entries(self.inferrer.scope_entries(current.scope),
++                                                   current.scope))
+         for current in reversed(mro):
+             for name, bindings in self.instance_attribute_bindings(current).items():
+                 members[name] = BindingEntry(bindings[0], self.inferrer)
+
+### sithlib/modules.py (modified)
+--- sithlib/modules.py
++++ sithlib/modules.py
+@@ -16,6 +16,8 @@
+ from .values import LocalModule, RuntimeModule
+ 
+ STDLIB_NAMES = frozenset(sys.stdlib_module_names) | frozenset(sys.builtin_module_names)
++# Directory (relative to the project root) holding stub files for project or external modules.
++STUB_DIRECTORY = "stubs"
+ 
+ 
+ class ModuleContext:
+@@ -46,7 +48,12 @@
+ 
+     @property
+     def is_package(self):
+-        return self.is_namespace or os.path.basename(self.path) == "__init__.py"
++        return self.is_namespace or os.path.basename(self.path) in ("__init__.py", "__init__.pyi")
++
++    @property
++    def is_stub(self):
++        """True for a `.pyi` type stub."""
++        return bool(self.path) and self.path.endswith(".pyi")
+ 
+     @property
+     def location(self):
+@@ -69,18 +76,27 @@
+ 
+     def __init__(self, project_dir):
+         self.project_dir = os.path.abspath(project_dir)
++        self.stub_dir = os.path.join(self.project_dir, STUB_DIRECTORY)
+         self._contexts = {}
+         self._namespaces = {}
+         self._runtime = {}
++        self._stubs = {}
++        self._sources = {}
+ 
+     def register(self, context):
+         if context.path:
+             self._contexts[context.path] = context
+ 
+     def module_name(self, location):
+-        """Dotted name of the module at `location` (file or directory), relative to the root."""
++        """Dotted name of the module at `location` (file or directory), relative to the root.
++
++        Stubs in the project's stub directory are named relative to that directory.
++        """
++        base = self.project_dir
++        if _within(location, self.stub_dir) and (location.endswith(".pyi") or os.path.isdir(location)):
++            base = self.stub_dir
+         try:
+-            relative = os.path.relpath(os.path.abspath(location), self.project_dir)
++            relative = os.path.relpath(os.path.abspath(location), base)
+         except ValueError:  # another drive (Windows)
+             relative = os.pardir
+         if relative == os.curdir:
+@@ -148,6 +164,9 @@
+             module = self._import_runtime(name)
+             if module is not None:
+                 return module
++        found = _locate(self.stub_dir, name, namespace=False)
++        if found:
++            return self._local(found)
+         return self._local(_locate(self.project_dir, name, namespace=True))
+ 
+     def submodule(self, module, name):
+@@ -178,9 +197,64 @@
+         return self.import_absolute(dotted)
+ 
+     def within_project(self, directory):
+-        directory = os.path.abspath(directory)
+-        root = self.project_dir
+-        return directory == root or directory.startswith(root.rstrip(os.sep) + os.sep)
++        return _within(directory, self.project_dir)
++
++    # -- stubs ----------------------------------------------------------------------
++
++    def stub_for(self, context):
++        """The parsed `.pyi` stub giving type information for the module `context`, or None.
++
++        An adjacent `foo.pyi` wins over `stubs/foo.pyi` and `stubs/foo/__init__.pyi`.
++        """
++        if context is None or not context.path or context.is_stub:
++            return None
++        if context.path not in self._stubs:
++            self._stubs[context.path] = None
++            path = self._stub_path(context.path)
++            stub = self.context_for_file(path) if path else None
++            if stub is not None:
++                self._sources.setdefault(stub.path, context)
++            self._stubs[context.path] = stub
++        return self._stubs[context.path]
++
++    def _stub_path(self, path):
++        adjacent = os.path.splitext(path)[0] + ".pyi"
++        if os.path.isfile(adjacent):
++            return adjacent
++        name = self.module_name(path)
++        if not name:
++            return None
++        base = os.path.join(self.stub_dir, *name.split("."))
++        for candidate in (base + ".pyi", os.path.join(base, "__init__.pyi")):
++            if os.path.isfile(candidate):
++                return candidate
++        return None
++
++    def source_for(self, stub):
++        """The `.py` module a stub describes, or None for stub-only modules."""
++        if stub is None or not stub.is_stub:
++            return None
++        if stub.path not in self._sources:
++            self._sources[stub.path] = None
++            path = os.path.splitext(stub.path)[0] + ".py"
++            if not os.path.isfile(path):
++                path = None
++                if _within(stub.path, self.stub_dir):
++                    path = self._source_path(self.module_name(stub.path))
++            source = self.context_for_file(path) if path else None
++            if source is not None and self.stub_for(source) is not stub:
++                source = None
++            self._sources[stub.path] = source
++        return self._sources[stub.path]
++
++    def _source_path(self, dotted):
++        if not dotted:
++            return None
++        base = os.path.join(self.project_dir, *dotted.split("."))
++        for candidate in (os.path.join(base, "__init__.py"), base + ".py"):
++            if os.path.isfile(candidate):
++                return candidate
++        return None
+ 
+     def package_at(self, directory):
+         """The package whose directory is `directory` (regular or namespace)."""
+@@ -209,7 +283,7 @@
+ 
+     def top_level_names(self):
+         """Names of every importable top-level module."""
+-        return set(_module_names(self.project_dir)) | available_stdlib()
++        return set(_module_names(self.project_dir)) | set(_module_names(self.stub_dir)) | available_stdlib()
+ 
+     def submodule_names(self, module):
+         """Names of the submodules of a package value."""
+@@ -245,6 +319,12 @@
+ _STDLIB_AVAILABLE = None
+ 
+ 
++def _within(path, directory):
++    path = os.path.abspath(path)
++    directory = os.path.abspath(directory)
++    return path == directory or path.startswith(directory.rstrip(os.sep) + os.sep)
++
++
+ def available_stdlib():
+     """Top-level standard library modules that exist in this runtime."""
+     global _STDLIB_AVAILABLE
+@@ -265,8 +345,8 @@
+ def _locate(directory, name, namespace):
+     """("file", path) or ("namespace", directory) for module `name` inside `directory`.
+ 
+-    Regular packages win over modules; namespace packages are only
+-    considered when `namespace` is true.
++    Regular packages win over modules, and source modules over stub-only
++    modules; namespace packages are only considered when `namespace` is true.
+     """
+     if not name or not os.path.isdir(directory):
+         return None
+@@ -278,8 +358,9 @@
+     init = _package_init(candidate)
+     if init:
+         return "file", init
+-    if os.path.isfile(candidate + ".py"):
+-        return "file", candidate + ".py"
++    for suffix in (".py", ".pyi"):
++        if os.path.isfile(candidate + suffix):
++            return "file", candidate + suffix
+     return None
+ 
+ 
+@@ -292,8 +373,8 @@
+     names = []
+     for entry in entries:
+         path = os.path.join(directory, entry)
+-        if entry.endswith(".py") and os.path.isfile(path):
+-            stem = entry[:-3]
++        if entry.endswith((".py", ".pyi")) and os.path.isfile(path):
++            stem = os.path.splitext(entry)[0]
+             if stem.isidentifier() and stem != "__init__":
+                 names.append(stem)
+         elif os.path.isdir(path) and entry.isidentifier() and entry != "__pycache__":
+@@ -302,5 +383,8 @@
+ 
+ 
+ def _package_init(directory):
+-    init = os.path.join(directory, "__init__.py")
+-    return init if os.path.isfile(init) else None
++    for name in ("__init__.py", "__init__.pyi"):
++        init = os.path.join(directory, name)
++        if os.path.isfile(init):
++            return init
++    return None
+
+### sithlib/navigation.py (modified)
+--- sithlib/navigation.py
++++ sithlib/navigation.py
+@@ -61,17 +61,27 @@
+ 
+ 
+ class Navigator:
+-    def __init__(self, context, inferrer, factory, line, col):
++    def __init__(self, context, inferrer, factory, line=1, col=0):
+         self.context = context
+         self.inferrer = inferrer
+         self.factory = factory
++        self.parents = {}
++        # Nodes starting or ending on each line, in `ast.walk` order.
++        self.nodes_by_line = {}
++        for parent in ast.walk(context.tree):
++            for number in {getattr(parent, "lineno", None), getattr(parent, "end_lineno", None)}:
++                if number is not None:
++                    self.nodes_by_line.setdefault(number, []).append(parent)
++            for child in ast.iter_child_nodes(parent):
++                self.parents[id(child)] = parent
++        self.at(line, col)
++
++    def at(self, line, col):
++        """Move the cursor to 1-based `line`, 0-based character `col`."""
+         self.line = line
+         self.col = col
+-        self.text = context.lines[line - 1] if line <= len(context.lines) else ""
+-        self.parents = {}
+-        for parent in ast.walk(context.tree):
+-            for child in ast.iter_child_nodes(parent):
+-                self.parents[id(child)] = parent
++        self.text = self.context.lines[line - 1] if 0 < line <= len(self.context.lines) else ""
++        return self
+ 
+     # -- locating the identifier under the cursor ---------------------------------
+ 
+@@ -87,9 +97,13 @@
+     def _char(self, byte_col):
+         return char_column(self.context, self.line, byte_col)
+ 
++    def occurrences(self):
++        """Every identifier occurrence on the cursor line."""
++        return list(self._occurrences())
++
+     def _occurrences(self):
+         line = self.line
+-        for node in ast.walk(self.context.tree):
++        for node in self.nodes_by_line.get(line, []):
+             if isinstance(node, ast.Name):
+                 if node.lineno == line == node.end_lineno:
+                     yield Occurrence("name", node.id, self._char(node.col_offset),
+@@ -263,8 +277,12 @@
+         name = binding.extra.get("attribute", binding.name)
+         root = base.context.root
+         if not self.inferrer.binds(root, name):
+-            submodule = importer.local_submodule(base, name)
+-            return [submodule] if submodule is not None else []
++            stub = self.inferrer.stubs.stub_scope(root)
++            if stub is not None and self.inferrer.binds(stub, name):
++                root = stub
++            else:
++                submodule = importer.local_submodule(base, name)
++                return [submodule] if submodule is not None else []
+         result = []
+         for fact in self.inferrer.scope_facts(root, name):
+             target = fact.binding
+
+### sithlib/project.py (created)
+--- sithlib/project.py
++++ sithlib/project.py
+@@ -0,0 +1,20 @@
++"""Enumerating the Python source files of a project."""
++import os
++
++_SKIPPED_DIRECTORIES = {"__pycache__", "node_modules", "site-packages"}
++
++
++def project_files(root):
++    """Absolute paths of the `.py` files under `root`, in a stable order.
++
++    Hidden directories, caches and virtual environments are skipped.
++    """
++    root = os.path.abspath(root)
++    for directory, subdirectories, files in os.walk(root):
++        subdirectories[:] = sorted(
++            name for name in subdirectories
++            if not name.startswith(".") and name not in _SKIPPED_DIRECTORIES
++            and not os.path.isfile(os.path.join(directory, name, "pyvenv.cfg")))
++        for name in sorted(files):
++            if name.endswith(".py"):
++                yield os.path.join(directory, name)
+
+### sithlib/references.py (created)
+--- sithlib/references.py
++++ sithlib/references.py
+@@ -0,0 +1,166 @@
++"""The `references` command: every occurrence of the symbol under the cursor.
++
++Occurrences are matched by symbol identity, not spelling: a symbol is the
++scope a name is bound in plus the name (the owning class for attributes), with
++imports followed to what they import, a module, or a runtime object.
++"""
++import ast
++import os
++import re
++from dataclasses import asdict, dataclass
++
++from .definitions import DefinitionFactory
++from .errors import SithError
++from .inference import BuiltinBinding, Inferrer
++from .modules import Importer
++from .navigation import Navigator
++from .project import project_files
++from .scopes import Binding
++from .source import load_document, read_text
++from .values import LocalClass, LocalFunction, LocalInstance, LocalModule
++
++FILE = "file"
++PROJECT = "project"
++_DEFINING_KINDS = ("def", "param", "bound")
++
++
++@dataclass
++class Reference:
++    module_path: str
++    line: int
++    column: int
++    is_definition: bool
++
++    def to_dict(self):
++        return asdict(self)
++
++
++def find_references(path, line, col, scope=FILE, project=None):
++    """References to the name at the cursor, in `path` or (`scope` "project") the whole project."""
++    document = load_document(path)
++    document.check_position(line, col)
++    root = os.path.abspath(project or document.directory)
++    importer = Importer(root)
++    context = importer.context_for_file(document.path)
++    if context is None:
++        raise SithError(f"cannot analyze {path}")
++    inferrer = Inferrer(importer)
++    factory = DefinitionFactory(inferrer, root)
++    navigator = Navigator(context, inferrer, factory, line, col)
++    occurrence = navigator.occurrence()
++    if occurrence is None:
++        raise SithError(f"no name at line {line}, column {col}")
++    finder = _Finder(inferrer)
++    target = finder.symbols(navigator, line, occurrence)
++    name = occurrence.name
++    navigators = [navigator]
++    if scope == PROJECT:
++        word = _word(name)
++        for file_path in project_files(root):
++            if os.path.abspath(file_path) == context.path:
++                continue
++            try:
++                if not word.search(read_text(file_path)):
++                    continue
++            except SithError:
++                continue
++            other = importer.context_for_file(file_path)
++            if other is not None:
++                navigators.append(Navigator(other, inferrer, factory))
++    found = {}
++    for current in navigators:
++        module_path = factory.relative_path(current.context.path)
++        for number, occurrence_found in _named_occurrences(current, name):
++            if target:
++                matches = bool(finder.symbols(current, number, occurrence_found) & target)
++            else:
++                # Unresolved name: match the other unresolved uses in the same file.
++                matches = current is navigator and not finder.symbols(current, number,
++                                                                       occurrence_found)
++            if matches:
++                key = (module_path, number, occurrence_found.start)
++                defining = _is_definition(occurrence_found)
++                found[key] = found.get(key, False) or defining
++    if occurrence.kind == "text":  # an identifier missing from the (repaired) syntax tree
++        found.setdefault((factory.relative_path(context.path), line, occurrence.start), False)
++    return [Reference(path_, number, column, defining)
++            for (path_, number, column), defining in sorted(found.items())]
++
++
++def _word(name):
++    return re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)")
++
++
++def _named_occurrences(navigator, name):
++    """(line, occurrence) for every occurrence of `name` in the navigator's module."""
++    word = _word(name)
++    for number, text in enumerate(navigator.context.lines, start=1):
++        if not word.search(text):
++            continue
++        navigator.at(number, 0)
++        starts = set()
++        for occurrence in navigator.occurrences():
++            if occurrence.name == name and occurrence.start not in starts:
++                starts.add(occurrence.start)
++                yield number, occurrence
++
++
++def _is_definition(occurrence):
++    if occurrence.kind in _DEFINING_KINDS:
++        return True
++    if occurrence.kind in ("name", "attr"):
++        return isinstance(getattr(occurrence.node, "ctx", None), ast.Store)
++    return False
++
++
++class _Finder:
++    def __init__(self, inferrer):
++        self.inferrer = inferrer
++
++    def symbols(self, navigator, line, occurrence):
++        """The set of symbols the occurrence at `line` refers to."""
++        navigator.at(line, occurrence.start)
++        try:
++            sources = navigator.goto(occurrence)
++        except Exception:
++            return set()
++        return self._symbols(navigator, sources)
++
++    def _symbols(self, navigator, sources):
++        result = set()
++        for source in sources:
++            if source is None:
++                continue
++            if isinstance(source, BuiltinBinding):
++                result.add(("builtin", source.name))
++            elif isinstance(source, Binding):
++                if source.kind in ("import", "importfrom"):
++                    result |= self._import_symbols(navigator, source)
++                else:
++                    owner = source.extra.get("owner")
++                    result.add(("scope", id(owner or source.scope), source.name))
++            else:
++                result.add(_value_symbol(source))
++        return result
++
++    def _import_symbols(self, navigator, binding):
++        followed = navigator._follow(binding, set())
++        if followed:
++            return self._symbols(navigator, followed)
++        values = [v for v in self.inferrer.binding_values(binding) if v is not None]
++        if values:
++            return {_value_symbol(v) for v in values}
++        return {("scope", id(binding.scope), binding.name)}
++
++
++def _value_symbol(value):
++    if isinstance(value, LocalModule):
++        return ("module", value.context.location)
++    if isinstance(value, (LocalClass, LocalFunction)):
++        node = value.scope.node
++        if isinstance(node, ast.Lambda):
++            return ("node", id(node))
++        return ("scope", id(value.scope.parent), node.name)
++    if isinstance(value, LocalInstance):
++        return ("instance", id(value.cls.scope))
++    return ("runtime",) + value.key
+
+### sithlib/signatures.py (created)
+--- sithlib/signatures.py
++++ sithlib/signatures.py
+@@ -0,0 +1,444 @@
++"""The `signatures` command: the signature of the call surrounding the cursor."""
++import ast
++import inspect
++import keyword
++import os
++import re
++from dataclasses import asdict, dataclass, field
++
++from . import context as cursor_context
++from .definitions import DefinitionFactory
++from .inference import Inferrer
++from .locate import find_scope
++from .modules import ModuleContext, Importer
++from .parsing import _starts_statement, parse_tolerant
++from .scopes import FUNCTION
++from .source import load_document
++from .stubs import decorator_names
++from .values import (
++    LocalClass,
++    LocalFunction,
++    LocalInstance,
++    RuntimeClass,
++    RuntimeFunction,
++)
++
++POSITIONAL_ONLY = "positional-only"
++POSITIONAL = "positional"
++VAR_POSITIONAL = "var-positional"
++KEYWORD_ONLY = "keyword-only"
++VAR_KEYWORD = "var-keyword"
++
++_RUNTIME_KINDS = {
++    inspect.Parameter.POSITIONAL_ONLY: POSITIONAL_ONLY,
++    inspect.Parameter.POSITIONAL_OR_KEYWORD: POSITIONAL,
++    inspect.Parameter.VAR_POSITIONAL: VAR_POSITIONAL,
++    inspect.Parameter.KEYWORD_ONLY: KEYWORD_ONLY,
++    inspect.Parameter.VAR_KEYWORD: VAR_KEYWORD,
++}
++_KEYWORD_ARGUMENT = re.compile(r"\s*([^\W\d]\w*)\s*=(?!=)")
++
++
++@dataclass
++class Param:
++    name: str
++    kind: str
++    text: str
++
++
++@dataclass
++class Signature:
++    name: str
++    params: list
++    index: object
++    description: str
++    docstring: str
++    # Sort key: (module path, line); not part of the output.
++    location: tuple = field(default=("", 0), repr=False)
++
++    def to_dict(self):
++        result = asdict(self)
++        del result["location"]
++        return result
++
++
++@dataclass
++class Call:
++    """A call whose argument list contains the cursor."""
++
++    callee: str
++    position: tuple  # (line, byte column) of the opening parenthesis
++    arguments: list  # source text of each argument, the last one up to the cursor
++
++
++def signatures_at(path, line, col, project=None):
++    """Signatures of the call around the cursor at 1-based `line`, 0-based `col` of `path`."""
++    document = load_document(path)
++    document.check_position(line, col)
++    call = find_call(document.text_before(line, col))
++    if call is None:
++        return []
++    try:
++        expression = ast.parse(call.callee, mode="eval").body
++    except (SyntaxError, ValueError):
++        return []
++    root = os.path.abspath(project or document.directory)
++    importer = Importer(root)
++    tree = parse_tolerant(document.text, cursor=(line, col))
++    context = ModuleContext(document.path, "__main__", tree, document.text)
++    importer.register(context)
++    inferrer = Inferrer(importer)
++    scope = find_scope(context, line, col, document.lines[line - 1])
++    builder = SignatureBuilder(inferrer, DefinitionFactory(inferrer, root))
++    signatures = []
++    seen = set()
++    for value in inferrer.infer_values(expression, scope, pos=call.position):
++        for signature, params in builder.signatures(value):
++            identity = (signature.location, signature.name, tuple(signature.params))
++            if identity in seen:
++                continue
++            seen.add(identity)
++            signature.index = parameter_index(params, call.arguments)
++            signatures.append(signature)
++    return sorted(signatures, key=lambda s: s.location)
++
++
++# -- locating the call -----------------------------------------------------------------
++
++
++def find_call(text):
++    """The innermost call whose parentheses enclose the end of `text`, or None."""
++    stack = []  # [bracket, offset, top-level comma offsets]
++    lines = text.split("\n")
++    offset = 0
++    quote = None
++    for line_text in lines:
++        if stack and quote is None and _starts_statement(line_text, _line_at(text, stack[0][1])):
++            stack.clear()
++        i = 0
++        while i < len(line_text):
++            char = line_text[i]
++            if quote is not None:
++                if char == "\\":
++                    i += 2
++                    continue
++                if line_text.startswith(quote, i):
++                    i += len(quote)
++                    quote = None
++                    continue
++                i += 1
++                continue
++            if char == "#":
++                break
++            if char in "\"'":
++                quote = char * 3 if line_text.startswith(char * 3, i) else char
++                i += len(quote)
++                continue
++            if char in "([{":
++                stack.append([char, offset + i, []])
++            elif char in ")]}":
++                if stack and "([{"[")]}".index(char)] == stack[-1][0]:
++                    stack.pop()
++            elif char == "," and stack:
++                stack[-1][2].append(offset + i)
++            i += 1
++        if quote is not None and len(quote) == 1:
++            quote = None  # single-quoted strings end with their line
++        offset += len(line_text) + 1
++    for bracket, start, commas in reversed(stack):
++        if bracket != "(":
++            continue
++        callee = _callee(text[:start])
++        if callee is None:
++            continue
++        bounds = [start] + commas + [len(text)]
++        arguments = [text[bounds[i] + 1:bounds[i + 1]] for i in range(len(bounds) - 1)]
++        line = text.count("\n", 0, start) + 1
++        line_start = text.rfind("\n", 0, start) + 1
++        column = len(text[line_start:start].encode("utf-8"))
++        return Call(callee, (line, column), arguments)
++    return None
++
++
++def _line_at(text, offset):
++    start = text.rfind("\n", 0, offset) + 1
++    end = text.find("\n", offset)
++    return text[start:] if end < 0 else text[start:end]
++
++
++def _callee(before):
++    """The called expression ending at the end of `before`, or None if `(` does not start a call."""
++    stripped = before.rstrip(" \t")
++    if not stripped:
++        return None
++    last = stripped[-1]
++    if cursor_context.is_identifier_char(last):
++        start = len(stripped)
++        while start > 0 and cursor_context.is_identifier_char(stripped[start - 1]):
++            start -= 1
++        word = stripped[start:]
++        if word[0].isdigit() or keyword.iskeyword(word):
++            return None
++        if re.search(r"(?<![\w.])(?:def|class)\s+$", stripped[:start]):
++            return None
++    elif last not in ")]":
++        return None
++    receiver = cursor_context.extract_receiver(stripped)
++    return receiver or None
++
++
++# -- parameter index ------------------------------------------------------------------
++
++
++def _classify(argument):
++    text = argument.strip()
++    if text.startswith("**"):
++        return "unpack-keywords", None
++    if text.startswith("*"):
++        return "unpack", None
++    match = _KEYWORD_ARGUMENT.match(text)
++    if match:
++        return "keyword", match.group(1)
++    return "positional", text
++
++
++def parameter_index(params, arguments):
++    """Index of the parameter the last of `arguments` binds to, following Python's rules."""
++    *previous, current = [_classify(a) for a in arguments]
++    positional_count = 0
++    used = set()
++    keywords_seen = False
++    unpacked = False
++    for kind, name in previous:
++        if kind == "positional":
++            positional_count += 1
++        elif kind == "unpack":
++            unpacked = True
++        elif kind == "keyword":
++            used.add(name)
++            keywords_seen = True
++        else:
++            keywords_seen = True
++    positional = [i for i, p in enumerate(params) if p.kind in (POSITIONAL_ONLY, POSITIONAL)]
++    var_positional = next((i for i, p in enumerate(params) if p.kind == VAR_POSITIONAL), None)
++    var_keyword = next((i for i, p in enumerate(params) if p.kind == VAR_KEYWORD), None)
++    kind, name = current
++
++    def keyword_index(match):
++        filled = {params[i].name for i in positional[:positional_count]}
++        for index, param in enumerate(params):
++            if param.kind in (POSITIONAL, KEYWORD_ONLY) and match(param.name) \
++                    and param.name not in used and param.name not in filled:
++                return index
++        return var_keyword
++
++    if kind == "keyword":
++        for index, param in enumerate(params):
++            if param.name == name and param.kind in (POSITIONAL, KEYWORD_ONLY):
++                return index
++        return var_keyword
++    if kind == "unpack-keywords":
++        return var_keyword
++    if kind == "unpack":
++        if var_positional is not None:
++            return var_positional
++        return positional[positional_count] if positional_count < len(positional) else None
++    if keywords_seen:
++        # A positional argument cannot follow keywords: a keyword is being typed.
++        if name and not name.isidentifier():
++            return None
++        return keyword_index(lambda candidate: candidate.startswith(name))
++    if unpacked:
++        return var_positional
++    if positional_count < len(positional):
++        return positional[positional_count]
++    return var_positional
++
++
++# -- building signatures -------------------------------------------------------------
++
++
++class SignatureBuilder:
++    def __init__(self, inferrer, factory):
++        self.inferrer = inferrer
++        self.factory = factory
++
++    def signatures(self, value):
++        """[(Signature, [Param])] for calling `value`."""
++        members = self.inferrer.members
++        if isinstance(value, LocalFunction):
++            return self._function(value.scope, skip_first=value.bound is not None)
++        if isinstance(value, LocalClass):
++            return self._class(value)
++        if isinstance(value, LocalInstance):
++            method = members.find_method(value.cls, "__call__")
++            return self._function(method.scope, skip_first=True) if method else []
++        if isinstance(value, (RuntimeFunction, RuntimeClass)):
++            return self._runtime(value.obj)
++        return []
++
++    def _function(self, scope, skip_first, name=None, docstring=None):
++        """Signatures of local function `scope` (one per declaration, e.g. overloads)."""
++        results = []
++        fallback_doc = ast.get_docstring(scope.node) if scope.kind == FUNCTION else None
++        for declaration in self.inferrer.declarations(scope):
++            node = declaration.node
++            context = declaration.module
++            params = self._ast_params(context, node.args)
++            if skip_first and "staticmethod" not in decorator_names(node):
++                for index, param in enumerate(params):
++                    if param.kind in (POSITIONAL_ONLY, POSITIONAL):
++                        del params[index]
++                        break
++            label = name or getattr(node, "name", "<lambda>")
++            returns = ""
++            if name is None and getattr(node, "returns", None) is not None:
++                returns = " -> " + self.factory.source(context, node.returns)
++            if docstring is not None:
++                doc = docstring
++            else:
++                doc = (ast.get_docstring(node) if not isinstance(node, ast.Lambda) else None)
++                doc = doc or fallback_doc or ""
++            results.append((self._signature(label, params, returns, doc, context, node), params))
++        return results
++
++    def _class(self, cls):
++        inferrer = self.inferrer
++        members = inferrer.members
++        docstring = ast.get_docstring(cls.node) or ""
++        init = members.find_method(cls, "__init__")
++        if init is None:
++            init = self._stub_init(cls)
++        if init is not None:
++            doc = docstring or ast.get_docstring(init.node) or ""
++            return self._function(init.scope, True, name=cls.name, docstring=doc)
++        mro = members.mro(cls)
++        context = cls.scope.module
++        if any("dataclass" in decorator_names(c.node) for c in mro):
++            params = []
++            for current in reversed(mro):
++                params += self._fields(current)
++            return [(self._signature(cls.name, params, "", docstring, context, cls.node), params)]
++        for current in mro:
++            for base in members.runtime_bases(current):
++                if base.obj is not object:
++                    found = self._runtime(base.obj, name=cls.name, docstring=docstring,
++                                          location=self._location(context, cls.node))
++                    if found:
++                        return found
++        return [(self._signature(cls.name, [], "", docstring, context, cls.node), [])]
++
++    def _stub_init(self, cls):
++        """`__init__` declared by the stub of a class in the MRO of `cls` lacking one in source."""
++        for current in self.inferrer.members.mro(cls):
++            stub = self.inferrer.stubs.stub_scope(current.scope)
++            if stub is None:
++                continue
++            for binding in reversed(stub.bindings.get("__init__", [])):
++                if binding.kind == "def":
++                    scope = stub.module.scope_of(binding.node)
++                    if scope is not None:
++                        return LocalFunction(scope)
++        return None
++
++    def _fields(self, cls):
++        """Parameters generated for the annotated fields of a dataclass."""
++        context = cls.scope.module
++        params = []
++        for node in cls.node.body:
++            if not isinstance(node, ast.AnnAssign) or not isinstance(node.target, ast.Name):
++                continue
++            annotation = self.factory.source(context, node.annotation)
++            if annotation.startswith(("ClassVar", "typing.ClassVar")):
++                continue
++            text = f"{node.target.id}: {annotation}"
++            if node.value is not None:
++                text += "=" + self.factory.source(context, node.value)
++            params.append(Param(node.target.id, POSITIONAL, text))
++        return params
++
++    def _ast_params(self, context, arguments):
++        source = self.factory.source
++
++        def render(arg, default=None):
++            text = arg.arg
++            if arg.annotation is not None:
++                text += ": " + source(context, arg.annotation)
++            if default is not None:
++                text += "=" + source(context, default)
++            return text
++
++        params = []
++        positional = arguments.posonlyargs + arguments.args
++        defaults = [None] * (len(positional) - len(arguments.defaults)) + list(arguments.defaults)
++        for index, arg in enumerate(positional):
++            kind = POSITIONAL_ONLY if index < len(arguments.posonlyargs) else POSITIONAL
++            params.append(Param(arg.arg, kind, render(arg, defaults[index])))
++        if arguments.vararg is not None:
++            params.append(Param(arguments.vararg.arg, VAR_POSITIONAL, "*" + render(arguments.vararg)))
++        for arg, default in zip(arguments.kwonlyargs, arguments.kw_defaults):
++            params.append(Param(arg.arg, KEYWORD_ONLY, render(arg, default)))
++        if arguments.kwarg is not None:
++            params.append(Param(arguments.kwarg.arg, VAR_KEYWORD, "**" + render(arguments.kwarg)))
++        return params
++
++    def _location(self, context, node):
++        return (self.factory.relative_path(context.path), getattr(node, "lineno", 0))
++
++    def _signature(self, name, params, returns, docstring, context, node):
++        description = f"def {name}({', '.join(p.text for p in params)}){returns}"
++        return Signature(name, [p.text for p in params], None, description, docstring,
++                         self._location(context, node))
++
++    def _runtime(self, obj, name=None, docstring=None, location=None):
++        try:
++            signature = inspect.signature(obj)
++        except (TypeError, ValueError):
++            return []
++        params = []
++        for parameter in signature.parameters.values():
++            text = parameter.name
++            if parameter.annotation is not parameter.empty:
++                text += ": " + _format_annotation(parameter.annotation)
++            if parameter.default is not parameter.empty:
++                text += "=" + repr(parameter.default)
++            kind = _RUNTIME_KINDS[parameter.kind]
++            if kind == VAR_POSITIONAL:
++                text = "*" + text
++            elif kind == VAR_KEYWORD:
++                text = "**" + text
++            params.append(Param(parameter.name, kind, text))
++        returns = ""
++        if name is None and signature.return_annotation is not signature.empty:
++            returns = " -> " + _format_annotation(signature.return_annotation)
++        label = name or getattr(obj, "__name__", None) or type(obj).__name__
++        if docstring is None:
++            docstring = _runtime_docstring(obj)
++        if location is None:
++            location = _runtime_location(self.factory, obj)
++        description = f"def {label}({', '.join(p.text for p in params)}){returns}"
++        return [(Signature(label, [p.text for p in params], None, description, docstring, location),
++                 params)]
++
++
++def _format_annotation(annotation):
++    if isinstance(annotation, str):
++        return annotation
++    return inspect.formatannotation(annotation)
++
++
++def _runtime_docstring(obj):
++    module = getattr(obj, "__module__", None) or "builtins"
++    if module == "builtins":
++        return ""
++    try:
++        return inspect.getdoc(obj) or ""
++    except Exception:
++        return ""
++
++
++def _runtime_location(factory, obj):
++    definition = factory.from_value(RuntimeClass(obj) if inspect.isclass(obj) else RuntimeFunction(obj))
++    if definition is None:
++        return ("", 0)
++    return (definition.module_path, definition.line)
+
+### sithlib/stubs.py (created)
+--- sithlib/stubs.py
++++ sithlib/stubs.py
+@@ -0,0 +1,82 @@
++"""Pairing `.pyi` stubs with the source modules they describe.
++
++Inference keeps working on source scopes (so that `goto` and `infer` report
++`.py` locations); the stub index finds the stub scope declaring the types of a
++source module, class or function, and maps stub scopes back to their source.
++"""
++from .scopes import CLASS, FUNCTION, MODULE
++
++_KINDS = {CLASS: "class", FUNCTION: "def"}
++
++
++def decorator_names(node):
++    names = set()
++    for decorator in getattr(node, "decorator_list", []):
++        target = getattr(decorator, "func", decorator)
++        names.add(getattr(target, "attr", None) or getattr(target, "id", None))
++    return names
++
++
++def declared_overloads(bindings):
++    """The `@overload` variants among `def` bindings of one name, else the last definition."""
++    defs = [b for b in bindings if b.kind == "def"]
++    overloads = [b for b in defs if "overload" in decorator_names(b.node)]
++    return overloads or defs[-1:]
++
++
++class StubIndex:
++    def __init__(self, importer):
++        self.importer = importer
++        self._to_stub = {}
++        self._to_source = {}
++
++    def stub_scope(self, scope):
++        """The stub scope declaring source module/class/function `scope`, or None."""
++        key = id(scope)
++        if key not in self._to_stub:
++            self._to_stub[key] = None
++            if not scope.module.is_stub:
++                self._to_stub[key] = _counterpart(scope, self.importer.stub_for, self.stub_scope)
++        return self._to_stub[key]
++
++    def source_scope(self, scope):
++        """The source scope a stub module/class/function `scope` describes, or None."""
++        key = id(scope)
++        if key not in self._to_source:
++            self._to_source[key] = None
++            if scope.module.is_stub:
++                self._to_source[key] = _counterpart(scope, self.importer.source_for,
++                                                    self.source_scope)
++        return self._to_source[key]
++
++    def bindings(self, scope, name):
++        """Stub bindings of `name` in the stub counterpart of source `scope`."""
++        stub = self.stub_scope(scope)
++        return stub.bindings.get(name, []) if stub is not None else []
++
++    def function_scopes(self, scope):
++        """Stub function scopes declaring source function `scope` (several for overloads)."""
++        if scope.kind != FUNCTION or scope.parent is None:
++            return []
++        stub_parent = self.stub_scope(scope.parent)
++        if stub_parent is None:
++            return []
++        declared = declared_overloads(stub_parent.bindings.get(scope.node.name, []))
++        scopes = [stub_parent.module.scope_of(b.node) for b in declared]
++        return [s for s in scopes if s is not None]
++
++
++def _counterpart(scope, module_lookup, parent_lookup):
++    if scope.kind == MODULE:
++        context = module_lookup(scope.module)
++        return context.root if context is not None else None
++    kind = _KINDS.get(scope.kind)
++    if kind is None or scope.parent is None:
++        return None
++    parent = parent_lookup(scope.parent)
++    if parent is None:
++        return None
++    candidates = [b for b in parent.bindings.get(scope.node.name, []) if b.kind == kind]
++    if not candidates:
++        return None
++    return parent.module.scope_of(candidates[-1].node)
+
+### tests/test_sith.py (modified)
+--- tests/test_sith.py
++++ tests/test_sith.py
+@@ -1,4 +1,4 @@
+-"""End-to-end tests for `sith.py complete`, `infer` and `goto`."""
++"""End-to-end tests for every `sith.py` command."""
+ import json
+ import os
+ import subprocess
+@@ -624,5 +624,314 @@
+         self.assertEqual(self.names(self.complete(source, 4, 9)), ["start"])
+ 
+ 
++class CommandTestCase(SithTestCase):
++    def run_json(self, command, *args, key=None):
++        result = subprocess.run([sys.executable, SITH, command, *map(str, args)],
++                                capture_output=True, text=True, cwd=self.dir)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertTrue(result.stdout.endswith("\n"))
++        return json.loads(result.stdout)[key or command]
++
++    def signatures(self, source, line, col, name="main.py"):
++        path = self.write(name, source)
++        return self.run_json("signatures", path, line, col)
++
++    def references(self, path, line, col, *flags):
++        return [(r["module_path"], r["line"], r["column"], r["is_definition"])
++                for r in self.run_json("references", path, line, col, *flags)]
++
++
++class SignatureTests(CommandTestCase):
++    SOURCE = """\
++        class Calculator:
++            \"\"\"Adds things.\"\"\"
++
++            def __init__(self, value=0):
++                self.value = value
++
++            def add(self, a, b: int = 2, *rest, scale: float = 1.0, **options) -> int:
++                \"\"\"Add two numbers.\"\"\"
++                return a + b
++
++
++        def plain(x, y, /, z, *, flag=False):
++            pass
++
++
++        calc = Calculator()
++        """
++
++    def test_method_signature(self):
++        source = dedent(self.SOURCE) + "calc.add(1, \n"
++        [signature] = self.signatures(source, 17, 12)
++        self.assertEqual(signature, {
++            "name": "add",
++            "params": ["a", "b: int=2", "*rest", "scale: float=1.0", "**options"],
++            "index": 1,
++            "description": "def add(a, b: int=2, *rest, scale: float=1.0, **options) -> int",
++            "docstring": "Add two numbers."})
++
++    def test_parameter_binding(self):
++        source = dedent(self.SOURCE) + "calc.add(1, 2, 3, scale=2, other=1, **{})\nplain(1, 2, 3, w=1)\n"
++        index = lambda col, line=17: self.signatures(source, line, col)[0]["index"]
++        self.assertEqual(index(9), 0)
++        self.assertEqual(index(15), 2)  # extra positional -> *rest
++        self.assertEqual(index(24), 3)  # scale=
++        self.assertEqual(index(33), 4)  # unknown keyword -> **options
++        self.assertEqual(index(39), 4)  # **{} -> **options
++        self.assertEqual(index(6, 18), 0)
++        self.assertEqual(index(12, 18), 2)
++        self.assertIsNone(index(15, 18))  # unknown keyword without **kwargs
++        [signature] = self.signatures(source, 18, 6)
++        self.assertEqual(signature["params"], ["x", "y", "z", "flag=False"])
++
++    def test_past_all_parameters(self):
++        source = "def one(a):\n    pass\none(1, 2)\n"
++        self.assertIsNone(self.signatures(source, 3, 7)[0]["index"])
++
++    def test_class_and_constructor(self):
++        source = dedent(self.SOURCE) + "Calculator(\n"
++        [signature] = self.signatures(source, 17, 11)
++        self.assertEqual((signature["name"], signature["params"], signature["index"],
++                          signature["docstring"]), ("Calculator", ["value=0"], 0, "Adds things."))
++
++    def test_not_in_call(self):
++        source = dedent(self.SOURCE) + "x = (1, 2)\ncalc.add(1)\ndef f(a, b):\n    pass\n"
++        self.assertEqual(self.signatures(source, 17, 5), [])
++        self.assertEqual(self.signatures(source, 18, 4), [])
++        self.assertEqual(self.signatures(source, 18, 11), [])
++        self.assertEqual(self.signatures(source, 19, 9), [])
++
++    def test_nested_brackets_and_strings(self):
++        source = dedent(self.SOURCE) + 'plain("a,(", [1, 2], {3: (4, 5)}, \n'
++        self.assertEqual(self.signatures(source, 17, 21)[0]["index"], 2)
++        self.assertIsNone(self.signatures(source, 17, 34)[0]["index"])
++        source = dedent(self.SOURCE) + "plain(calc.add(1, 2), [3, \n"
++        self.assertEqual(self.signatures(source, 17, 26)[0]["index"], 1)
++        [inner] = self.signatures(source, 17, 18)
++        self.assertEqual((inner["name"], inner["index"]), ("add", 1))
++
++    def test_multiple_and_overloaded(self):
++        source = ("from typing import overload\n@overload\ndef h(x: int) -> int: ...\n"
++                  "@overload\ndef h(x: str) -> str: ...\ndef h(x):\n    return x\n"
++                  "def k(a):\n    pass\npick = h if x else k\nh(\npick(\n")
++        self.assertEqual([s["description"] for s in self.signatures(source, 11, 2)],
++                         ["def h(x: int) -> int", "def h(x: str) -> str"])
++        self.assertEqual([s["name"] for s in self.signatures(source, 12, 5)], ["h", "h", "k"])
++
++    def test_builtin(self):
++        [signature] = self.signatures("len(\n", 1, 4)
++        self.assertEqual((signature["name"], signature["params"], signature["index"]),
++                         ("len", ["obj"], 0))
++
++
++class StubTests(CommandTestCase):
++    def setUp(self):
++        super().setUp()
++        self.write("mylib.py", """\
++            def greet(name, times=1):
++                \"\"\"Greets.\"\"\"
++                return make(name) * times
++
++            class Config:
++                def __init__(self, path):
++                    self.path = path
++                    self.data = load(path)
++
++            VERSION = make_version()
++            """)
++        self.write("mylib.pyi", """\
++            from typing import overload
++
++            class Config:
++                path: str
++                data: dict
++                debug: bool
++                def __init__(self, path: str) -> None: ...
++
++            def greet(name: str, times: int = 1) -> str: ...
++
++            VERSION: str
++
++            def stub_only(x: int) -> float: ...
++
++            @overload
++            def conv(x: int) -> str: ...
++            @overload
++            def conv(x: str) -> int: ...
++            """)
++        self.write("stubs/extlib.pyi", "class Client:\n    url: str\ndef connect() -> Client: ...\n")
++
++    def infer_names(self, path, line, col):
++        return [d["name"] for d in self.run_json("infer", path, line, col, key="definitions")]
++
++    def test_signatures_and_inference_from_stub(self):
++        path = self.write("main.py", "from mylib import greet, VERSION, stub_only, conv\n"
++                                     "r = greet('x')\nr\nVERSION\nstub_only(1)\nconv(1)\n"
++                                     "conv('s')\ngreet(\n")
++        [signature] = self.run_json("signatures", path, 8, 6)
++        self.assertEqual(signature["params"], ["name: str", "times: int=1"])
++        self.assertEqual(signature["description"], "def greet(name: str, times: int=1) -> str")
++        self.assertEqual(signature["docstring"], "Greets.")
++        self.assertEqual(self.infer_names(path, 3, 0), ["str"])
++        self.assertEqual(self.infer_names(path, 4, 0), ["str"])
++        self.assertEqual(self.infer_names(path, 5, 3), ["stub_only"])
++        result = subprocess.run([sys.executable, SITH, "infer", path, "6", "0"],
++                                capture_output=True, text=True)
++        self.assertEqual(json.loads(result.stdout)["definitions"][0]["name"], "conv")
++
++    def test_overload_return(self):
++        path = self.write("main.py", "from mylib import conv\na = conv(1)\nb = conv('s')\na\nb\n")
++        self.assertEqual(self.infer_names(path, 4, 0), ["str"])
++        self.assertEqual(self.infer_names(path, 5, 0), ["int"])
++
++    def test_completion_and_goto(self):
++        path = self.write("main.py", "from mylib import Config, stub_only\nc = Config('p')\n"
++                                     "c.path\nc.debug\nc.\n")
++        completions = {c["name"]: c["description"]
++                       for c in self.run_json("complete", path, 5, 2, key="completions")}
++        self.assertEqual(completions["data"], "instance of dict")
++        self.assertEqual(completions["debug"], "instance of bool")
++        self.assertEqual(completions["path"], "instance of str")
++        [source] = self.run_json("goto", path, 3, 2, key="definitions")
++        self.assertEqual((source["module_path"], source["line"]), ("mylib.py", 7))
++        [stub] = self.run_json("goto", path, 4, 2, key="definitions")
++        self.assertEqual((stub["module_path"], stub["line"]), ("mylib.pyi", 6))
++        [function] = self.run_json("goto", path, 1, 18, "--follow-imports", key="definitions")
++        self.assertEqual((function["module_path"], function["line"]), ("mylib.py", 5))
++
++    def test_stub_directory(self):
++        path = self.write("main.py", "import extlib\nc = extlib.connect()\nc.url\n")
++        self.assertEqual(self.infer_names(path, 3, 2), ["str"])
++        [client] = self.run_json("infer", path, 2, 0, key="definitions")
++        self.assertEqual((client["name"], client["module_path"]), ("Client", "stubs/extlib.pyi"))
++
++
++class DynamicParameterTests(CommandTestCase):
++    SOURCE = """\
++        def process(data, flag=None):
++            return data
++
++        class Box:
++            def __init__(self, item):
++                self.item = item
++
++        def typed(x: int, y):
++            return y
++
++        process(42)
++        process("s", flag=True)
++        Box([1]).item
++        typed(1, "q")
++        """
++
++    def infer_names(self, line, col):
++        path = self.write("main.py", self.SOURCE)
++        return [d["name"] for d in self.run_json("infer", path, line, col, key="definitions")]
++
++    def test_call_sites(self):
++        self.assertEqual(self.infer_names(2, 11), ["int", "str"])
++        self.assertEqual(self.infer_names(1, 18), ["NoneType", "bool"])
++        self.assertEqual(self.infer_names(6, 20), ["list"])
++        self.assertEqual(self.infer_names(9, 11), [])
++
++    def test_other_files_not_searched(self):
++        self.write("caller.py", "from lib import work\nwork(1)\n")
++        path = self.write("lib.py", "def work(v):\n    return v\n")
++        self.assertEqual(self.run_json("infer", path, 2, 11, key="definitions"), [])
++
++
++class ReferenceTests(CommandTestCase):
++    def setUp(self):
++        super().setUp()
++        self.write("pkg/__init__.py", "")
++        self.calc = self.write("pkg/calc.py", """\
++            class Calculator:
++                def __init__(self, value=0):
++                    self.value = value
++
++                def calculate(self, x):
++                    return x * self.value
++
++            def recalculate(c):
++                value = 3
++                return c.calculate(value)
++            """)
++        self.main = self.write("main.py", """\
++            from pkg.calc import Calculator
++            from pkg import calc as calcmod
++
++            c = Calculator(3)
++            c.value
++            calcmod.Calculator
++
++            def other():
++                value = 1
++                return value
++            """)
++
++    def test_file_scope(self):
++        self.assertEqual(self.references(self.main, 4, 5), [
++            ("main.py", 1, 21, True), ("main.py", 4, 4, False), ("main.py", 6, 8, False)])
++        self.assertEqual(self.references(self.main, 10, 11), [
++            ("main.py", 9, 4, True), ("main.py", 10, 11, False)])
++
++    def test_project_scope(self):
++        self.assertEqual(self.references(self.main, 4, 5, "--scope", "project"), [
++            ("main.py", 1, 21, True), ("main.py", 4, 4, False), ("main.py", 6, 8, False),
++            ("pkg/calc.py", 1, 6, True)])
++        self.assertEqual(self.references(self.calc, 3, 14, "--scope", "project",
++                                         "--project", self.dir), [
++            ("main.py", 5, 2, False), ("pkg/calc.py", 3, 13, True), ("pkg/calc.py", 6, 24, False)])
++
++    def test_same_spelling_other_scope(self):
++        self.assertEqual(self.references(self.calc, 9, 4, "--scope", "project",
++                                         "--project", self.dir), [
++            ("pkg/calc.py", 9, 4, True), ("pkg/calc.py", 10, 23, False)])
++
++    def test_not_a_name(self):
++        result = subprocess.run([sys.executable, SITH, "references", self.main, "3", "0"],
++                                capture_output=True, text=True)
++        self.assertEqual(result.returncode, 1)
++
++
++class SearchAndNamesTests(CommandTestCase):
++    def setUp(self):
++        super().setUp()
++        self.write("calc.py", """\
++            import os
++            CALC = 1
++
++            class Calculator:
++                rate = 2
++
++                def recalculate(self):
++                    calc_local = 3
++                    return calc_local
++
++            def calc():
++                pass
++            """)
++        self.write("util/helpers.py", "def precalc():\n    pass\n")
++
++    def test_search(self):
++        results = self.run_json("search", "calc", "--project", self.dir, key="definitions")
++        self.assertEqual([(r["name"], r["module_path"], r["line"]) for r in results], [
++            ("CALC", "calc.py", 2), ("calc", "calc.py", 11), ("Calculator", "calc.py", 4),
++            ("recalculate", "calc.py", 7), ("precalc", "util/helpers.py", 1)])
++        self.assertNotIn("docstring", results[0])
++        self.assertEqual(results[3]["full_name"], "calc.Calculator.recalculate")
++
++    def test_names(self):
++        path = os.path.join(self.dir, "calc.py")
++        names = self.run_json("names", path, key="names")
++        self.assertEqual([(n["name"], n["line"], n["column"]) for n in names],
++                         [("os", 1, 7), ("CALC", 2, 0), ("Calculator", 4, 6), ("calc", 11, 4)])
++        self.assertTrue(all(n["is_definition"] for n in names))
++        names = self.run_json("names", path, "--all-scopes", key="names")
++        self.assertEqual([n["name"] for n in names], [
++            "os", "CALC", "Calculator", "rate", "recalculate", "self", "calc_local", "calc"])
++
++
+ if __name__ == "__main__":
+     unittest.main()
+

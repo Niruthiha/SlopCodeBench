@@ -1,0 +1,1141 @@
+{
+ "packet": "P30",
+ "checkpoints": [
+  {
+   "ck": 1,
+   "V": {
+    "present": [
+     "V2",
+     "V5"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 6,
+       "line": null,
+       "quote": "from industry import SDE s=SDE('sde')"
+      },
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 8,
+       "line": null,
+       "quote": "for n in Loki \"Drake\" \"Hydrogen Fuel Block Blueprint\" \"naga\" \"Tritanium\"; do .venv/bin/python industry.py recipe \"$n\" --sde sde"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 5,
+       "line": null,
+       "quote": "All three examples match. Now checking edge cases in the data (duplicate names, multiple blueprints per product, unpublished blueprints)."
+      }
+     ]
+    }
+   },
+   "summary": "Inspected SDE files, wrote industry.py in one go, ran the three spec examples (all matched), then probed data edge cases (duplicate names, unpublished blueprints, ship volumes) and other item names via python -c and CLI runs."
+  },
+  {
+   "ck": 2,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "industry.py:SDE",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 2,
+        "line": null,
+        "quote": "cd /workspace; cat industry.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py:main",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 2,
+        "line": null,
+        "quote": "cd /workspace; cat industry.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "NA",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": null,
+       "step": null,
+       "line": 168,
+       "quote": "+def render_invention(sde, product, bp, skill):"
+      },
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": null,
+       "step": null,
+       "line": 103,
+       "quote": "+def relic_quality(name):"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 2,
+       "line": null,
+       "quote": "cd /workspace; cat industry.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "render_invention calls existing SDE helpers category_group, market_path, tech_level",
+      "evidence": [
+       {
+        "src": "code/checkpoint_2/industry.py",
+        "ck": 2,
+        "step": null,
+        "line": 473,
+        "quote": "f\"Market Group: {sde.market_path(product)}\","
+       }
+      ]
+     },
+     {
+      "code": "R2",
+      "what": "ITEM/Group/Market Group header lines rebuilt in render_invention, duplicating render's header block",
+      "evidence": [
+       {
+        "src": "code/checkpoint_2/industry.py",
+        "ck": 2,
+        "step": null,
+        "line": 473,
+        "quote": "f\"Market Group: {sde.market_path(product)}\","
+       },
+       {
+        "src": "code/checkpoint_2/industry.py",
+        "ck": 2,
+        "step": null,
+        "line": 529,
+        "quote": "f\"Market Group: {sde.market_path(product)}\","
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 6,
+       "line": null,
+       "quote": "mkdir -p /tmp/work && cd /tmp/work && cat > search.py <<'EOF'"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 9,
+       "line": null,
+       "quote": "cd /tmp/work && cat > sweep.py <<'EOF' import sys, collections sys.path.insert(0,'/workspace') import industry"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 5,
+       "line": null,
+       "quote": "for b in (0.26,0.21,0.14): for m in (0,20,80,-40,90,-10,50,10): p=b*(1+10/30+5/40)*(1+m/100)"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 8,
+       "line": null,
+       "quote": "All three examples match byte-for-byte. Running a crash sweep over every inventable product in the SDE:"
+      }
+     ]
+    }
+   },
+   "summary": "Read whole file, searched rounding/ordering of the chance formula with /tmp scripts, patched in invention loaders and renderer via python replace, diffed spec examples, swept all 1,092 inventable products for crashes and patched the T3-from-blueprint case."
+  },
+  {
+   "ck": 3,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "industry.py:render",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py; ls sde"
+       }
+      ]
+     },
+     {
+      "place": "industry.py:main",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py; ls sde"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "NA",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": null,
+       "step": null,
+       "line": 47,
+       "quote": "+    if aid != MANUFACTURING:"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": null,
+       "step": null,
+       "line": 39,
+       "quote": "+def render(sde, product, bp, aid, me=0, te=0, waste=False):"
+      },
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": null,
+       "step": null,
+       "line": 103,
+       "quote": "+        sys.stdout.write(render(sde, product, bp, aid, args.me, args.te, args.waste) + \"\\n\")"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 2,
+       "line": null,
+       "quote": "cat industry.py; ls sde"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": []
+   },
+   "V": {
+    "present": [
+     "V2",
+     "V5"
+    ],
+    "primary": "V5",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 5,
+       "line": null,
+       "quote": "$P Fullerides --sde sde -me 10 -te 20 -waste | sed -n 8,14p; $P Fullerides --sde sde | sed -n 8,14p"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 3,
+       "line": null,
+       "quote": ".venv/bin/python industry.py recipe Naga --sde sde"
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 5,
+       "line": null,
+       "quote": "P=\".venv/bin/python industry.py recipe\"; $P Naga --sde sde -te 20 | grep \"Run Time\"; $P Naga --sde sde -me=10 -te=20 | grep -c 23400"
+      }
+     ]
+    }
+   },
+   "summary": "Read whole file, edited render body and its signature plus argparse flags in one python patch, then checked Naga spec examples (ME/TE/waste) and a reaction (Fullerides) by CLI runs."
+  },
+  {
+   "ck": 4,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "industry.py:render_invention",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py; ls -la sde"
+       }
+      ]
+     },
+     {
+      "place": "industry.py:main",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py; ls -la sde"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "NA",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_4.patch",
+       "ck": null,
+       "step": null,
+       "line": 111,
+       "quote": "+def parse_build_string(sde, text):"
+      },
+      {
+       "src": "diffs/checkpoint_4.patch",
+       "ck": null,
+       "step": null,
+       "line": 239,
+       "quote": "+def build_plan(sde, req, config):"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 2,
+       "line": null,
+       "quote": "cat industry.py; ls -la sde"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R3",
+      "what": "invention source selection factored out of render_invention into invention_sources, used by both renderer and plan",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 4,
+        "line": null,
+        "quote": "# 1. Factor out invention source selection so plan can reuse it."
+       },
+       {
+        "src": "diffs/checkpoint_4.patch",
+        "ck": null,
+        "step": null,
+        "line": 20,
+        "quote": "+def invention_sources(sde, product, bp):"
+       }
+      ]
+     },
+     {
+      "code": "R1",
+      "what": "parse_build_string resolves names via existing resolve_invention and SDE.resolve",
+      "evidence": [
+       {
+        "src": "code/checkpoint_4/industry.py",
+        "ck": 4,
+        "step": null,
+        "line": 702,
+        "quote": "cand[\"product\"], cand[\"bp\"] = resolve_invention(sde, cand[\"name\"])"
+       }
+      ]
+     },
+     {
+      "code": "R2",
+      "what": "invention_plan recomputes success-chance factor instead of calling existing success_chance",
+      "evidence": [
+       {
+        "src": "code/checkpoint_4/industry.py",
+        "ck": 4,
+        "step": null,
+        "line": 752,
+        "quote": "factor += Fraction(skill, 40 if is_encryption_skill(type_name(sde, sid)) else 30)"
+       },
+       {
+        "src": "code/checkpoint_4/industry.py",
+        "ck": 4,
+        "step": null,
+        "line": 382,
+        "quote": "factor += lvl / 30"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V2",
+     "V5"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 3,
+       "line": null,
+       "quote": "p,bp=I.resolve_invention(s,'Barrage L')"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 6,
+       "line": null,
+       "quote": "for b in \"Nonexistent Thing 1 x1\" \"Barrage L 10 11 20\" \"Hammerhead II 20 Accelerant Decryptor x4\""
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 5,
+       "line": null,
+       "quote": "Both spec examples match exactly. A quick check of error handling:"
+      }
+     ]
+    }
+   },
+   "summary": "Read whole file, probed invention data via python -c, extracted invention_sources, appended plan command code by python patch, matched both spec examples, then ran error and other build strings."
+  },
+  {
+   "ck": 5,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "industry.py:load_plan_config",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 4,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py:build_plan",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 4,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py:SDE",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 4,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py:main",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 4,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "NA",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 12,
+       "line": null,
+       "quote": "start=s.index(''' if aid != MANUFACTURING: me = te = 0 runs = req[\"runs\"] ''') end=s.index('def write_plan')"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": null,
+       "step": null,
+       "line": 136,
+       "quote": "+def build_plan(sde, req, config, build_all=False):"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 4,
+       "line": null,
+       "quote": "Read /workspace/industry.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "add_jobs reuses existing job_material_amount and format_decimal",
+      "evidence": [
+       {
+        "src": "code/checkpoint_5/industry.py",
+        "ck": 5,
+        "step": null,
+        "line": 910,
+        "quote": "amount = job_material_amount(qty, job_me, part_runs) * part_count * count"
+       }
+      ]
+     },
+     {
+      "code": "R2",
+      "what": "SDE.recipe_for repeats producer sort from SDE.resolve",
+      "evidence": [
+       {
+        "src": "code/checkpoint_5/industry.py",
+        "ck": 5,
+        "step": null,
+        "line": 277,
+        "quote": "prods.sort(key=lambda x: (BUILD_ACTIVITIES.index(x[1]), x[0]))"
+       },
+       {
+        "src": "code/checkpoint_5/industry.py",
+        "ck": 5,
+        "step": null,
+        "line": 344,
+        "quote": "prods.sort(key=lambda x: (BUILD_ACTIVITIES.index(x[1]), x[0]))"
+       }
+      ]
+     },
+     {
+      "code": "R2",
+      "what": "SDE.output_quantity repeats render's output-quantity lookup loop",
+      "evidence": [
+       {
+        "src": "code/checkpoint_5/industry.py",
+        "ck": 5,
+        "step": null,
+        "line": 281,
+        "quote": "for pid, qty in self.products.get((bp, aid), []):"
+       },
+       {
+        "src": "code/checkpoint_5/industry.py",
+        "ck": 5,
+        "step": null,
+        "line": 559,
+        "quote": "for pid, q in sde.products.get((bp, aid), []):"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 6,
+       "line": null,
+       "quote": "mkdir -p /tmp/t && cd /tmp/t && cat > c30.yaml <<'EOF' split_days: 30"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 13,
+       "line": null,
+       "quote": "print(3/0.1, 30*0.1, 3/(10800*0.8/86400), 10800*0.8/86400"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 17,
+       "line": null,
+       "quote": "o=I.component_order(s, items, set())"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 12,
+       "line": null,
+       "quote": "b30/jobs OK b30/materials OK b3/jobs FAIL 6c6 < Fernite Carbide Reaction Formula,15,1.5,2 --- > Fernite Carbide Reaction Formula,30,3.0,1"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 15,
+       "line": null,
+       "quote": "b30/jobs OK b30/materials OK b3/jobs OK b3/materials OK m3/jobs OK m3/materials OK"
+      }
+     ]
+    }
+   },
+   "summary": "Read whole file, saved the three spec examples as expected CSVs in /tmp, rewrote build_plan with splitting and build-all, fixed the 3.0-day boundary to match an example, then probed capitals, ordering cycles and other builds."
+  },
+  {
+   "ck": 6,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "industry.py:invention_plan",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 3,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py:component_order",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 3,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py:build_plan",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 3,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py:main",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 3,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "NA",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 8,
+       "line": null,
+       "quote": "start = src.index(\"def component_order(\") end = src.index(\"def write_plan(\")"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": null,
+       "step": null,
+       "line": 78,
+       "quote": "+def component_order(sde, roots, exclude, should_build=None):"
+      },
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": null,
+       "step": null,
+       "line": 151,
+       "quote": "+def build_plan(sde, req, config, build_all=False, stocks=None, targets=None):"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 3,
+       "line": null,
+       "quote": "Read /workspace/industry.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R3",
+      "what": "invention_plan split into invention_setup shared by plan invention and stock-target invention",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 7,
+        "line": null,
+        "quote": "# 1. refactor invention_plan into setup + plan"
+       },
+       {
+        "src": "code/checkpoint_6/industry.py",
+        "ck": 6,
+        "step": null,
+        "line": 981,
+        "quote": "inv_me, inv_te, max_runs, chance, per_attempt = invention_setup("
+       }
+      ]
+     },
+     {
+      "code": "R1",
+      "what": "add_invented_jobs reuses existing add_jobs splitting helper",
+      "evidence": [
+       {
+        "src": "code/checkpoint_6/industry.py",
+        "ck": 6,
+        "step": null,
+        "line": 988,
+        "quote": "add_jobs(inv_bp, MANUFACTURING, max_runs, inv_me, inv_te, full)"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5",
+     "V7"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 4,
+       "line": null,
+       "quote": "mkdir -p /tmp/t && cd /tmp/t && cat > config.yaml <<'EOF' split_days: 30"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 9,
+       "line": null,
+       "quote": "cd /tmp/t && P=\"/workspace/.venv/bin/python /workspace/industry.py\" cat > t2.txt <<'EOF' # comment"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 5,
+       "line": null,
+       "quote": "for n in ['Fulleride Reaction Formula','Platinum Technite Reaction Formula'"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 4,
+       "line": null,
+       "quote": "Fullerides 100000 Hydrogen Fuel Block 1000 Helium Fuel Block 1000 R.A.M.- Ammunition Tech 100 Rifter 100"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 10,
+       "line": null,
+       "quote": "Edge cases behave sensibly. Last check: plans that don't use `--stocks`/`--targets` should come out exactly as before."
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 11,
+       "line": null,
+       "quote": "I didn't save a copy of the old code, but `__pycache__` still has the bytecode compiled from it. I'll run that as the baseline."
+      }
+     ]
+    }
+   },
+   "summary": "Read whole file, ran the spec example, refactored invention into setup+plan and rewrote build_plan ledger, tested lenient stock parsing, and compared old-vs-new outputs using cached old bytecode as baseline; flagged one example row as likely wrong."
+  }
+ ],
+ "failures": [
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_2.py::test_invention_functionality[jackdaw-5]"
+   ],
+   "first_ck": 2,
+   "regression": false,
+   "code": "F2",
+   "why": "Jackdaw is Tech III but the SDE lists no relic sources for it; agent chose the Tech II layout (no Invented From column). Spec gives the T3 layout but is silent on T3 items lacking relics in the data.",
+   "evidence": [
+    {
+     "src": "trace",
+     "ck": 2,
+     "step": 9,
+     "line": null,
+     "quote": "(\"LookupErrorNo relics found for 'Jackdaw'\", 1)"
+    },
+    {
+     "src": "code/checkpoint_2/industry.py",
+     "ck": 2,
+     "step": null,
+     "line": 441,
+     "quote": "# (e.g. tactical destroyers) use the Tech II layout instead."
+    },
+    {
+     "src": "spec/checkpoint_2.md",
+     "ck": null,
+     "step": null,
+     "line": 43,
+     "quote": "* **Tech III columns/order:** `Invented From | Decryptor | Probability | Runs | ME | TE`"
+    },
+    {
+     "src": "results/checkpoint_2.md",
+     "ck": null,
+     "step": null,
+     "line": null,
+     "quote": "E                           KeyError: 'Invented From'"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_3.py::test_fernite_carbide_te10"
+   ],
+   "first_ck": 3,
+   "regression": false,
+   "code": "F1",
+   "why": "Spec restricts only ME to manufacturing and says time is impacted by TE; code zeroes both ME and TE for reactions, so Fernite Carbide run time stays 180 instead of 162.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": null,
+     "step": null,
+     "line": 10,
+     "quote": "  * Only **Manufacturing** jobs are impacted by this. Not Reactions."
+    },
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": null,
+     "step": null,
+     "line": 20,
+     "quote": "So your `recipe` command now needs to have its `quantity` column updated based on the ME (if it is a manufacturing job) and its time impacted by the TE."
+    },
+    {
+     "src": "code/checkpoint_3/industry.py",
+     "ck": 3,
+     "step": null,
+     "line": 547,
+     "quote": "        me = te = 0"
+    },
+    {
+     "src": "results/checkpoint_3.md",
+     "ck": null,
+     "step": null,
+     "line": null,
+     "quote": "E         Diff: {'values_changed': {\"root['run_time']\": {'new_value': 162, 'old_value': 180}}}"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_4.py::test_functionality[svipul_l1-1]"
+   ],
+   "first_ck": 4,
+   "regression": false,
+   "code": "F2",
+   "why": "Relic names are recognised only if the SDE lists them as invention sources; Small hull sections are not linked to Svipul in the data (seen at ck2), so the reverse-engineering build string fails to parse. Spec silent on this data gap.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_4/industry.py",
+     "ck": 4,
+     "step": null,
+     "line": 665,
+     "quote": "        if aid in INVENTION_ACTIVITIES and sde.is_published(src) and relic_quality(name) is not None:"
+    },
+    {
+     "src": "spec/checkpoint_4.md",
+     "ck": null,
+     "step": null,
+     "line": 27,
+     "quote": "{Item name} {RunsPerJob} {DecryptorName|None} {RelicName} x{NumJobs}"
+    },
+    {
+     "src": "trace",
+     "ck": 2,
+     "step": 9,
+     "line": null,
+     "quote": "(\"LookupErrorNo relics found for 'Svipul'\", 1)"
+    },
+    {
+     "src": "results/checkpoint_4.md",
+     "ck": null,
+     "step": null,
+     "line": null,
+     "quote": "E       AssertionError: Command failed: Error: No published item named 'Svipul 1 Accelerant Decryptor Small Malfunctioning Hull Section' found in SDE"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[kronos_invent]",
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[revelation_10_3d]",
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[loki_l1_1d]"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F2",
+   "why": "Spec formula max_runs=floor(split_days/days_per_run) conflicts with its own example (30 runs at exactly 3.0 days split). Agent chose strictly-under (ceil-1) to match the example, giving one fewer max run and different splits.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 25,
+     "quote": "max_runs = floor(split_days / days_per_run)"
+    },
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 115,
+     "quote": "Fernite Carbide Reaction Formula,15,1.5,2"
+    },
+    {
+     "src": "trace",
+     "ck": 5,
+     "step": 14,
+     "line": null,
+     "quote": "I'll compute the limit exactly with fractions, so a job may run up to but not including `split_days`."
+    },
+    {
+     "src": "code/checkpoint_5/industry.py",
+     "ck": 5,
+     "step": null,
+     "line": 823,
+     "quote": "    max_runs = max(1, math.ceil(limit / days_per_run) - 1)"
+    },
+    {
+     "src": "tests/cases/checkpoint_5/kronos_invent/jobs.csv",
+     "ck": null,
+     "step": null,
+     "line": 45,
+     "quote": "Photonic Metamaterials Reaction Formula,300,30.0,3"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::test_split_days_over_thirty_fails"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F2",
+   "why": "Spec both says split_days is a float <= 30 and uses min(30,split_days), implying larger values are allowed; agent clamped to 30 instead of erroring.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 9,
+     "quote": "split_days: 3.0 # <float <= 30, default is 3>"
+    },
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 18,
+     "quote": "* If the real time (time less TE) for a job takes > **`min(30,split_days)` days**, then you will need to split the job up into multiple jobs"
+    },
+    {
+     "src": "code/checkpoint_5/industry.py",
+     "ck": 5,
+     "step": null,
+     "line": 670,
+     "quote": "        \"split_days\": min(MAX_SPLIT_DAYS, get_float(\"split_days\", 3.0)),"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_build_all_with_stocks_functionality[kronos]"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "Same cause as the ck5 split failures: split_runs' strictly-under max_runs splits 300-run Photonic Metamaterials job (30.0 days) into 8 jobs instead of the expected 299/300 split.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_6/industry.py",
+     "ck": 6,
+     "step": null,
+     "line": 827,
+     "quote": "def split_runs(runs, days_per_run, split_days):"
+    },
+    {
+     "src": "tests/cases/checkpoint_6/kronos/jobs.csv",
+     "ck": null,
+     "step": null,
+     "line": 45,
+     "quote": "Photonic Metamaterials Reaction Formula,300,30.0,3"
+    },
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 25,
+     "quote": "max_runs = floor(split_days / days_per_run)"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_build_all_with_stocks_functionality[ion_siege_real]"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "Expected materials omit a target row (Crystallite Alloy) and show datacore stock ending at 0; spec says target outputs appear in materials.csv and does not state how leftover stock end_amount is reported.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_6.md",
+     "ck": null,
+     "step": null,
+     "line": 21,
+     "quote": "Outputs from stock targets show up in the `materials.csv` with whatever start amount they had if stockpile is present with the appropriate end amount based on the target quantity. "
+    },
+    {
+     "src": "code/checkpoint_6/industry.py",
+     "ck": 6,
+     "step": null,
+     "line": 1024,
+     "quote": "        if not (bought > 0 or end != start or (start > 0 and (used > 0 or made > 0))):"
+    },
+    {
+     "src": "tests/cases/checkpoint_6/ion_siege_real/materials.csv",
+     "ck": null,
+     "step": null,
+     "line": null,
+     "quote": "Datacore - Plasma Physics,0,0.0,1030,0"
+    }
+   ]
+  }
+ ],
+ "observations": "In this run we observed an agent that, in every session from ck2 to ck6, first read the whole single-file industry.py (cat or Read: [2.2], [3.2], [4.2], [5.4], [6.3]) and then edited it with in-place python string-replacement scripts ([2.7], [3.4], [4.4], [5.12], [6.8]). Verification centred on reproducing spec examples: it saved expected outputs into /tmp and diffed them ([2.8], [5.6], [5.12]), plus ad-hoc python -c probes into SDE data ([1.6], [4.3], [5.17]). It extracted shared helpers twice (invention_sources at [4.4], invention_setup at [6.7]) yet also re-implemented the chance formula in invention_plan (ck4) and producer lookup in SDE.recipe_for (ck5). At [5.14] it changed the split rule away from the spec formula to fit an example, which later caused four split failures (ck5, ck6). At [6.11] it used cached bytecode of the old code as a regression baseline. It noticed the Jackdaw/Svipul relic gap at [2.9] and chose a Tech II layout, which failed hidden tests at ck2 and ck4. In its ck6 final message (after [6.11]) it reported a suspected error in the spec example rather than matching it. It never wrote unit tests or notes for later sessions."
+}

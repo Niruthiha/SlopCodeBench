@@ -1,0 +1,5739 @@
+#!/usr/bin/env python3
+"""appctl - a hierarchical command-line tool.
+
+Usage:
+    python appctl.py [@<alias>] [<command>] [<subcommand>] [<args>] [--<flags>]
+"""
+
+import copy
+import csv
+import datetime
+import io
+import json
+import os
+import re
+import sys
+import time
+
+VERSION = "1.0.0"
+PROG = "appctl"
+STRICT_ENV = "APPCTL_STRICT_ARGS_MODE"
+SUGGESTION_THRESHOLD = 2
+
+
+# ---------------------------------------------------------------------------
+# Errors and output helpers
+# ---------------------------------------------------------------------------
+
+class AppctlExit(Exception):
+    """Raised to terminate the program with a given exit code."""
+
+    def __init__(self, code=0):
+        super().__init__(code)
+        self.code = code
+
+
+class SynopsisError(ValueError):
+    """Raised when a synopsis string contains a malformed token."""
+
+
+class Runtime:
+    quiet = False
+    debug = False
+    debug_group = None
+    config = {}
+    aliases = {}
+    global_config_path = None
+    project_config_path = None
+    start_time = time.time()
+    runtime_args = {}
+    assoc_list = []
+    cache = None
+
+
+# ANSI color codes for message prefixes.
+COLORS = {
+    "Error": "\033[31;1m",
+    "Warning": "\033[33;1m",
+    "Success": "\033[32;1m",
+    "Debug": "\033[34;1m",
+}
+COLOR_RESET = "\033[0m"
+BOX_COLOR = "\033[37;41;1m"
+LOG_DELIMITER = "=" * 80
+STDIN_TIMEOUT = 1.0
+PROMPT_TIMEOUT = 2.0
+SENSITIVE_KEY_RE = re.compile(r"pass|secret|token", re.IGNORECASE)
+
+
+def use_color():
+    """Return whether colorized output is enabled (``color`` config: auto/true/false)."""
+    value = Runtime.config.get("color", "auto")
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "1", "yes", "on", "always"):
+            value = True
+        elif lowered in ("false", "0", "no", "off", "never"):
+            value = False
+    if value is True:
+        return True
+    if value is False or value is None:
+        return False
+    if os.name == "nt" or sys.platform.startswith("win"):
+        return False
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def colorize_prefix(label):
+    """Return ``<label>:`` colorized according to its message category."""
+    text = label + ":"
+    if not use_color():
+        return text
+    return COLORS[label.split()[0]] + text + COLOR_RESET
+
+
+# ---------------------------------------------------------------------------
+# File logging
+# ---------------------------------------------------------------------------
+
+class FileLog:
+    enabled = True
+
+
+def log_file_path():
+    return os.path.join(root_dir(), "logs", "%s.log" % PROG)
+
+
+def log_timestamp():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write_log(text, delimiter=False):
+    """Append ``text`` to the log file; every line gets a UTC timestamp."""
+    if not FileLog.enabled:
+        return
+    stamp = log_timestamp()
+    lines = [LOG_DELIMITER] if delimiter else []
+    lines.extend("[%s] %s" % (stamp, line) for line in str(text).split("\n"))
+    try:
+        path = log_file_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except (OSError, ValueError):
+        pass
+
+
+def redact_argv(argv):
+    """Hide the values of password-like options before they reach the log file."""
+    redacted = []
+    for token in argv:
+        parsed = parse_token(token)
+        if parsed is not None and isinstance(parsed[1], str) and SENSITIVE_KEY_RE.search(parsed[0]):
+            token = "--%s=[REDACTED]" % parsed[0]
+        redacted.append(token)
+    return redacted
+
+
+def log_invocation(argv):
+    write_log("Command: %s" % " ".join([PROG] + redact_argv(argv)), delimiter=True)
+
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+
+def out(text=""):
+    sys.stdout.write(text + "\n")
+
+
+def success(message):
+    if not Runtime.quiet:
+        out(colorize_prefix("Success") + " " + message)
+
+
+def log(message, sensitive=False):
+    """Informational output: STDOUT plus the log file (unless sensitive)."""
+    if Runtime.quiet:
+        return
+    out(message)
+    if not sensitive:
+        write_log(message)
+
+
+def warning(message):
+    sys.stderr.write(colorize_prefix("Warning") + " " + message + "\n")
+    write_log("Warning: " + message)
+
+
+def debug(message, group=None):
+    if not Runtime.debug:
+        return
+    if Runtime.debug_group and group != Runtime.debug_group:
+        return
+    label = "Debug (%s)" % group if Runtime.debug_group else "Debug"
+    text = "%s (%.3fs)" % (message, time.time() - Runtime.start_time)
+    sys.stderr.write(colorize_prefix(label) + " " + text + "\n")
+    write_log("%s: %s" % (label, text))
+
+
+def error_box(lines):
+    """Write ``lines`` to STDERR inside a highlighted box."""
+    lines = [line.replace("\t", "    ") for line in lines]
+    width = max(len(line) for line in lines)
+    border = "+" + "-" * (width + 2) + "+"
+    rows = [border] + ["| %s |" % line.ljust(width) for line in lines] + [border]
+    if use_color():
+        rows = [BOX_COLOR + row + COLOR_RESET for row in rows]
+    sys.stderr.write("\n".join(rows) + "\n")
+
+
+def error(message, code=1, sensitive=False, box=None):
+    """Report an error and exit. Sensitive errors are never written to the log file."""
+    message = str(message)
+    lines = message.split("\n")
+    if box is None:
+        box = len(lines) > 1
+    if box:
+        error_box(["Error: " + lines[0]] + lines[1:])
+    else:
+        sys.stderr.write(colorize_prefix("Error") + " " + message + "\n")
+    if not sensitive:
+        write_log("Error: " + message)
+    raise AppctlExit(code)
+
+
+# ---------------------------------------------------------------------------
+# User input
+# ---------------------------------------------------------------------------
+
+def _stdin_ready(timeout):
+    """Return False when STDIN is a pipe that stays empty for ``timeout`` seconds."""
+    if os.name == "nt":
+        return True
+    import select
+    try:
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+    except (OSError, ValueError, TypeError):
+        return True
+    return bool(ready)
+
+
+def _stdin_is_tty():
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def prompt(question):
+    """Display ``question``, read one line from STDIN, return it lowercased and trimmed."""
+    sys.stdout.write(question)
+    sys.stdout.flush()
+    if sys.stdin is None:
+        return ""
+    if not _stdin_is_tty() and not _stdin_ready(PROMPT_TIMEOUT):
+        return ""
+    try:
+        answer = sys.stdin.readline()
+    except (OSError, ValueError):
+        answer = ""
+    if not answer.endswith("\n") or not _stdin_is_tty():
+        sys.stdout.write("\n")
+    return answer.strip().lower()
+
+
+def confirm(question, assoc=None):
+    """Ask a ``[y/n]`` question; ``--yes`` auto-confirms. Returns True when confirmed."""
+    if assoc and assoc.get("yes"):
+        return True
+    if prompt(question + " [y/n] ") != "y":
+        warning("Operation cancelled.")
+        return False
+    return True
+
+
+def read_stdin():
+    """Read all of STDIN for a missing positional argument (None when unavailable)."""
+    if sys.stdin is None or _stdin_is_tty():
+        return None
+    if not _stdin_ready(STDIN_TIMEOUT):
+        return None
+    try:
+        data = sys.stdin.read()
+    except (OSError, ValueError):
+        return None
+    data = data.rstrip("\r\n")
+    return data if data != "" else None
+
+
+# ---------------------------------------------------------------------------
+# Suggestions
+# ---------------------------------------------------------------------------
+
+# Curated synonyms for common command-name variants. A synonym is only
+# suggested when the target is actually registered among the candidates.
+SYNONYMS = {
+    "add": "create",
+    "check": "check-update",
+    "clear": "flush",
+    "conf": "config",
+    "configure": "config",
+    "decrement": "decr",
+    "del": "delete",
+    "destroy": "delete",
+    "directory": "dir",
+    "erase": "delete",
+    "exec": "eval",
+    "exec-file": "eval-file",
+    "increment": "incr",
+    "info": "get",
+    "lang": "locale",
+    "language": "locale",
+    "ls": "list",
+    "make": "create",
+    "new": "create",
+    "number": "count",
+    "regen": "regenerate",
+    "remove": "delete",
+    "rep": "replace",
+    "repl": "replace",
+    "rm": "delete",
+    "settings": "config",
+    "show": "get",
+    "trash": "delete",
+    "v": "version",
+    "ver": "version",
+}
+
+
+def levenshtein(a, b):
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def sort_key(name):
+    return (name.lower(), name)
+
+
+def get_suggestion(word, candidates, threshold=SUGGESTION_THRESHOLD, synonyms=True):
+    """Return the closest candidate to ``word`` or None (deterministic)."""
+    candidates = sorted(set(candidates), key=sort_key)
+    if not candidates:
+        return None
+    lowered = word.lower()
+    if synonyms:
+        target = SYNONYMS.get(lowered)
+        if target is not None and target in candidates:
+            return target
+    best, best_dist = None, None
+    for candidate in candidates:
+        dist = levenshtein(lowered, candidate.lower())
+        if best_dist is None or dist < best_dist:
+            best, best_dist = candidate, dist
+    if best_dist is not None and best_dist <= threshold:
+        return best
+    return None
+
+
+# ---------------------------------------------------------------------------
+# YAML (the subset used by config files)
+# ---------------------------------------------------------------------------
+
+class YamlError(ValueError):
+    """Raised when a YAML document cannot be parsed."""
+
+
+_YAML_ESCAPES = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n",
+                 "v": "\v", "f": "\f", "r": "\r", "e": "\x1b", " ": " ", '"': '"',
+                 "/": "/", "\\": "\\", "N": "\x85", "_": "\xa0"}
+_YAML_INT = re.compile(r"[-+]?[0-9]+")
+_YAML_FLOAT = re.compile(r"[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?")
+_YAML_ANCHOR = re.compile(r"&([^\s\[\]{},]+)(?:\s+(.*))?")
+_YAML_ALIAS = re.compile(r"\*([^\s\[\]{},]+)")
+_YAML_BLOCK_SCALAR = re.compile(r"[|>](?:[+-]?[1-9]?|[1-9][+-])")
+
+
+def _yaml_strip_comment(line):
+    """Remove a trailing ``# comment`` that is not inside a quoted scalar."""
+    quote = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote == "'":
+            if ch == "'":
+                if line[i + 1:i + 2] == "'":
+                    i += 1
+                else:
+                    quote = None
+        elif quote == '"':
+            if ch == "\\":
+                i += 1
+            elif ch == '"':
+                quote = None
+        elif ch in "'\"" and (i == 0 or line[i - 1] in " \t[{,:-"):
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
+            return line[:i].rstrip()
+        i += 1
+    return line.rstrip()
+
+
+def _yaml_resolve(text):
+    text = text.strip()
+    if text in ("", "~") or text.lower() == "null":
+        return None
+    lowered = text.lower()
+    if lowered in ("true", "yes", "on"):
+        return True
+    if lowered in ("false", "no", "off"):
+        return False
+    if _YAML_INT.fullmatch(text):
+        return int(text)
+    if _YAML_FLOAT.fullmatch(text):
+        return float(text)
+    return text
+
+
+class _FlowParser:
+    """Parse quoted scalars and flow collections (``[...]`` / ``{...}``)."""
+
+    def __init__(self, text):
+        self.text = text
+        self.pos = 0
+
+    def parse_all(self):
+        value = self.node(top=True)
+        self.ws()
+        if self.pos != len(self.text):
+            raise YamlError("Unexpected content: %s" % self.text[self.pos:])
+        return value
+
+    def ws(self):
+        while self.pos < len(self.text) and self.text[self.pos] in " \t\n":
+            self.pos += 1
+
+    def peek(self):
+        return self.text[self.pos] if self.pos < len(self.text) else ""
+
+    def node(self, top=False, key=False):
+        self.ws()
+        ch = self.peek()
+        if ch == "[":
+            return self.sequence()
+        if ch == "{":
+            return self.mapping()
+        if ch == '"':
+            return self.double_quoted()
+        if ch == "'":
+            return self.single_quoted()
+        return self.plain(top, key)
+
+    def sequence(self):
+        self.pos += 1
+        items = []
+        while True:
+            self.ws()
+            if self.peek() == "]":
+                self.pos += 1
+                return items
+            if not self.peek():
+                raise YamlError("Unterminated flow sequence")
+            items.append(self.node())
+            self.ws()
+            if self.peek() == ",":
+                self.pos += 1
+            elif self.peek() != "]":
+                raise YamlError("Expected ',' or ']' in flow sequence")
+
+    def mapping(self):
+        self.pos += 1
+        result = {}
+        while True:
+            self.ws()
+            if self.peek() == "}":
+                self.pos += 1
+                return result
+            if not self.peek():
+                raise YamlError("Unterminated flow mapping")
+            key = self.node(key=True)
+            self.ws()
+            value = None
+            if self.peek() == ":":
+                self.pos += 1
+                self.ws()
+                if self.peek() not in (",", "}"):
+                    value = self.node()
+            result["" if key is None else str(key)] = value
+            self.ws()
+            if self.peek() == ",":
+                self.pos += 1
+            elif self.peek() != "}":
+                raise YamlError("Expected ',' or '}' in flow mapping")
+
+    def double_quoted(self):
+        self.pos += 1
+        chars = []
+        text = self.text
+        while self.pos < len(text):
+            ch = text[self.pos]
+            if ch == '"':
+                self.pos += 1
+                return "".join(chars)
+            if ch == "\\":
+                esc = text[self.pos + 1:self.pos + 2]
+                if esc in ("x", "u", "U"):
+                    size = {"x": 2, "u": 4, "U": 8}[esc]
+                    digits = text[self.pos + 2:self.pos + 2 + size]
+                    try:
+                        chars.append(chr(int(digits, 16)))
+                    except ValueError:
+                        raise YamlError("Invalid escape sequence")
+                    self.pos += 2 + size
+                    continue
+                if esc == "\n":
+                    self.pos += 2
+                    continue
+                if esc not in _YAML_ESCAPES:
+                    raise YamlError("Invalid escape sequence")
+                chars.append(_YAML_ESCAPES[esc])
+                self.pos += 2
+                continue
+            chars.append(ch)
+            self.pos += 1
+        raise YamlError("Unterminated double-quoted scalar")
+
+    def single_quoted(self):
+        self.pos += 1
+        chars = []
+        text = self.text
+        while self.pos < len(text):
+            ch = text[self.pos]
+            if ch == "'":
+                if text[self.pos + 1:self.pos + 2] == "'":
+                    chars.append("'")
+                    self.pos += 2
+                    continue
+                self.pos += 1
+                return "".join(chars)
+            chars.append(ch)
+            self.pos += 1
+        raise YamlError("Unterminated single-quoted scalar")
+
+    def plain(self, top, key):
+        if top:
+            value = self.text[self.pos:]
+            self.pos = len(self.text)
+            return _yaml_resolve(value)
+        start = self.pos
+        text = self.text
+        while self.pos < len(text):
+            ch = text[self.pos]
+            if ch in ",[]{}":
+                break
+            if ch == ":" and (key or text[self.pos + 1:self.pos + 2] in ("", " ", ",", "}", "]")):
+                break
+            self.pos += 1
+        return _yaml_resolve(text[start:self.pos])
+
+
+def _yaml_inline(text):
+    """Parse a single-line (or joined multi-line flow) YAML value."""
+    text = text.strip()
+    if text.startswith(("&", "!")):
+        text = text.split(None, 1)[1] if len(text.split(None, 1)) > 1 else ""
+    if not text or text[0] not in "[{\"'":
+        return _yaml_resolve(text)
+    return _FlowParser(text).parse_all()
+
+
+def _yaml_split_key(content):
+    """Split ``key: value`` into (key, value-text), or return None."""
+    if not content or content[0] in "[{" or content.startswith(("- ", "? ")) or content == "-":
+        return None
+    if content[0] in "\"'":
+        parser = _FlowParser(content)
+        try:
+            key = parser.double_quoted() if content[0] == '"' else parser.single_quoted()
+        except YamlError:
+            return None
+        rest = content[parser.pos:].lstrip(" \t")
+        if rest == ":" or rest.startswith((": ", ":\t")):
+            return key, rest[1:].strip()
+        return None
+    for match in re.finditer(r":(?=\s|$)", content):
+        key = content[:match.start()].rstrip()
+        if key:
+            return key, content[match.end():].strip()
+    return None
+
+
+def _yaml_flow_balance(text):
+    depth = 0
+    quote = None
+    for i, ch in enumerate(text):
+        if quote:
+            if ch == quote and not (quote == '"' and text[i - 1] == "\\"):
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+    return depth
+
+
+class _YamlParser:
+    def __init__(self, text):
+        self.lines = text.replace("\r\n", "\n").replace("\r", "\n").expandtabs(2).split("\n")
+        self.index = 0
+        self.anchors = {}
+
+    def peek(self):
+        """Return (indent, content) of the next meaningful line, or None."""
+        while self.index < len(self.lines):
+            stripped = _yaml_strip_comment(self.lines[self.index])
+            content = stripped.strip()
+            if not content or content.startswith("%") or (
+                    stripped == stripped.lstrip() and content in ("---", "...")):
+                self.index += 1
+                continue
+            if stripped.startswith("--- "):
+                stripped = "    " + stripped[4:]
+                self.lines[self.index] = stripped
+            return len(stripped) - len(stripped.lstrip(" ")), stripped.strip()
+        return None
+
+    def parse(self):
+        head = self.peek()
+        if head is None:
+            return None
+        value = self.block(head[0])
+        if self.peek() is not None:
+            raise YamlError("Unexpected content on line %d" % (self.index + 1))
+        return value
+
+    def block(self, indent):
+        ind, content = self.peek()
+        if content == "-" or content.startswith("- "):
+            return self.sequence(ind)
+        if _yaml_split_key(content) is not None:
+            return self.mapping(ind)
+        self.index += 1
+        return self.scalar(content, indent - 1)
+
+    def mapping(self, indent):
+        result = {}
+        while True:
+            head = self.peek()
+            if head is None or head[0] < indent:
+                return result
+            ind, content = head
+            split = _yaml_split_key(content) if ind == indent else None
+            if split is None:
+                if ind == indent and (content == "-" or content.startswith("- ")):
+                    return result
+                raise YamlError("Bad indentation on line %d" % (self.index + 1))
+            key, rest = split
+            self.index += 1
+            value = self.value(rest, indent, in_mapping=True)
+            if key == "<<" and isinstance(value, (dict, list)):
+                # Merge keys: explicit keys of the mapping take precedence.
+                for source in (value if isinstance(value, list) else [value]):
+                    if isinstance(source, dict):
+                        for merged_key, merged_value in source.items():
+                            result.setdefault(merged_key, merged_value)
+                continue
+            result[key] = value
+
+    def sequence(self, indent):
+        result = []
+        while True:
+            head = self.peek()
+            if head is None or head[0] < indent:
+                return result
+            ind, content = head
+            if ind > indent or not (content == "-" or content.startswith("- ")):
+                if ind == indent:
+                    return result
+                raise YamlError("Bad indentation on line %d" % (self.index + 1))
+            rest = content[1:].lstrip(" ")
+            if rest and (rest == "-" or rest.startswith("- ") or _yaml_split_key(rest) is not None):
+                item_indent = indent + len(content) - len(rest)
+                self.lines[self.index] = " " * item_indent + rest
+                result.append(self.block(item_indent))
+            else:
+                self.index += 1
+                result.append(self.value(rest, indent))
+
+    def value(self, rest, indent, in_mapping=False):
+        anchor = _YAML_ANCHOR.fullmatch(rest)
+        if anchor:
+            value = self.value(anchor.group(2) or "", indent, in_mapping)
+            self.anchors[anchor.group(1)] = value
+            return value
+        alias = _YAML_ALIAS.fullmatch(rest)
+        if alias:
+            if alias.group(1) not in self.anchors:
+                raise YamlError("Unknown alias '%s' on line %d" % (alias.group(1), self.index))
+            return copy.deepcopy(self.anchors[alias.group(1)])
+        if rest == "":
+            head = self.peek()
+            if head is None:
+                return None
+            ind, content = head
+            if ind > indent:
+                return self.block(ind)
+            if in_mapping and ind == indent and (content == "-" or content.startswith("- ")):
+                return self.sequence(ind)
+            return None
+        return self.scalar(rest, indent)
+
+    def scalar(self, rest, indent):
+        if _YAML_BLOCK_SCALAR.fullmatch(rest):
+            return self.block_scalar(rest, indent)
+        if rest[0] in "[{":
+            # Flow collections may span several lines.
+            text = rest
+            while _yaml_flow_balance(text) > 0 and self.index < len(self.lines):
+                text += " " + _yaml_strip_comment(self.lines[self.index]).strip()
+                self.index += 1
+            return _yaml_inline(text)
+        if rest[0] in "\"'":
+            # Quoted scalars may span several lines.
+            text = rest
+            while True:
+                try:
+                    return _yaml_inline(text)
+                except YamlError:
+                    if self.index >= len(self.lines):
+                        raise
+                    text += " " + self.lines[self.index].strip()
+                    self.index += 1
+        # Plain scalars may continue on more-indented lines.
+        parts = [rest]
+        while True:
+            head = self.peek()
+            if head is None or head[0] <= indent:
+                break
+            if _yaml_split_key(head[1]) is not None or head[1].startswith("- "):
+                break
+            parts.append(head[1])
+            self.index += 1
+        return _yaml_inline(" ".join(parts))
+
+    def block_scalar(self, header, indent):
+        chomp = "+" if "+" in header else "-" if "-" in header else ""
+        lines = []
+        block_indent = None
+        while self.index < len(self.lines):
+            raw = self.lines[self.index].rstrip()
+            if raw.strip():
+                current = len(raw) - len(raw.lstrip(" "))
+                if current <= indent:
+                    break
+                if block_indent is None:
+                    block_indent = current
+                if current < block_indent:
+                    break
+                lines.append(raw[block_indent:])
+            else:
+                lines.append("")
+            self.index += 1
+        trailing = 0
+        while lines and lines[-1] == "":
+            lines.pop()
+            trailing += 1
+        if header[0] == ">":
+            folded = []
+            for line in lines:
+                if folded and folded[-1] != "" and line != "" and not line.startswith(" "):
+                    folded[-1] += " " + line
+                else:
+                    folded.append(line)
+            text = "\n".join(folded)
+        else:
+            text = "\n".join(lines)
+        if chomp == "-" or not lines:
+            return text
+        if chomp == "+":
+            return text + "\n" * (trailing + 1)
+        return text + "\n"
+
+
+def yaml_load(text):
+    """Parse a YAML document (block/flow collections and scalars)."""
+    return _YamlParser(text).parse()
+
+
+def _yaml_scalar(value):
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    text = str(value)
+    if (text == "" or text != text.strip() or ": " in text or " #" in text
+            or text[0] in "[]{},&*!|>'\"%`#?" or text == "-" or text.startswith("- ") or "\n" in text
+            or not isinstance(_yaml_resolve(text), str)):
+        return json.dumps(text)
+    return text
+
+
+def yaml_dump_lines(value, indent=0):
+    pad = " " * indent
+    lines = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, (dict, list)) and item:
+                lines.append("%s%s:" % (pad, _yaml_scalar(key)))
+                lines.extend(yaml_dump_lines(item, indent + 2))
+            else:
+                lines.append("%s%s: %s" % (pad, _yaml_scalar(key), _yaml_inline_dump(item)))
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, (dict, list)) and item:
+                nested = yaml_dump_lines(item, indent + 2)
+                lines.append("%s- %s" % (pad, nested[0].lstrip()))
+                lines.extend(nested[1:])
+            else:
+                lines.append("%s- %s" % (pad, _yaml_inline_dump(item)))
+    else:
+        lines.append(pad + _yaml_scalar(value))
+    return lines
+
+
+def _yaml_inline_dump(value):
+    if isinstance(value, dict):
+        return "{}"
+    if isinstance(value, list):
+        return "[]"
+    return _yaml_scalar(value)
+
+
+# ---------------------------------------------------------------------------
+# Synopsis parsing
+# ---------------------------------------------------------------------------
+
+_P_NAME = r"[a-z\-_0-9]+"
+_P_VALUE = r"[a-zA-Z\-_|,0-9]+"
+
+
+def _strip_optional(token):
+    if len(token) >= 2 and token.startswith("[") and token.endswith("]"):
+        return True, token[1:-1]
+    return False, token
+
+
+def _strip_repeating(token):
+    if token.endswith("..."):
+        return True, token[:-3]
+    return False, token
+
+
+def classify_token(token):
+    """Classify a single synopsis token into a parameter spec dict."""
+    param = {"token": token}
+    param["optional"], body = _strip_optional(token)
+    param["repeating"], body = _strip_repeating(body)
+
+    if body == "--<field>=<value>":
+        param["type"] = "generic"
+        return param
+
+    match = re.fullmatch(r"<(%s)>" % _P_VALUE, body)
+    if match:
+        param["type"] = "positional"
+        param["name"] = match.group(1)
+        return param
+
+    match = re.match(r"--(\[no-\])?(%s)" % _P_NAME, body)
+    if match:
+        param["name"] = match.group(2)
+        param["negatable"] = bool(match.group(1))
+        rest = body[match.end():]
+        if rest == "":
+            param["type"] = "flag"
+            return param
+        value_optional, rest = _strip_optional(rest)
+        value_match = re.fullmatch(r"=<(%s)>" % _P_VALUE, rest)
+        if value_match:
+            param["type"] = "assoc"
+            param["value"] = {"optional": value_optional, "name": value_match.group(1)}
+            return param
+
+    return {"token": token, "type": "unknown", "optional": False, "repeating": False}
+
+
+def parse_synopsis(synopsis, strict=False):
+    """Parse a synopsis string into a list of parameter specs.
+
+    With ``strict=True`` a malformed token raises :class:`SynopsisError`.
+    """
+    params = []
+    for token in (synopsis or "").split():
+        param = classify_token(token)
+        if strict and param["type"] == "unknown":
+            raise SynopsisError("Invalid synopsis token: '%s'" % token)
+        params.append(param)
+    return params
+
+
+# ---------------------------------------------------------------------------
+# Command tree
+# ---------------------------------------------------------------------------
+
+class Command:
+    def __init__(self, name, parent=None, description="", synopsis="", alias=None,
+                 handler=None, defaults=None, longdesc="", stdin_args=()):
+        self.name = name
+        self.parent = parent
+        self.description = description
+        self.synopsis = " ".join((synopsis or "").split())
+        self.alias = alias
+        self.handler = handler
+        self.defaults = dict(defaults or {})
+        self.longdesc = longdesc
+        # Positional value arguments that may be read from STDIN (JSON-decoded
+        # when --format=json is active).
+        self.stdin_args = set(stdin_args)
+        self.subcommands = {}
+        self.params = parse_synopsis(self.synopsis, strict=True)
+
+    # -- tree helpers ------------------------------------------------------
+    @property
+    def path(self):
+        parts = []
+        node = self
+        while node is not None and node.parent is not None:
+            parts.append(node.name)
+            node = node.parent
+        return " ".join(reversed(parts))
+
+    def add_subcommand(self, command):
+        command.parent = self
+        self.subcommands[command.name] = command
+
+    def sorted_subcommands(self):
+        return [self.subcommands[k] for k in sorted(self.subcommands, key=sort_key)]
+
+    def enabled_subcommands(self):
+        return [sub for sub in self.sorted_subcommands() if not is_command_disabled(sub)]
+
+    def find_subcommand(self, name):
+        if name in self.subcommands:
+            return self.subcommands[name]
+        for sub in self.sorted_subcommands():
+            if sub.alias and sub.alias == name:
+                return sub
+        return None
+
+    def can_have_subcommands(self):
+        return bool(self.subcommands)
+
+    # -- usage helpers -----------------------------------------------------
+    def usage_line(self):
+        line = "%s %s" % (PROG, self.path) if self.path else PROG
+        if self.subcommands and self.handler is None:
+            return line + " <command>"
+        if self.synopsis:
+            line += " " + self.synopsis
+        return line
+
+    def show_usage(self):
+        if self.subcommands and self.handler is None:
+            lines = [sub.usage_line() for sub in self.enabled_subcommands()]
+            for i, line in enumerate(lines):
+                out(("usage: " if i == 0 else "   or: ") + line)
+            out()
+            out("See '%s help %s <command>' for more information on a specific command."
+                % (PROG, self.path))
+        else:
+            out("usage: " + self.usage_line())
+
+    def known_assoc(self):
+        return [p["name"] for p in self.params if p["type"] in ("assoc", "flag")]
+
+
+ROOT = Command("", description="Manage applications from the command line.")
+
+
+def register(path, description="", synopsis="", alias=None, handler=None,
+             defaults=None, longdesc="", stdin_args=()):
+    """Register a command (and any missing parent namespaces)."""
+    parse_synopsis(synopsis, strict=True)
+    parts = path.split()
+    node = ROOT
+    for part in parts[:-1]:
+        child = node.subcommands.get(part)
+        if child is None:
+            child = Command(part)
+            node.add_subcommand(child)
+        node = child
+    existing = node.subcommands.get(parts[-1])
+    command = Command(parts[-1], description=description, synopsis=synopsis,
+                      alias=alias, handler=handler, defaults=defaults, longdesc=longdesc,
+                      stdin_args=stdin_args)
+    if existing is not None:
+        for sub in existing.subcommands.values():
+            command.add_subcommand(sub)
+    node.add_subcommand(command)
+    return command
+
+
+def iter_commands(node=None):
+    node = node or ROOT
+    for sub in node.sorted_subcommands():
+        yield sub
+        yield from iter_commands(sub)
+
+
+def unknown_command_error(name, parent):
+    if parent is ROOT:
+        message = ("'%s' is not a registered %s command. See '%s help' for available commands."
+                   % (name, PROG, PROG))
+    else:
+        message = ("'%s' is not a registered subcommand of '%s'. See '%s help %s' for "
+                   "available subcommands." % (name, parent.path, PROG, parent.path))
+    suggestion = get_suggestion(name, parent.subcommands.keys())
+    if suggestion:
+        message += "\nDid you mean '%s'?" % suggestion
+    error(message)
+
+
+def resolve_command(positionals):
+    """Walk the tree. Returns (command, remaining_positionals)."""
+    node = ROOT
+    remaining = list(positionals)
+    typed = []
+    while remaining and node.can_have_subcommands():
+        token = remaining[0]
+        child = node.find_subcommand(token)
+        if child is None:
+            if node.handler is not None:
+                break
+            unknown_command_error(token, node)
+        typed.append(token)
+        if is_command_disabled(child):
+            error("The '%s' command has been disabled." % " ".join(typed))
+        node = child
+        remaining.pop(0)
+    return node, remaining
+
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+def _param(runtime=None, file=False, default=None, multiple=False, deprecated=False,
+           hidden=False):
+    """Describe a global parameter.
+
+    ``runtime`` is the synopsis token when the parameter may be passed as a
+    ``--flag`` (None otherwise); ``file`` tells whether config files may set it.
+    """
+    return {"runtime": runtime, "file": file, "default": default, "multiple": multiple,
+            "deprecated": deprecated, "hidden": hidden}
+
+
+GLOBAL_SPEC = {
+    "path": _param("[--path=<path>]", file=True),
+    "url": _param("[--url=<url>]", file=True),
+    "user": _param("[--user=<id|login|email>]", file=True),
+    "ssh": _param("[--ssh=<host>]", file=True),
+    "skip-plugins": _param("[--skip-plugins[=<plugins>]]", file=True),
+    "skip-themes": _param("[--skip-themes[=<themes>]]", file=True),
+    "skip-packages": _param("[--skip-packages]", file=True),
+    "require": _param("[--require=<path>]", file=True, multiple=True),
+    "exec": _param("[--exec=<php-code>]"),
+    "context": _param("[--context=<context>]", file=True),
+    "prompt": _param("[--prompt[=<assoc>]]"),
+    "blog": _param("[--blog=<url>]", deprecated=True, hidden=True),
+    "disabled_commands": _param(file=True, default=[], multiple=True),
+    "projects_path": _param(file=True),
+    "locale": _param(file=True, default="en_US"),
+    "cert-email": _param(file=True),
+    "env": _param(file=True),
+    "admin-email": _param(file=True),
+    "sysctl": _param(file=True),
+    "skip-tty": _param(file=True, default=False),
+    "custom-compose": _param(file=True),
+    "installer_version": _param(file=True, default="stable"),
+    "color": _param("[--[no-]color]", file=True, default="auto"),
+    "debug": _param("[--debug[=<group>]]", default=False),
+    "quiet": _param("[--quiet]", default=False),
+}
+GLOBAL_PARAMS = parse_synopsis(
+    " ".join(spec["runtime"] for spec in GLOBAL_SPEC.values() if spec["runtime"]), strict=True)
+GLOBAL_NAMES = {p["name"] for p in GLOBAL_PARAMS}
+GLOBAL_DESCRIPTIONS = {
+    "path": "Path to the application files.",
+    "url": "Pretend request came from given URL.",
+    "user": "Set the user.",
+    "ssh": "Perform operation against a remote server over SSH (or a container).",
+    "skip-plugins": "Skip loading all plugins, or a comma-separated list of plugins.",
+    "skip-themes": "Skip loading all themes, or a comma-separated list of themes.",
+    "skip-packages": "Skip loading all installed packages.",
+    "require": "Load a file before running the command (may be used more than once).",
+    "exec": "Execute code before running the command (may be used more than once).",
+    "context": "Load the application in a given context.",
+    "prompt": "Prompt the user to enter values for all command arguments, or a subset.",
+    "blog": "Deprecated. Use --url instead.",
+    "disabled_commands": "List of commands to disable.",
+    "projects_path": "Directory holding the project directories.",
+    "locale": "Locale to use.",
+    "cert-email": "E-mail address used for certificates.",
+    "env": "Environment name.",
+    "admin-email": "Administrator e-mail address.",
+    "sysctl": "Kernel parameters applied to containers.",
+    "skip-tty": "Do not allocate a TTY for remote commands.",
+    "custom-compose": "Additional compose file to merge into the project configuration.",
+    "installer_version": "Installer release channel.",
+    "color": "Whether to colorize the output.",
+    "debug": "Show all errors and add verbose information; optionally limited to a group.",
+    "quiet": "Suppress informational messages.",
+}
+
+
+def parse_token(token):
+    """Return (key, value) for an option token, or None for a positional."""
+    if not token.startswith("--") or token == "--":
+        return None
+    body = token[2:]
+    if "=" in body:
+        key, value = body.split("=", 1)
+        return key, value
+    if body.startswith("no-") and len(body) > 3:
+        return body[3:], False
+    return body, True
+
+
+def split_args(tokens, strict):
+    """Split raw tokens into positionals, command assoc args and global config."""
+    positionals = []
+    assoc = []
+    runtime = {}
+    seen_positional = False
+    positional_only = False
+    for token in tokens:
+        if positional_only:
+            positionals.append(token)
+            seen_positional = True
+            continue
+        if token == "--":
+            positional_only = True
+            continue
+        parsed = parse_token(token)
+        if parsed is None:
+            positionals.append(token)
+            seen_positional = True
+            continue
+        key, value = parsed
+        is_global = key in GLOBAL_NAMES and not (strict and seen_positional)
+        if is_global:
+            runtime[key] = value
+        else:
+            assoc.append((key, value))
+    return positionals, assoc, runtime
+
+
+def rewrite_args(tokens):
+    """Apply the --help and --version rewrites."""
+    head = tokens
+    tail = []
+    if "--" in tokens:
+        idx = tokens.index("--")
+        head, tail = tokens[:idx], tokens[idx:]
+
+    if "--help" in head:
+        kept = [t for t in head if t != "--help"]
+        new = ["help"]
+        for token in kept + tail:
+            parsed = parse_token(token)
+            if parsed is None or token == "--":
+                if token != "--":
+                    new.append(token)
+            elif parsed[0] in GLOBAL_NAMES:
+                new.append(token)
+        return new
+
+    if "--version" in head and not tail:
+        rest = [t for t in head if t != "--version"]
+        if all(parse_token(t) is not None for t in rest):
+            return ["cli", "version"] + rest
+    return tokens
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def fill_from_stdin(command, args, positional_specs, assoc_list):
+    if len(args) >= len(positional_specs):
+        return args
+    spec = positional_specs[len(args)]
+    is_value = spec["name"] in command.stdin_args
+    if spec["optional"] and not is_value:
+        return args
+    raw = read_stdin()
+    if raw is None:
+        return args
+    fmt = command.defaults.get("format")
+    for key, value in assoc_list:
+        if key == "format":
+            fmt = value
+    if is_value and fmt == "json":
+        try:
+            args.append(json.loads(raw))
+        except ValueError:
+            error("Invalid JSON: %s" % raw, sensitive=True, box=False)
+    elif spec["repeating"]:
+        args.extend(raw.split())
+    else:
+        args.append(raw)
+    return args
+
+
+def validate_and_prepare(command, args, assoc_list):
+    params = command.params
+    positional_specs = [p for p in params if p["type"] == "positional"]
+    assoc_specs = [p for p in params if p["type"] in ("assoc", "flag")]
+    has_generic = any(p["type"] == "generic" for p in params)
+
+    # 0. A missing positional may be supplied through STDIN.
+    args = fill_from_stdin(command, list(args), positional_specs, assoc_list)
+
+    # 1. Required positionals.
+    required = 0
+    for spec in positional_specs:
+        if not spec["optional"]:
+            required += 1
+    if len(args) < required:
+        command.show_usage()
+        raise AppctlExit(1)
+
+    # 2. Excess positionals.
+    if not any(p["repeating"] for p in positional_specs):
+        if len(args) > len(positional_specs):
+            extra = args[len(positional_specs):]
+            error("Too many positional arguments: " + " ".join(extra))
+
+    assoc = {}
+    for key, value in assoc_list:
+        assoc[key] = value
+
+    # 3/4. Associative arguments.
+    errors = []
+    known = [p["name"] for p in assoc_specs]
+    for spec in assoc_specs:
+        key = spec["name"]
+        if spec["type"] == "assoc":
+            present = key in assoc
+            value = assoc.get(key)
+            if not spec["optional"]:
+                if not present or value is True or value is False or value == "":
+                    errors.append("missing --%s parameter" % key)
+                    continue
+            elif present and (value is True or value is False) and not spec["value"]["optional"]:
+                warning("--%s parameter needs a value" % key)
+                del assoc[key]
+        else:
+            if not spec["optional"] and key not in assoc:
+                errors.append("missing --%s parameter" % key)
+
+    if not has_generic:
+        seen = set()
+        for key, _ in assoc_list:
+            if key in known or key in seen:
+                continue
+            seen.add(key)
+            message = "unknown --%s parameter" % key
+            suggestion = get_suggestion(key, known, synonyms=False)
+            if suggestion:
+                message += "\nDid you mean '--%s'?" % suggestion
+            errors.append(message)
+
+    if errors:
+        error("Parameter errors:\n" + "\n".join(errors))
+
+    # Apply defaults.
+    args = list(args)
+    for index, spec in enumerate(positional_specs):
+        if index >= len(args) and spec["name"] in command.defaults and not spec["repeating"]:
+            args.append(command.defaults[spec["name"]])
+    for spec in assoc_specs:
+        if spec["name"] not in assoc and spec["name"] in command.defaults:
+            assoc[spec["name"]] = command.defaults[spec["name"]]
+    return args, assoc
+
+
+# ---------------------------------------------------------------------------
+# Output formatting helpers for handlers
+# ---------------------------------------------------------------------------
+
+FORMATS = ("table", "csv", "json", "yaml", "count", "ids")
+
+
+def cell_value(value):
+    """Render a value for table/CSV output; complex values become JSON strings."""
+    if value is None:
+        return ""
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value)
+    return str(value)
+
+
+def dump_json(value):
+    return json.dumps(value, indent=4)
+
+
+def ascii_table(headers, rows):
+    """Fixed-width table; each column is as wide as its widest value."""
+    widths = [max([len(h)] + [len(row[i]) for row in rows]) for i, h in enumerate(headers)]
+    sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+    lines = [sep, "| " + " | ".join(h.ljust(w) for h, w in zip(headers, widths)) + " |", sep]
+    for row in rows:
+        lines.append("| " + " | ".join(c.ljust(w) for c, w in zip(row, widths)) + " |")
+    lines.append(sep)
+    return lines
+
+
+class Formatter:
+    """Render command results according to --format, --fields and --field."""
+
+    def __init__(self, assoc, fields, prefix=None):
+        self.format = assoc.get("format") if isinstance(assoc.get("format"), str) else None
+        self.format = self.format or "table"
+        field = assoc.get("field")
+        self.field = field if isinstance(field, str) and field != "" else None
+        fields_arg = assoc.get("fields")
+        self.requested = None
+        if isinstance(fields_arg, str) and fields_arg.strip():
+            self.requested = [f.strip() for f in fields_arg.split(",") if f.strip()]
+        self.default_fields = list(fields)
+        self.prefix = prefix
+
+    def find_key(self, item, field):
+        """Return the item key matching ``field`` (prefix-aware, case-insensitive)."""
+        candidates = [field]
+        if self.prefix:
+            candidates.append("%s_%s" % (self.prefix, field))
+        for candidate in candidates:
+            if candidate in item:
+                return candidate
+        for candidate in candidates:
+            for key in item:
+                if key.lower() == candidate.lower():
+                    return key
+        error("Invalid field: %s." % field)
+
+    def reference(self, items):
+        return items[0] if items else dict.fromkeys(self.default_fields)
+
+    def columns(self, items):
+        if self.requested is None:
+            return list(self.default_fields)
+        reference = self.reference(items)
+        return [self.find_key(reference, f) for f in self.requested]
+
+    def check_format(self):
+        if self.format not in FORMATS:
+            error("Invalid format: %s" % self.format)
+
+    def id_key(self, item, columns):
+        for key in item:
+            if key.lower() == "id":
+                return key
+        if self.prefix:
+            for key in item:
+                if key.lower() == "%s_id" % self.prefix.lower():
+                    return key
+        return columns[0] if columns else None
+
+    def display_field(self, items, single):
+        values = []
+        for item in items:
+            key = self.find_key(item, self.field)
+            values.append(item.get(key))
+        if not items:
+            self.find_key(self.reference(items), self.field)
+        if self.format == "json":
+            out(dump_json(values[0] if single else values))
+            return
+        for value in values:
+            out(cell_value(value))
+
+    def display_items(self, items, single=False, vertical=True):
+        items = list(items)
+        if self.field:
+            self.display_field(items, single)
+            return
+        self.check_format()
+        columns = self.columns(items)
+        rows = [{c: item.get(c) for c in columns} for item in items]
+        fmt = self.format
+        if fmt == "count":
+            out(str(len(items)))
+        elif fmt == "ids":
+            ids = []
+            for item in items:
+                key = self.id_key(item, columns)
+                ids.append(cell_value(item.get(key)) if key else "")
+            out(" ".join(ids))
+        elif fmt == "json":
+            out(dump_json(rows[0] if single and rows else rows))
+        elif fmt == "yaml":
+            data = rows[0] if single and rows else rows
+            out("---")
+            lines = yaml_dump_lines(data) if data else [_yaml_inline_dump(data)]
+            for line in lines:
+                out(line)
+        elif fmt == "csv":
+            buffer = io.StringIO()
+            writer = csv.writer(buffer, lineterminator="\n")
+            writer.writerow(columns)
+            for row in rows:
+                writer.writerow([cell_value(row[c]) for c in columns])
+            sys.stdout.write(buffer.getvalue())
+        elif len(rows) == 1 and vertical:
+            table_rows = [[c, cell_value(rows[0][c])] for c in columns]
+            for line in ascii_table(["Field", "Value"], table_rows):
+                out(line)
+        else:
+            table_rows = [[cell_value(row[c]) for c in columns] for row in rows]
+            for line in ascii_table(columns, table_rows):
+                out(line)
+
+    def display_item(self, item):
+        self.display_items([item], single=True)
+
+
+def render_items(assoc, items, default_fields, prefix=None, vertical=True):
+    Formatter(assoc, default_fields, prefix).display_items(items, vertical=vertical)
+
+
+def render_item(assoc, item, default_fields=None, prefix=None):
+    fields = default_fields if default_fields is not None else list(item.keys())
+    Formatter(assoc, fields, prefix).display_item(item)
+
+
+def render_value(value, fmt):
+    if fmt == "json":
+        out(dump_json(value))
+    elif isinstance(value, (dict, list)):
+        out(json.dumps(value))
+    else:
+        out(str(value))
+
+
+def describe(**kwargs):
+    return ", ".join("%s: %s" % (k, v) for k, v in kwargs.items())
+
+
+# ---------------------------------------------------------------------------
+# Help
+# ---------------------------------------------------------------------------
+
+def column_listing(commands):
+    if not commands:
+        return []
+    width = max(len(c.name) for c in commands)
+    return ["  %s  %s" % (c.name.ljust(width), c.description) for c in commands]
+
+
+def show_root_help():
+    out("usage: %s <command> [<subcommand>] [<args>] [--<flags>]" % PROG)
+    out()
+    out(ROOT.description)
+    out()
+    out("Available commands:")
+    out()
+    for line in column_listing(ROOT.enabled_subcommands()):
+        out(line)
+    out()
+    out("See '%s help <command>' for more information on a specific command." % PROG)
+
+
+def show_command_help(command):
+    out("NAME")
+    out()
+    out("  %s %s" % (PROG, command.path))
+    out()
+    if command.description:
+        out("DESCRIPTION")
+        out()
+        out("  " + command.description)
+        out()
+    out("SYNOPSIS")
+    out()
+    out("  " + command.usage_line())
+    out()
+    if command.alias:
+        out("ALIAS")
+        out()
+        out("  " + command.alias)
+        out()
+    if command.handler is not None and command.params:
+        out("OPTIONS")
+        out()
+        for spec in command.params:
+            out("  " + spec["token"])
+            name = spec.get("name")
+            if name and name in command.defaults:
+                out("    default: %s" % format_default(command.defaults[name]))
+        out()
+    if command.longdesc:
+        out(command.longdesc.rstrip())
+        out()
+    if command.subcommands:
+        out("SUBCOMMANDS")
+        out()
+        for line in column_listing(command.enabled_subcommands()):
+            out(line)
+        out()
+        out("See '%s help %s <command>' for more information on a specific command."
+            % (PROG, command.path))
+
+
+def format_default(value):
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(value)
+
+
+def cmd_help(args, assoc):
+    if not args:
+        show_root_help()
+        return
+    command, remaining = resolve_command(args)
+    if remaining:
+        unknown_command_error(remaining[0], command)
+    show_command_help(command)
+
+
+# ---------------------------------------------------------------------------
+# Command handlers
+# ---------------------------------------------------------------------------
+
+def cmd_cli_version(args, assoc):
+    out("%s %s" % (PROG, VERSION))
+
+
+def runtime_binary():
+    """The runtime binary: env overrides, then the running interpreter, then a fallback name."""
+    for name in ("APPCTL_RUNTIME_BIN", "APPCTL_RUNTIME_BIN_USED"):
+        value = os.environ.get(name)
+        if value:
+            return value
+    if sys.executable:
+        return sys.executable
+    return RUNTIME_FALLBACK_BIN
+
+
+def archive_path():
+    """The distribution archive appctl runs from (archive mode), or None."""
+    directory = os.path.dirname(script_path())
+    return directory if os.path.isfile(directory) else None
+
+
+def binary_path():
+    return archive_path() or script_path()
+
+
+def is_nightly():
+    return "nightly" in VERSION.lower() or re.search(r"-alpha-", VERSION) is not None
+
+
+def system_os():
+    import platform
+
+    parts = [platform.system(), platform.release(), platform.version(), platform.machine()]
+    return " ".join(part for part in parts if part) or sys.platform
+
+
+def info_data():
+    """Diagnostic details shown by ``cli info``; every format shares these keys."""
+    import platform
+
+    packages = packages_dir()
+    stored = None
+    try:
+        stored = Option.get(VERSION_OPTION) if Database.connection is not None else None
+    except Exception:
+        stored = None
+    shell = os.environ.get("SHELL") or os.environ.get("COMSPEC") or ""
+    return [
+        ("os", "OS", system_os()),
+        ("shell", "Shell", shell),
+        ("python_binary", "Python binary", runtime_binary()),
+        ("python_version", "Python version", platform.python_version()),
+        ("python_path", "Python path", sys.prefix),
+        ("appctl_binary", "AppCtl binary", binary_path()),
+        ("root_dir", "AppCtl root dir", root_dir()),
+        ("packages_dir", "AppCtl packages dir", packages if os.path.isdir(packages) else None),
+        ("cache_dir", "AppCtl cache dir", cache_dir()),
+        ("global_config", "AppCtl global config", Runtime.global_config_path
+         or global_config_path()),
+        ("project_config", "AppCtl project config", Runtime.project_config_path or ""),
+        ("appctl_version", "AppCtl version", VERSION),
+        ("appctl_build", "AppCtl build", "nightly" if is_nightly() else "stable"),
+        ("appctl_stored_version", "AppCtl stored version", stored or None),
+        ("strict_args_mode", "Strict args mode", bool(os.environ.get(STRICT_ENV))),
+    ]
+
+
+def cmd_cli_info(args, assoc):
+    fmt = assoc.get("format")
+    if fmt not in ("list", "json"):
+        error("Invalid format: %s. Supported formats are list, json." % fmt)
+    data = info_data()
+    if fmt == "json":
+        out(dump_json({key: value for key, _, value in data}))
+        return
+    width = max(len(key) for key, _, _ in data) + 1
+    for key, _, value in data:
+        out(("%s %s" % ((key + ":").ljust(width), "" if value is None else format_default(value)))
+            .rstrip())
+
+
+COMPLETION_SHELLS = ("bash", "zsh")
+FILE_MARKER = "<file>"
+
+
+def alias_description(definition):
+    if isinstance(definition, str):
+        return definition
+    if isinstance(definition, list):
+        return "Alias group: %s" % ", ".join(definition)
+    if isinstance(definition, dict):
+        target = definition.get("ssh") or definition.get("url") or definition.get("path")
+        if target:
+            return "Alias for %s" % target
+    return "Alias"
+
+
+def _option_suggestion(spec, description):
+    name = "--%s" % spec["name"]
+    if spec["type"] == "assoc" and not spec["value"]["optional"]:
+        name += "="
+    return name, description
+
+
+def completion_candidates(words, current):
+    """``(suggestion, description)`` pairs for the cursor position, sorted by suggestion."""
+    words = list(words)
+    is_alias = is_help = False
+    if words and words[0].startswith("@"):
+        words.pop(0)
+        is_alias = True
+    elif words and words[0] == "help":
+        words.pop(0)
+        is_help = True
+    node = ROOT
+    used = set()
+    for word in words:
+        parsed = parse_token(word)
+        if parsed is not None:
+            used.add(parsed[0])
+            continue
+        child = node.find_subcommand(word) if node.can_have_subcommands() else None
+        if child is not None and not is_command_disabled(child):
+            node = child
+        elif node.handler is None or is_help:
+            return []
+
+    suggestions = []
+    if node.handler is not None and not is_help:
+        for spec in node.params:
+            if spec["type"] == "positional" and spec["name"] == "file":
+                suggestions = [(FILE_MARKER, "A file path")]
+                break
+    if suggestions:
+        pass
+    elif node.can_have_subcommands() and not current.startswith("-"):
+        if node is ROOT and not is_alias and not is_help:
+            for name, definition in Runtime.aliases.items():
+                suggestions.append((name, alias_description(definition)))
+        for sub in node.enabled_subcommands():
+            suggestions.append((sub.name, sub.description))
+    elif node.handler is not None and not is_help:
+        for spec in node.params:
+            if spec["type"] in ("assoc", "flag") and spec["name"] not in used:
+                suggestions.append(_option_suggestion(spec, spec["token"]))
+        for spec in GLOBAL_PARAMS:
+            details = GLOBAL_SPEC[spec["name"]]
+            if details["hidden"] or details["deprecated"]:
+                continue
+            if spec["type"] in ("assoc", "flag") and spec["name"] not in used:
+                suggestions.append(_option_suggestion(
+                    spec, GLOBAL_DESCRIPTIONS.get(spec["name"], spec["token"])))
+    result = {}
+    for name, description in suggestions:
+        if name.startswith(current) and name not in result:
+            result[name] = " ".join(str(description or "").split())
+    return [(name, result[name]) for name in sorted(result, key=sort_key)]
+
+
+def cmd_cli_completions(args, assoc):
+    shell = assoc.get("shell")
+    if not isinstance(shell, str) or shell not in COMPLETION_SHELLS:
+        error("Invalid shell: %s. Supported shells are %s."
+              % (shell, ", ".join(COMPLETION_SHELLS)))
+    line = assoc.get("line") if isinstance(assoc.get("line"), str) else ""
+    point = assoc.get("point")
+    if isinstance(point, str) and point.strip().lstrip("-").isdigit():
+        line = line[:max(0, int(point))]
+    words = line.split()
+    if words:
+        words = words[1:]
+    current = ""
+    if words and not line[-1:].isspace():
+        current = words.pop()
+    for name, description in completion_candidates(words, current):
+        if shell == "zsh":
+            escaped = name.replace("\\", "\\\\").replace(":", "\\:")
+            out("%s:%s" % (escaped, description) if description else escaped)
+        else:
+            out(name)
+
+
+def cmd_cli_has_command(args, assoc):
+    node = ROOT
+    parts = " ".join(args).split()
+    if not parts:
+        raise AppctlExit(1)
+    for part in parts:
+        node = node.find_subcommand(part) if node else None
+        if node is None or is_command_disabled(node):
+            raise AppctlExit(1)
+    raise AppctlExit(0)
+
+
+def _dump(command):
+    data = {
+        "name": command.name,
+        "description": command.description,
+        "longdesc": command.longdesc,
+    }
+    if command.alias:
+        data["alias"] = command.alias
+    data["subcommands"] = [_dump(s) for s in sorted(command.enabled_subcommands(),
+                                                     key=lambda c: sort_key(c.name))]
+    if not data["subcommands"]:
+        data["synopsis"] = command.synopsis
+    return data
+
+
+def cmd_cli_cmd_dump(args, assoc):
+    data = _dump(ROOT)
+    data["name"] = PROG
+    out(json.dumps(data))
+
+
+def php_quote(value):
+    return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def php_var_export(value, indent=""):
+    """Render ``value`` the way PHP's ``var_export()`` does."""
+    if isinstance(value, (dict, list, tuple)):
+        items = value.items() if isinstance(value, dict) else enumerate(value)
+        lines = ["array ("]
+        for key, item in items:
+            key = str(key) if isinstance(key, int) and not isinstance(key, bool) else php_quote(key)
+            if isinstance(item, (dict, list, tuple)):
+                lines.append("%s  %s => " % (indent, key))
+                lines.append("%s  %s," % (indent, php_var_export(item, indent + "  ")))
+            else:
+                lines.append("%s  %s => %s," % (indent, key, php_var_export(item)))
+        lines.append(indent + ")")
+        return "\n".join(lines)
+    if value is None:
+        return "NULL"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    return php_quote(value)
+
+
+def param_spec(with_values=False):
+    spec = {}
+    for name in sorted(GLOBAL_SPEC):
+        param = GLOBAL_SPEC[name]
+        default = param["default"]
+        entry = {
+            "runtime": param["runtime"] or False,
+            "file": param["file"],
+            "default": list(default) if isinstance(default, list) else default,
+            "multiple": param["multiple"],
+            "deprecated": param["deprecated"],
+            "hidden": param["hidden"],
+            "desc": GLOBAL_DESCRIPTIONS.get(name, ""),
+        }
+        if with_values:
+            entry["current"] = Runtime.config.get(name)
+        spec[name] = entry
+    return spec
+
+
+def cmd_cli_param_dump(args, assoc):
+    fmt = assoc.get("format")
+    if fmt not in ("json", "var_export"):
+        error("Invalid format: %s. Supported formats are json, var_export." % fmt)
+    spec = param_spec(bool(assoc.get("with-values")))
+    if fmt == "var_export":
+        out(php_var_export(spec))
+    else:
+        out(json.dumps(spec))
+
+
+UPDATE_TYPES = ("major", "minor", "patch")
+CHECK_UPDATE_FORMATS = ("table", "csv", "json", "count", "yaml")
+CHECK_UPDATE_FIELDS = ("version", "update_type", "package_url")
+
+
+def update_filter(assoc_list):
+    """The active ``--patch``/``--minor``/``--major`` filter: the last one given wins."""
+    selected = None
+    for key, value in assoc_list:
+        if key in UPDATE_TYPES:
+            if value is False:
+                if selected == key:
+                    selected = None
+            else:
+                selected = key
+    return selected
+
+
+def update_type_str(filter_type):
+    return " %s " % filter_type if filter_type else " "
+
+
+def cmd_cli_check_update(args, assoc):
+    fmt = assoc.get("format") if isinstance(assoc.get("format"), str) else "table"
+    if fmt not in CHECK_UPDATE_FORMATS:
+        error("Invalid format: %s. Supported formats are %s."
+              % (fmt, ", ".join(CHECK_UPDATE_FORMATS)))
+    filter_type = update_filter(Runtime.assoc_list or list(assoc.items()))
+    updates = get_updates(filter_type)
+    if not updates and fmt == "table":
+        success("%s is at the latest%sversion." % (PROG, update_type_str(filter_type)))
+        return
+    render_items(dict(assoc, format=fmt), updates, list(CHECK_UPDATE_FIELDS), vertical=False)
+
+
+def cmd_cli_alias_list(args, assoc):
+    if assoc.get("format") not in ("yaml", "json"):
+        error("Invalid format: %s. Supported formats are yaml, json." % assoc.get("format"))
+    aliases = Runtime.aliases
+    if not aliases or assoc.get("format") == "json":
+        render_value(aliases, assoc.get("format"))
+        return
+    out("---")
+    for line in yaml_dump_lines(aliases):
+        out(line)
+
+
+def cmd_cli_alias_add(args, assoc):
+    success("Added '%s' alias." % args[0])
+
+
+def cmd_cli_alias_delete(args, assoc):
+    success("Deleted '%s' alias." % args[0])
+
+
+SAMPLE_SITES = [
+    {"name": "main", "url": "https://example.com", "type": "standard", "status": "active"},
+    {"name": "blog", "url": "https://blog.example.com", "type": "blog", "status": "active"},
+]
+
+
+def cmd_site_create(args, assoc):
+    name = args[0]
+    title = assoc.get("title") or name
+    if assoc.get("porcelain"):
+        out(name)
+        return
+    success("Created site '%s' (%s)." % (name, describe(type=assoc.get("type"), title=title)))
+
+
+def cmd_site_delete(args, assoc):
+    if not confirm("Are you sure you want to delete the '%s' site?" % args[0], assoc):
+        return
+    success("Deleted site '%s'." % args[0])
+
+
+def cmd_site_list(args, assoc):
+    render_items(assoc, SAMPLE_SITES, ["name", "url", "type", "status"])
+
+
+def cmd_site_update(args, assoc):
+    fields = {k: v for k, v in assoc.items()}
+    if not fields:
+        error("Need some fields to update.")
+    success("Updated site '%s' (%s)." % (args[0], describe(**fields)))
+
+
+def cmd_site_activate(args, assoc):
+    for name in args:
+        success("Site '%s' activated." % name)
+
+
+def cmd_site_deactivate(args, assoc):
+    for name in args:
+        success("Site '%s' deactivated." % name)
+
+
+def cmd_site_empty(args, assoc):
+    url = Runtime.config.get("url") or "default"
+    if not confirm("Are you sure you want to empty the site at '%s' of all posts, links, "
+                   "comments, and terms?" % url, assoc):
+        return
+    success("The site at '%s' was emptied." % url)
+
+
+def site_project_dir(site_name=None):
+    """The compose project directory of ``site_name`` (or of the current location)."""
+    if site_name:
+        base = Runtime.config.get("projects_path") or os.path.join(root_dir(), "sites")
+        directory = absolutize(os.path.join(str(base), site_name), os.getcwd())
+        if not os.path.isdir(directory):
+            error("Site '%s' does not exist." % site_name)
+        return directory
+    path = Runtime.config.get("path")
+    if isinstance(path, str) and path:
+        return absolutize(path, os.getcwd())
+    return find_project_dir()
+
+
+def cmd_site_config(args, assoc):
+    project_dir = site_project_dir(args[0] if args else None)
+    custom = assoc.get("custom-compose", Runtime.config.get("custom-compose"))
+    files = get_compose_files(project_dir, custom)
+    if not files:
+        error("No compose file found in '%s'." % project_dir)
+    if assoc.get("services"):
+        for service in get_services(files=files):
+            out(service)
+        return
+    for line in yaml_dump_lines(load_compose_config(files=files)):
+        out(line)
+
+
+def cmd_site_meta_get(args, assoc):
+    render_value("", assoc.get("format"))
+
+
+def cmd_site_meta_set(args, assoc):
+    success("Updated meta '%s' of site '%s' to '%s'." % (args[1], args[0], args[2]))
+
+
+def cmd_site_meta_delete(args, assoc):
+    success("Deleted meta '%s' of site '%s'." % (args[1], args[0]))
+
+
+def cmd_site_meta_list(args, assoc):
+    render_items(assoc, [], ["site", "meta_key", "meta_value"])
+
+
+CONFIG = {"DB_NAME": "app", "DB_USER": "root", "DB_HOST": "localhost", "DEBUG": "false"}
+
+
+def cmd_config_get(args, assoc):
+    if args[0] not in CONFIG:
+        error("The constant or variable '%s' is not defined in the config file." % args[0])
+    render_value(CONFIG[args[0]], assoc.get("format"))
+
+
+def cmd_config_set(args, assoc):
+    success("Updated the constant '%s' in the config file with the value '%s' (%s)."
+            % (args[0], args[1], describe(type=assoc.get("type"))))
+
+
+def cmd_config_delete(args, assoc):
+    if args[0] not in CONFIG:
+        error("The constant or variable '%s' is not defined in the config file." % args[0])
+    success("Deleted the constant '%s' from the config file." % args[0])
+
+
+def cmd_config_list(args, assoc):
+    items = [{"name": k, "value": v, "type": "constant"} for k, v in CONFIG.items()
+             if not args or any(f in k for f in args)]
+    render_items(assoc, items, ["name", "value", "type"])
+
+
+def cmd_config_path(args, assoc):
+    out(os.path.join(Runtime.config.get("path") or os.getcwd(), "app-config.php"))
+
+
+def cmd_config_create(args, assoc):
+    success("Generated config file (%s)." % describe(
+        dbname=assoc["dbname"], dbuser=assoc["dbuser"], dbhost=assoc.get("dbhost"),
+        dbprefix=assoc.get("dbprefix")))
+
+
+def cmd_cache_flush(args, assoc):
+    success("The cache was flushed.")
+
+
+def cmd_cache_get(args, assoc):
+    error("Object with key '%s' and group '%s' not found." % (args[0], args[1]))
+
+
+def cmd_cache_set(args, assoc):
+    success("Set object '%s' in group '%s' (%s)." % (args[0], args[2], describe(expiration=args[3])))
+
+
+def cmd_cache_delete(args, assoc):
+    success("Object deleted.")
+
+
+def cmd_db_create(args, assoc):
+    success("Database created.")
+
+
+def cmd_db_drop(args, assoc):
+    if not confirm("Are you sure you want to drop the '%s' database?" % CONFIG["DB_NAME"], assoc):
+        return
+    success("Database dropped.")
+
+
+def cmd_db_reset(args, assoc):
+    if not confirm("Are you sure you want to reset the '%s' database?" % CONFIG["DB_NAME"], assoc):
+        return
+    success("Database reset.")
+
+
+def cmd_db_export(args, assoc):
+    name = args[0] if args else "database.sql"
+    if assoc.get("porcelain"):
+        out(name)
+    else:
+        success("Exported to '%s'." % name)
+
+
+def cmd_db_import(args, assoc):
+    success("Imported from '%s'." % args[0])
+
+
+def cmd_db_query(args, assoc):
+    out(args[0] if args else "")
+
+
+def cmd_db_size(args, assoc):
+    render_items(assoc, [{"Name": "app", "Size": "0 B"}], ["Name", "Size"])
+
+
+OPTIONS = {"siteurl": "https://example.com", "blogname": "Example", "admin_email": "admin@example.com"}
+
+
+def cmd_option_get(args, assoc):
+    if args[0] not in OPTIONS:
+        error("Could not get '%s' option. Does it exist?" % args[0])
+    render_value(OPTIONS[args[0]], assoc.get("format"))
+
+
+def cmd_option_add(args, assoc):
+    success("Added '%s' option (%s)." % (args[0], describe(autoload=assoc.get("autoload"))))
+
+
+def cmd_option_update(args, assoc):
+    success("Updated '%s' option (%s)." % (args[0], describe(autoload=assoc.get("autoload"))))
+
+
+def cmd_option_delete(args, assoc):
+    for key in args:
+        success("Deleted '%s' option." % key)
+
+
+def cmd_option_list(args, assoc):
+    import fnmatch
+    pattern = assoc.get("search")
+    items = [{"option_name": k, "option_value": v} for k, v in OPTIONS.items()
+             if not pattern or fnmatch.fnmatch(k, pattern)]
+    render_items(assoc, items, ["option_name", "option_value"], prefix="option")
+
+
+SAMPLE_PLUGINS = [
+    {"name": "akismet", "status": "active", "update": "none", "version": "5.3"},
+    {"name": "hello", "status": "inactive", "update": "none", "version": "1.7.2"},
+]
+
+
+def _plugin_targets(args, assoc, verb):
+    if assoc.get("all"):
+        return [p["name"] for p in SAMPLE_PLUGINS]
+    if not args:
+        error("Please specify one or more plugins, or use --all.")
+    return args
+
+
+def cmd_plugin_install(args, assoc):
+    for name in args:
+        log("Installing %s%s" % (name, " (%s)" % assoc["version"] if assoc.get("version") else ""))
+        if assoc.get("activate"):
+            log("Activating '%s'..." % name)
+    success("Installed %d of %d plugins." % (len(args), len(args)))
+
+
+def cmd_plugin_activate(args, assoc):
+    targets = _plugin_targets(args, assoc, "activate")
+    for name in targets:
+        log("Plugin '%s' activated." % name)
+    success("Activated %d of %d plugins." % (len(targets), len(targets)))
+
+
+def cmd_plugin_deactivate(args, assoc):
+    targets = _plugin_targets(args, assoc, "deactivate")
+    for name in targets:
+        log("Plugin '%s' deactivated." % name)
+    success("Deactivated %d of %d plugins." % (len(targets), len(targets)))
+
+
+def cmd_plugin_delete(args, assoc):
+    targets = _plugin_targets(args, assoc, "delete")
+    success("Deleted %d of %d plugins." % (len(targets), len(targets)))
+
+
+def cmd_plugin_uninstall(args, assoc):
+    targets = _plugin_targets(args, assoc, "uninstall")
+    success("Uninstalled %d of %d plugins." % (len(targets), len(targets)))
+
+
+def cmd_plugin_update(args, assoc):
+    targets = _plugin_targets(args, assoc, "update")
+    if assoc.get("dry-run"):
+        log("Available plugin updates: none")
+        return
+    success("Plugins already updated: %d." % len(targets))
+
+
+def cmd_plugin_list(args, assoc):
+    items = SAMPLE_PLUGINS
+    if isinstance(assoc.get("status"), str):
+        items = [p for p in items if p["status"] == assoc["status"]]
+    render_items(assoc, items, ["name", "status", "update", "version"])
+
+
+def cmd_plugin_status(args, assoc):
+    if args:
+        for p in SAMPLE_PLUGINS:
+            if p["name"] == args[0]:
+                out("Plugin %s details:" % p["name"])
+                out("    Status: %s" % p["status"].capitalize())
+                out("    Version: %s" % p["version"])
+                return
+        error("The '%s' plugin could not be found." % args[0])
+    out("%d installed plugins:" % len(SAMPLE_PLUGINS))
+    for p in SAMPLE_PLUGINS:
+        out("  %s %s %s" % ("A" if p["status"] == "active" else "I", p["name"], p["version"]))
+
+
+SAMPLE_THEMES = [
+    {"name": "default", "status": "active", "update": "none", "version": "1.0"},
+    {"name": "classic", "status": "inactive", "update": "none", "version": "2.1"},
+]
+
+
+def cmd_theme_activate(args, assoc):
+    success("Switched to '%s' theme." % args[0])
+
+
+def cmd_theme_install(args, assoc):
+    for name in args:
+        log("Installing %s" % name)
+    success("Installed %d of %d themes." % (len(args), len(args)))
+
+
+def cmd_theme_delete(args, assoc):
+    names = [t["name"] for t in SAMPLE_THEMES] if assoc.get("all") else args
+    if not names:
+        error("Please specify one or more themes, or use --all.")
+    success("Deleted %d of %d themes." % (len(names), len(names)))
+
+
+def cmd_theme_list(args, assoc):
+    render_items(assoc, SAMPLE_THEMES, ["name", "status", "update", "version"])
+
+
+SAMPLE_POSTS = [
+    {"ID": 1, "post_title": "Hello world!", "post_type": "post", "post_status": "publish"},
+    {"ID": 2, "post_title": "Sample Page", "post_type": "page", "post_status": "publish"},
+]
+
+
+def cmd_post_create(args, assoc):
+    if assoc.get("porcelain"):
+        out("3")
+        return
+    fields = {k: v for k, v in assoc.items() if k != "porcelain"}
+    success("Created post 3 (%s)." % describe(**fields))
+
+
+def cmd_post_get(args, assoc):
+    for post in SAMPLE_POSTS:
+        if str(post["ID"]) == str(args[0]):
+            render_item(assoc, post, prefix="post")
+            return
+    error("Could not find the post with ID %s." % args[0])
+
+
+def cmd_post_list(args, assoc):
+    items = SAMPLE_POSTS
+    filters = {k: v for k, v in assoc.items() if k not in ("format", "field", "fields")}
+    for key, value in filters.items():
+        items = [p for p in items if str(p.get(key)) == str(value)]
+    render_items(assoc, items, ["ID", "post_title", "post_type", "post_status"], prefix="post")
+
+
+def cmd_post_update(args, assoc):
+    fields = {k: v for k, v in assoc.items()}
+    if not fields:
+        error("Need some fields to update.")
+    for post_id in args:
+        success("Updated post %s." % post_id)
+
+
+def cmd_post_delete(args, assoc):
+    for post_id in args:
+        if assoc.get("force"):
+            success("Deleted post %s." % post_id)
+        else:
+            success("Trashed post %s." % post_id)
+
+
+SAMPLE_USERS = [
+    {"ID": 1, "user_login": "admin", "user_email": "admin@example.com", "roles": "administrator"},
+]
+
+
+def cmd_user_create(args, assoc):
+    if assoc.get("porcelain"):
+        out("2")
+        return
+    success("Created user 2 (%s)." % describe(login=args[0], email=args[1], role=assoc.get("role")))
+    if not assoc.get("user_pass"):
+        import secrets
+        log("Password: %s" % secrets.token_urlsafe(18), sensitive=True)
+
+
+def cmd_user_delete(args, assoc):
+    if not assoc.get("reassign") and not confirm(
+            "--reassign parameter not passed. All associated posts will be deleted. Proceed?",
+            assoc):
+        return
+    for user in args:
+        success("Removed user %s%s." % (user, " (reassigned to %s)" % assoc["reassign"]
+                                         if assoc.get("reassign") else ""))
+
+
+def cmd_user_get(args, assoc):
+    for user in SAMPLE_USERS:
+        if str(args[0]) in (str(user["ID"]), user["user_login"], user["user_email"]):
+            render_item(assoc, user, prefix="user")
+            return
+    error("Invalid user ID, email or login: '%s'" % args[0])
+
+
+def cmd_user_list(args, assoc):
+    items = SAMPLE_USERS
+    if isinstance(assoc.get("role"), str):
+        items = [u for u in items if u["roles"] == assoc["role"]]
+    render_items(assoc, items, ["ID", "user_login", "user_email", "roles"], prefix="user")
+
+
+def cmd_user_update(args, assoc):
+    fields = {k: v for k, v in assoc.items() if k != "skip-email"}
+    if not fields:
+        error("Need some fields to update.")
+    for user in args:
+        success("Updated user %s." % user)
+
+
+# ---------------------------------------------------------------------------
+# External command execution
+# ---------------------------------------------------------------------------
+
+OBFUSCATION_MASK = "******"
+SIGNAL_WARNING = ("Spawned process returned exit code -1, which could be caused by a custom "
+                  "signal handling configuration (e.g. SIGCHLD being ignored).")
+
+
+def obfuscate_text(text, obfuscate=()):
+    """Replace every listed substring of ``text`` with ``******``."""
+    text = str(text)
+    for secret in sorted({str(s) for s in obfuscate or () if s not in (None, "")},
+                         key=len, reverse=True):
+        text = text.replace(secret, OBFUSCATION_MASK)
+    return text
+
+
+def command_string(command):
+    if isinstance(command, (list, tuple)):
+        return " ".join(escapeshellarg(part) for part in command)
+    return str(command)
+
+
+class ProcessRun:
+    """The result of running an external process."""
+
+    def __init__(self, command, stdout, stderr, return_code, run_time, cwd=None, env=None):
+        self.command = command
+        self.stdout = stdout
+        self.stderr = stderr
+        self.return_code = return_code
+        self.run_time = run_time
+        self.cwd = cwd
+        self.env = env
+
+    @property
+    def success(self):
+        return self.return_code == 0
+
+    def to_dict(self):
+        return {"command": self.command, "stdout": self.stdout, "stderr": self.stderr,
+                "return_code": self.return_code, "run_time": self.run_time,
+                "cwd": self.cwd}
+
+    def __repr__(self):
+        return "ProcessRun(return_code=%r, run_time=%.3f)" % (self.return_code, self.run_time)
+
+
+class ProcessError(RuntimeError):
+    """Raised by ``Process.run_check`` when a command fails."""
+
+    def __init__(self, message, result):
+        super().__init__(message)
+        self.result = result
+
+
+class Process:
+    """Run a shell command (a string) or an argument list and capture its output."""
+
+    def __init__(self, command, cwd=None, env=None, obfuscate=()):
+        self.command = command
+        self.cwd = cwd
+        self.env = env
+        self.obfuscate = tuple(obfuscate or ())
+
+    @classmethod
+    def create(cls, command, cwd=None, env=None, obfuscate=()):
+        return cls(command, cwd, env, obfuscate)
+
+    def display(self):
+        return obfuscate_text(command_string(self.command), self.obfuscate)
+
+    def run(self):
+        """Run the command and return a ``ProcessRun`` with outputs and runtime metadata."""
+        import subprocess
+
+        debug("Running command: %s" % self.display(), "process")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        start = time.time()
+        try:
+            proc = subprocess.run(self.command, shell=isinstance(self.command, str),
+                                  cwd=self.cwd, env=self.env, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout = proc.stdout.decode("utf-8", "replace")
+            stderr = proc.stderr.decode("utf-8", "replace")
+            code = proc.returncode
+        except OSError as exc:
+            stdout, stderr, code = "", str(exc.strerror or exc), 127
+        run_time = time.time() - start
+        result = ProcessRun(command_string(self.command), stdout, stderr, code, run_time,
+                            self.cwd, self.env)
+        if stdout:
+            debug("STDOUT: %s" % obfuscate_text(stdout.rstrip("\n"), self.obfuscate), "process")
+        if stderr:
+            debug("STDERR: %s" % obfuscate_text(stderr.rstrip("\n"), self.obfuscate), "process")
+        debug("Return code: %d" % code, "process")
+        if code == -1:
+            warning(SIGNAL_WARNING)
+        return result
+
+    def run_check(self):
+        """Run the command; raise ``ProcessError`` when it does not succeed."""
+        result = self.run()
+        if result.return_code != 0:
+            raise ProcessError("Failed to execute `%s` (exit code %d): %s"
+                               % (self.display(), result.return_code,
+                                  obfuscate_text(result.stderr.strip(), self.obfuscate)),
+                               result)
+        return result
+
+
+def run_detailed(command, cwd=None, env=None, obfuscate=()):
+    """Run ``command`` and return the full ``ProcessRun``."""
+    return Process.create(command, cwd, env, obfuscate).run()
+
+
+def run_success(command, cwd=None, env=None, obfuscate=()):
+    """Run ``command`` and return whether it exited successfully."""
+    return run_detailed(command, cwd, env, obfuscate).return_code == 0
+
+
+def launch(command, exit_on_error=True, return_detailed=False, obfuscate=(), cwd=None, env=None):
+    """Run an external command.
+
+    Returns the ``ProcessRun`` when ``return_detailed`` is set, the exit code
+    otherwise. With ``exit_on_error`` a non-zero exit code terminates appctl.
+    """
+    result = run_detailed(command, cwd, env, obfuscate)
+    if exit_on_error and result.return_code != 0:
+        raise AppctlExit(result.return_code)
+    return result if return_detailed else result.return_code
+
+
+def script_path():
+    return os.path.abspath(__file__)
+
+
+def runtime_tokens(runtime):
+    """Turn a runtime config dict back into ``--flag`` tokens."""
+    tokens = []
+    for key, value in (runtime or {}).items():
+        if value is True:
+            tokens.append("--%s" % key)
+        elif value is False:
+            tokens.append("--no-%s" % key)
+        elif value is not None:
+            tokens.append("--%s=%s" % (key, value))
+    return tokens
+
+
+def self_command(command, args=(), assoc_args=None, runtime_args=True):
+    """Build the argument list re-invoking appctl with the current runtime configuration."""
+    import shlex
+
+    parts = shlex.split(command) if isinstance(command, str) else list(command)
+    parts += [str(arg) for arg in args]
+    for key, value in (assoc_args or {}).items():
+        if value is True:
+            parts.append("--%s" % key)
+        elif value is False:
+            parts.append("--no-%s" % key)
+        else:
+            parts.append("--%s=%s" % (key, value))
+    prefix = runtime_tokens(Runtime.runtime_args) if runtime_args else []
+    return [sys.executable, script_path()] + prefix + parts
+
+
+def self_env():
+    env = dict(os.environ)
+    config_path = Runtime.global_config_path or global_config_path()
+    if config_path:
+        env["APPCTL_CONFIG_PATH"] = config_path
+    return env
+
+
+def launch_self(command, args=(), assoc_args=None, exit_on_error=True, return_detailed=False,
+                runtime_args=True, obfuscate=()):
+    """Re-dispatch an appctl command in a child process."""
+    return launch(self_command(command, args, assoc_args, runtime_args), exit_on_error,
+                  return_detailed, obfuscate, env=self_env())
+
+
+def runcommand(command, return_="stdout", parse=None, exit_error=True, obfuscate=()):
+    """Run an appctl command in a child process and return its result.
+
+    ``return_`` is one of ``all`` (the ProcessRun), ``stdout``, ``stderr``,
+    ``return_code`` or a falsy value (output is passed through; exit code returned).
+    ``parse="json"`` deserializes STDOUT as JSON.
+    """
+    result = launch_self(command, exit_on_error=False, return_detailed=True, obfuscate=obfuscate)
+    if exit_error and result.return_code != 0:
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+        raise AppctlExit(result.return_code)
+    stdout = result.stdout
+    if parse == "json":
+        try:
+            stdout = json.loads(stdout)
+        except ValueError:
+            stdout = None
+        result.stdout = stdout
+    if return_ == "all":
+        return result
+    if return_ in ("stdout", True):
+        return stdout.rstrip("\n") if isinstance(stdout, str) else stdout
+    if return_ == "stderr":
+        return result.stderr.rstrip("\n")
+    if return_ == "return_code":
+        return result.return_code
+    if isinstance(stdout, str) and stdout:
+        sys.stdout.write(stdout)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    return result.return_code
+
+
+# ---------------------------------------------------------------------------
+# Containers, compose projects, volumes and networks
+# ---------------------------------------------------------------------------
+
+DOCKER_BIN = "docker"
+RUNTIME_FALLBACK_BIN = "python3"
+DOCKER_COMPOSE_BIN = "docker-compose"
+RUNTIME_MISSING_MESSAGE = ("Container runtime is not installed. Please install the container "
+                           "runtime to run AppCtl.")
+LABEL_VENDOR = "org.label-schema.vendor=%s" % PROG
+LABEL_PROJECT = "io.%s.project" % PROG
+COMPOSE_BASE_FILES = ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml")
+COMPOSE_OVERRIDE_FILES = ("docker-compose.override.yml", "docker-compose.override.yaml",
+                          "compose.override.yml", "compose.override.yaml")
+# Directory (inside a project) holding extra user-supplied compose overrides.
+COMPOSE_CUSTOM_DIR = "user-docker-compose"
+COMPOSE_EXTENSIONS = (".yml", ".yaml")
+COMPOSE_TOP_LEVEL_KEYS = ("services", "version", "networks", "volumes", "configs", "secrets",
+                          "name", "include")
+# Service keys whose sequences replace (rather than extend) the base value when merged.
+COMPOSE_REPLACE_KEYS = ("command", "entrypoint", "test")
+CONTAINER_RUNNING = "running"
+CONTAINER_EXITED = "exited"
+
+
+class DockerError(RuntimeError):
+    """Raised when a container runtime operation fails."""
+
+
+def is_truthy(value):
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on", "y")
+    return bool(value)
+
+
+def is_darwin(platform=None):
+    if platform is not None:
+        return platform == "darwin"
+    if sys.platform == "darwin":
+        return True
+    import platform as platform_module
+    return platform_module.system() == "Darwin"
+
+
+def get_docker_style_prefix(name):
+    """Return the deterministic, compose-safe resource prefix for project ``name``."""
+    return re.sub(r"[^a-z0-9_]", "", str(name).lower())
+
+
+def runtime_installed():
+    import shutil
+
+    return shutil.which(DOCKER_BIN) is not None
+
+
+def ensure_runtime():
+    if not runtime_installed():
+        error(RUNTIME_MISSING_MESSAGE)
+
+
+def compose_binary():
+    """The compose CLI: the ``docker compose`` plugin, else standalone ``docker-compose``."""
+    import shutil
+
+    if shutil.which(DOCKER_BIN):
+        return [DOCKER_BIN, "compose"]
+    if shutil.which(DOCKER_COMPOSE_BIN):
+        return [DOCKER_COMPOSE_BIN]
+    return [DOCKER_BIN, "compose"]
+
+
+def docker_run(args, cwd=None, obfuscate=()):
+    """Run ``docker <args>`` and return the ``ProcessRun``."""
+    return run_detailed([DOCKER_BIN] + list(args), cwd=cwd, obfuscate=obfuscate)
+
+
+# -- compose files ------------------------------------------------------------
+
+def read_compose_file(path):
+    """Return the parsed compose mapping in ``path`` or None when it is not a compose file."""
+    if not os.path.isfile(path) or not path.lower().endswith(COMPOSE_EXTENSIONS):
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = yaml_load(handle.read())
+    except (OSError, UnicodeDecodeError, YamlError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if not any(key in COMPOSE_TOP_LEVEL_KEYS or str(key).startswith("x-") for key in data):
+        return None
+    if "services" in data and not isinstance(data["services"], (dict, type(None))):
+        return None
+    return data
+
+
+def is_compose_file(path):
+    return read_compose_file(path) is not None
+
+
+def find_base_compose_file(directory):
+    for name in COMPOSE_BASE_FILES:
+        candidate = os.path.join(directory, name)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def find_project_dir(start=None):
+    """The directory holding the base compose file, searching upward from ``start``."""
+    directory = os.path.abspath(start or os.getcwd())
+    current = directory
+    while True:
+        if find_base_compose_file(current):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return directory
+        current = parent
+
+
+def discover_compose_overrides(project_dir):
+    """Optional overrides found in the project layout, in a deterministic order."""
+    found = [os.path.join(project_dir, name) for name in COMPOSE_OVERRIDE_FILES]
+    custom_dir = os.path.join(project_dir, COMPOSE_CUSTOM_DIR)
+    if os.path.isdir(custom_dir):
+        found += [os.path.join(custom_dir, name) for name in sorted(os.listdir(custom_dir))]
+    return [path for path in found if is_compose_file(path)]
+
+
+def resolve_custom_compose(custom, project_dir):
+    path = os.path.expanduser(str(custom))
+    if os.path.isabs(path):
+        return path if os.path.exists(path) else None
+    for base in (os.getcwd(), project_dir):
+        candidate = os.path.normpath(os.path.join(base, path))
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def get_compose_files(project_dir=None, custom_compose=None):
+    """Return the compose files of a project in merge order (base first).
+
+    A configured ``custom-compose`` override replaces discovered overrides; when it
+    does not exist a warning is shown and the available files are used instead.
+    """
+    project_dir = os.path.abspath(project_dir or os.getcwd())
+    if custom_compose is None:
+        custom_compose = Runtime.config.get("custom-compose")
+    files = []
+    base = find_base_compose_file(project_dir)
+    if base and is_compose_file(base):
+        files.append(base)
+    if custom_compose not in (None, "", True, False):
+        custom = resolve_custom_compose(custom_compose, project_dir)
+        if custom is None:
+            warning("File: %s does not exist. Falling back to default compose file."
+                    % custom_compose)
+        elif is_compose_file(custom):
+            if custom not in files:
+                files.append(custom)
+            return files
+        else:
+            debug("Ignoring '%s': not a compose file." % custom, "compose")
+    for path in discover_compose_overrides(project_dir):
+        if path not in files:
+            files.append(path)
+    return files
+
+
+def compose_file_args(files):
+    args = []
+    for path in files:
+        args += ["--file", path]
+    return args
+
+
+def merge_compose(base, override, key=None):
+    """Merge compose definitions: mappings recursively, sequences extended."""
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+        for name, value in override.items():
+            merged[name] = merge_compose(base[name], value, name) if name in base else value
+        return merged
+    if (isinstance(base, list) and isinstance(override, list)
+            and key not in COMPOSE_REPLACE_KEYS):
+        merged = list(base)
+        merged += [item for item in override if item not in merged]
+        return merged
+    return override
+
+
+def load_compose_config(project_dir=None, custom_compose=None, files=None):
+    """Return the merged compose definition of a project."""
+    if files is None:
+        files = get_compose_files(project_dir, custom_compose)
+    config = {}
+    for path in files:
+        data = read_compose_file(path)
+        if data is not None:
+            config = merge_compose(config, data)
+    return config
+
+
+def get_services(project_dir=None, custom_compose=None, files=None):
+    """Service names in the order they appear in the merged compose configuration."""
+    services = load_compose_config(project_dir, custom_compose, files).get("services")
+    return [str(name) for name in services] if isinstance(services, dict) else []
+
+
+def service_exists(service, project_dir=None, custom_compose=None):
+    return str(service) in get_services(project_dir, custom_compose)
+
+
+def compose_command(project_dir=None, files=None, project_name=None):
+    project_dir = os.path.abspath(project_dir or os.getcwd())
+    if files is None:
+        files = get_compose_files(project_dir)
+    command = compose_binary() + compose_file_args(files)
+    if project_name:
+        command += ["--project-name", get_docker_style_prefix(project_name)]
+    return command
+
+
+# -- compose operations ---------------------------------------------------------
+
+def docker_compose_up(project_dir=None, services=(), project_name=None):
+    """Bring up the project (or only ``services``) in detached mode."""
+    project_dir = os.path.abspath(project_dir or os.getcwd())
+    command = compose_command(project_dir, project_name=project_name) + ["up", "-d"]
+    command += [str(service) for service in services or ()]
+    return run_detailed(command, cwd=project_dir).return_code == 0
+
+
+def docker_compose_down(project_dir=None, project_name=None):
+    """Remove the project's containers, networks and volumes."""
+    project_dir = os.path.abspath(project_dir or os.getcwd())
+    command = compose_command(project_dir, project_name=project_name)
+    command += ["down", "--volumes", "--remove-orphans"]
+    return run_detailed(command, cwd=project_dir).return_code == 0
+
+
+def docker_compose_exec(command, service, shell="sh", user="", project_dir=None,
+                        shell_wrapper=False, exit_on_error=False, obfuscate=(),
+                        echo_stdout=False, echo_stderr=False, project_name=None):
+    """Execute ``command`` inside the running container of ``service``.
+
+    TTY allocation is disabled when the ``skip-tty`` config value is truthy.
+    """
+    import shlex
+
+    project_dir = os.path.abspath(project_dir or os.getcwd())
+    args = compose_command(project_dir, project_name=project_name) + ["exec"]
+    if is_truthy(Runtime.config.get("skip-tty")):
+        args.append("-T")
+    if user:
+        args += ["--user", str(user)]
+    args.append(str(service))
+    if shell_wrapper:
+        text = command if isinstance(command, str) else command_string(command)
+        args += [shell or "sh", "-c", text]
+    elif isinstance(command, str):
+        args += shlex.split(command)
+    else:
+        args += [str(part) for part in command]
+    result = run_detailed(args, cwd=project_dir, obfuscate=obfuscate)
+    if echo_stdout and result.stdout:
+        sys.stdout.write(obfuscate_text(result.stdout, obfuscate))
+    if echo_stderr and result.stderr:
+        sys.stderr.write(obfuscate_text(result.stderr, obfuscate))
+    if exit_on_error and result.return_code != 0:
+        raise AppctlExit(result.return_code)
+    return result
+
+
+# -- containers -------------------------------------------------------------------
+
+def container_status(container):
+    """Return ``running``, ``exited`` or False when the container does not exist."""
+    ensure_runtime()
+    result = docker_run(["inspect", "--type", "container", "--format", "{{.State.Running}}",
+                         str(container)])
+    if result.return_code != 0:
+        return False
+    return CONTAINER_RUNNING if result.stdout.strip() == "true" else CONTAINER_EXITED
+
+
+def start_container(container):
+    return docker_run(["start", str(container)]).return_code == 0
+
+
+def stop_container(container):
+    return docker_run(["stop", str(container)]).return_code == 0
+
+
+def restart_container(container):
+    return docker_run(["restart", str(container)]).return_code == 0
+
+
+def boot_container(container, command=None, project_dir=None, services=()):
+    """Make sure ``container`` runs: start it when exited, create it when missing.
+
+    ``command`` (a shell string or argument list) creates the container; without it
+    the project's compose definition is brought up.
+    """
+    status = container_status(container)
+    if status == CONTAINER_EXITED:
+        return start_container(container)
+    if status == CONTAINER_RUNNING:
+        return True
+    if command:
+        return run_detailed(command, cwd=project_dir).return_code == 0
+    return docker_compose_up(project_dir, services)
+
+
+# -- volumes ------------------------------------------------------------------------
+
+def get_volume_name(prefix, name):
+    return "%s_%s" % (get_docker_style_prefix(prefix), name)
+
+
+def existing_volumes():
+    result = docker_run(["volume", "ls", "--format", "{{.Name}}"])
+    return set(result.stdout.split()) if result.return_code == 0 else set()
+
+
+def volume_mountpoint(volume):
+    result = docker_run(["volume", "inspect", "--format", "{{ .Mountpoint }}", volume])
+    return result.stdout.strip() if result.return_code == 0 else ""
+
+
+def _symlink_volume(target, link):
+    try:
+        if os.path.islink(link):
+            os.unlink(link)
+        elif os.path.exists(link):
+            return
+        parent = os.path.dirname(link)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        os.symlink(target, link)
+    except OSError as exc:
+        warning("Unable to link volume '%s' to '%s': %s" % (target, link, exc.strerror or exc))
+
+
+def create_volumes(prefix, volumes, update_to_docker=True, platform=None):
+    """Create the project's persistent volumes, labelled as belonging to the tool.
+
+    Each spec is a dict with ``name``, ``path`` and ``container_path`` plus the optional
+    ``skip_volume``, ``skip_darwin`` and ``skip_linux`` flags. Returns the created names.
+    """
+    project = get_docker_style_prefix(prefix)
+    existing = existing_volumes() if update_to_docker else set()
+    created = []
+    for volume in volumes:
+        if volume.get("skip_volume") is True:
+            continue
+        name = get_volume_name(project, volume["name"])
+        path = volume.get("path")
+        if is_darwin(platform):
+            if path and not volume.get("skip_darwin"):
+                os.makedirs(path, exist_ok=True)
+        elif path:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        if not update_to_docker or name in existing:
+            continue
+        result = docker_run(["volume", "create", "--label", LABEL_VENDOR,
+                             "--label", "%s=%s" % (LABEL_PROJECT, project), name])
+        if result.return_code != 0:
+            raise DockerError("Unable to create volume '%s'." % name)
+        existing.add(name)
+        created.append(name)
+        if path and not is_darwin(platform) and not volume.get("skip_linux"):
+            mountpoint = volume_mountpoint(name)
+            if mountpoint:
+                _symlink_volume(mountpoint, path)
+    return created
+
+
+def get_mounting_volume_array(volumes, platform=None):
+    """Compose ``volumes:`` entries for the current platform.
+
+    Bind mounts of the host path are used on macOS, named volumes elsewhere.
+    """
+    mounts = []
+    for volume in volumes:
+        if is_darwin(platform):
+            if volume.get("skip_darwin"):
+                continue
+            mounts.append("%s:%s" % (volume["path"], volume["container_path"]))
+        else:
+            if volume.get("skip_linux"):
+                continue
+            mounts.append("%s:%s" % (volume["name"], volume["container_path"]))
+    return mounts
+
+
+# -- networks -----------------------------------------------------------------------
+
+def create_network(name):
+    """Create the project network, labelled as belonging to the tool."""
+    result = docker_run(["network", "create", "--label", LABEL_VENDOR,
+                         "--label", "%s=%s" % (LABEL_PROJECT, get_docker_style_prefix(name)),
+                         str(name)])
+    return result.return_code == 0
+
+
+def connect_site_network_to(name, container):
+    """Connect the project network ``name`` to ``container``."""
+    result = docker_run(["network", "connect", str(name), str(container)])
+    if result.return_code != 0:
+        raise DockerError("There was some error connecting to %s." % container)
+    success("Project network '%s' connected to %s." % (name, container))
+    return True
+
+
+def disconnect_site_network_from(name, container):
+    """Disconnect the project network ``name`` from ``container`` (never fatal)."""
+    result = docker_run(["network", "disconnect", str(name), str(container)])
+    if result.return_code == 0:
+        log("[%s] Disconnected from Docker network of %s" % (name, container))
+        return True
+    warning("Error in disconnecting from Docker network of %s" % container)
+    return False
+
+
+def rm_network(name):
+    return docker_run(["network", "rm", str(name)]).return_code == 0
+
+
+def network_exists(name):
+    return docker_run(["network", "inspect", str(name)]).return_code == 0
+
+
+# ---------------------------------------------------------------------------
+# File cache
+# ---------------------------------------------------------------------------
+
+CACHE_TTL = 15552000           # 6 months
+CACHE_MAX_SIZE = 314572800     # 300 MB
+CACHE_KEY_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
+CACHE_SEGMENT_MAX = 120
+
+
+def cache_dir():
+    directory = os.environ.get("APPCTL_CACHE_DIR")
+    if not directory:
+        directory = os.path.join(root_dir(), ".cache")
+    return directory
+
+
+def _env_int(name, default):
+    value = os.environ.get(name, "").strip()
+    try:
+        return int(value) if value else default
+    except ValueError:
+        return default
+
+
+def sanitize_cache_segment(segment):
+    clean = CACHE_KEY_UNSAFE_RE.sub("-", segment)
+    if clean in ("", ".", ".."):
+        clean = "-"
+    if clean != segment or len(clean) > CACHE_SEGMENT_MAX:
+        import hashlib
+        digest = hashlib.sha1(segment.encode("utf-8", "surrogateescape")).hexdigest()[:10]
+        clean = "%s-%s" % (clean[:CACHE_SEGMENT_MAX], digest)
+    return clean
+
+
+def sanitize_cache_key(key):
+    """Map ``key`` deterministically to a filesystem-safe relative path."""
+    import urllib.parse
+
+    key = str(key).strip()
+    parts = None
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", key):
+        url = urllib.parse.urlsplit(key)
+        host = url.hostname or ""
+        try:
+            port = url.port
+        except ValueError:
+            port = None
+        location = "%s-%s" % (url.scheme, host) + ("-%d" % port if port else "")
+        path = [part for part in url.path.split("/") if part]
+        if url.query:
+            path = (path or [""])
+            path[-1] = "%s-%s" % (path[-1], url.query) if path[-1] else url.query
+        parts = ["misc", location] + path
+    else:
+        parts = [part for part in key.replace("\\", "/").split("/") if part]
+    if not parts:
+        parts = [""]
+    return "/".join(sanitize_cache_segment(part) for part in parts)
+
+
+class FileCache:
+    """A filesystem cache with a TTL and a maximum total size."""
+
+    def __init__(self, directory=None, ttl=None, max_size=None):
+        self.root = os.path.abspath(directory or cache_dir())
+        self.ttl = CACHE_TTL if ttl is None else int(ttl)
+        self.max_size = CACHE_MAX_SIZE if max_size is None else int(max_size)
+        self.enabled = self.ensure_dir_exists(self.root)
+
+    @staticmethod
+    def ensure_dir_exists(directory):
+        if os.path.isdir(directory):
+            return True
+        try:
+            os.makedirs(directory, exist_ok=True)
+        except OSError as exc:
+            warning("Failed to create directory '%s': %s." % (directory, exc.strerror or exc))
+            return False
+        return True
+
+    def get_root(self):
+        return self.root
+
+    def filename(self, key):
+        return os.path.join(self.root, *sanitize_cache_key(key).split("/"))
+
+    def is_expired(self, path, now=None):
+        if self.ttl <= 0:
+            return False
+        now = time.time() if now is None else now
+        return os.path.getmtime(path) + self.ttl < now
+
+    def has(self, key):
+        """Return the entry's path when present and fresh, False otherwise."""
+        if not self.enabled:
+            return False
+        path = self.filename(key)
+        if not os.path.isfile(path):
+            return False
+        try:
+            if self.is_expired(path):
+                os.unlink(path)
+                return False
+        except OSError:
+            return False
+        return path
+
+    def read_bytes(self, key):
+        path = self.has(key)
+        if not path:
+            return False
+        try:
+            with open(path, "rb") as handle:
+                return handle.read()
+        except OSError:
+            return False
+
+    def read(self, key):
+        """Return the cached content, or False on a cache miss."""
+        data = self.read_bytes(key)
+        if data is False:
+            return False
+        return data.decode("utf-8", "surrogateescape")
+
+    def _prepare(self, key):
+        if not self.enabled:
+            return False
+        path = self.filename(key)
+        if not self.ensure_dir_exists(os.path.dirname(path)):
+            return False
+        return path
+
+    def _touch(self, path):
+        now = time.time()
+        os.utime(path, (now, now))
+
+    def write(self, key, contents):
+        """Store ``contents`` under ``key``. Returns the entry's path or False."""
+        path = self._prepare(key)
+        if not path:
+            return False
+        if isinstance(contents, str):
+            contents = contents.encode("utf-8", "surrogateescape")
+        try:
+            with open(path, "wb") as handle:
+                handle.write(contents)
+            self._touch(path)
+        except OSError:
+            return False
+        return path
+
+    def import_file(self, key, source):
+        """Copy the file ``source`` into the cache under ``key``."""
+        import shutil
+
+        path = self._prepare(key)
+        if not path or not os.path.isfile(source):
+            return False
+        try:
+            shutil.copyfile(source, path)
+            self._touch(path)
+        except OSError:
+            return False
+        return path
+
+    def export(self, key, target):
+        """Copy the cached entry to ``target``. Returns True on success."""
+        import shutil
+
+        path = self.has(key)
+        if not path:
+            return False
+        try:
+            directory = os.path.dirname(os.path.abspath(target))
+            os.makedirs(directory, exist_ok=True)
+            shutil.copyfile(path, target)
+        except OSError:
+            return False
+        return True
+
+    def remove(self, key):
+        if not self.enabled:
+            return False
+        path = self.filename(key)
+        try:
+            os.unlink(path)
+        except OSError:
+            return False
+        return True
+
+    def entries(self):
+        """Return ``(path, size, mtime)`` for every cache file, sorted by path."""
+        found = []
+        if not self.enabled or not os.path.isdir(self.root):
+            return found
+        for directory, dirs, files in os.walk(self.root):
+            dirs.sort()
+            for name in sorted(files):
+                path = os.path.join(directory, name)
+                try:
+                    stat = os.lstat(path)
+                except OSError:
+                    continue
+                found.append((path, stat.st_size, stat.st_mtime))
+        return found
+
+    def _remove_empty_dirs(self):
+        for directory, _, _ in sorted(os.walk(self.root, topdown=False), reverse=True):
+            if directory == self.root:
+                continue
+            try:
+                os.rmdir(directory)
+            except OSError:
+                pass
+
+    def clean(self):
+        """Remove expired entries, then evict least recently written ones over the size limit."""
+        if not self.enabled:
+            return False
+        now = time.time()
+        remaining = []
+        for path, size, mtime in self.entries():
+            if self.ttl > 0 and mtime + self.ttl < now:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    remaining.append((path, size, mtime))
+            else:
+                remaining.append((path, size, mtime))
+        if self.max_size > 0:
+            total = sum(size for _, size, _ in remaining)
+            # Oldest first; ties broken by path so eviction order is deterministic.
+            for path, size, _ in sorted(remaining, key=lambda e: (e[2], e[0])):
+                if total <= self.max_size:
+                    break
+                try:
+                    os.unlink(path)
+                    total -= size
+                except OSError:
+                    pass
+        self._remove_empty_dirs()
+        return True
+
+    def clear(self):
+        """Remove every cache entry."""
+        if not self.enabled:
+            return False
+        for path, _, _ in self.entries():
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        self._remove_empty_dirs()
+        return True
+
+
+def get_cache():
+    """Return the session cache, creating it (and its directory) on first use."""
+    if Runtime.cache is None:
+        Runtime.cache = FileCache(cache_dir(), _env_int("APPCTL_CACHE_EXPIRY", CACHE_TTL),
+                                  _env_int("APPCTL_CACHE_MAX_SIZE", CACHE_MAX_SIZE))
+    return Runtime.cache
+
+
+# ---------------------------------------------------------------------------
+# Persistent state database
+# ---------------------------------------------------------------------------
+
+DB_FILENAME = "%s.sqlite" % PROG
+DB_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+DB_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS options (
+        key VARCHAR NOT NULL,
+        value VARCHAR NOT NULL,
+        modified_on VARCHAR NOT NULL,
+        PRIMARY KEY (key)
+    )""",
+    """CREATE TABLE IF NOT EXISTS migrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        migration VARCHAR NOT NULL,
+        type VARCHAR NOT NULL,
+        timestamp VARCHAR NOT NULL,
+        UNIQUE (migration, type)
+    )""",
+    """CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name VARCHAR NOT NULL UNIQUE,
+        path VARCHAR NOT NULL DEFAULT '',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_on VARCHAR NOT NULL DEFAULT ''
+    )""",
+)
+
+
+def db_dir():
+    return os.path.join(root_dir(), "db")
+
+
+def db_path():
+    return os.path.join(db_dir(), DB_FILENAME)
+
+
+def db_timestamp(moment=None):
+    """Return ``moment`` (default: now) as an ISO 8601 UTC timestamp."""
+    if moment is None:
+        moment = datetime.datetime.now(datetime.timezone.utc)
+    elif moment.tzinfo is not None:
+        moment = moment.astimezone(datetime.timezone.utc)
+    return moment.strftime(DB_TIMESTAMP_FORMAT)
+
+
+def db_string(value):
+    """Convert ``value`` to the string form every stored value takes."""
+    if value is None:
+        return ""
+    if value is True:
+        return "1"
+    if value is False:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return str(value)
+
+
+class Database:
+    """The SQLite store kept under ``<APPCTL_ROOT_DIR>/db/``."""
+
+    connection = None
+    path = None
+
+    @classmethod
+    def get(cls):
+        """Return the open connection, creating the store on first access."""
+        path = db_path()
+        if cls.connection is not None and cls.path == path:
+            return cls.connection
+        cls.close()
+        import sqlite3
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            connection = sqlite3.connect(path, timeout=30, isolation_level=None)
+        except (OSError, sqlite3.Error) as exc:
+            error("Unable to initialize connection to %s sqlite database: %s"
+                  % (PROG, getattr(exc, "strerror", None) or exc))
+        try:
+            for statement in DB_SCHEMA:
+                connection.execute(statement)
+        except sqlite3.Error as exc:
+            connection.close()
+            error("Encountered Error while creating table: %s" % exc)
+        cls.connection, cls.path = connection, path
+        return connection
+
+    @classmethod
+    def close(cls):
+        if cls.connection is not None:
+            try:
+                cls.connection.close()
+            except Exception:
+                pass
+        cls.connection = cls.path = None
+
+    @classmethod
+    def query(cls, sql, params=()):
+        """Run a parameterized statement and return all resulting rows."""
+        return cls.get().execute(sql, tuple(params)).fetchall()
+
+
+class Option:
+    """String key-value settings that persist across invocations."""
+
+    @staticmethod
+    def get(key):
+        """Return the stored string for ``key``, or False when it is missing."""
+        rows = Database.query("SELECT value FROM options WHERE key = ?", (db_string(key),))
+        return rows[0][0] if rows else False
+
+    @staticmethod
+    def set(key, value):
+        """Insert or update ``key`` (upsert)."""
+        Database.query(
+            "INSERT INTO options (key, value, modified_on) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+            "modified_on = excluded.modified_on",
+            (db_string(key), db_string(value), db_timestamp()))
+        return True
+
+    @staticmethod
+    def delete(key):
+        Database.query("DELETE FROM options WHERE key = ?", (db_string(key),))
+        return True
+
+    @staticmethod
+    def all():
+        """Return every option, ordered by key."""
+        rows = Database.query("SELECT key, value, modified_on FROM options ORDER BY key")
+        return [{"key": k, "value": v, "modified_on": m} for k, v, m in rows]
+
+
+class Migration:
+    """History of the schema migrations that have been applied."""
+
+    @staticmethod
+    def get_migrations(migration_type=None):
+        """Return applied migration names (optionally of one type), in a stable order."""
+        if migration_type is None:
+            rows = Database.query("SELECT migration FROM migrations ORDER BY migration, type, id")
+        else:
+            rows = Database.query("SELECT migration FROM migrations WHERE type = ? "
+                                  "ORDER BY migration, id", (db_string(migration_type),))
+        return [row[0] for row in rows]
+
+    @staticmethod
+    def all():
+        rows = Database.query("SELECT migration, type, timestamp FROM migrations "
+                              "ORDER BY migration, type, id")
+        return [{"migration": m, "type": t, "timestamp": s} for m, t, s in rows]
+
+    @staticmethod
+    def is_applied(migration, migration_type):
+        rows = Database.query("SELECT 1 FROM migrations WHERE migration = ? AND type = ?",
+                              (db_string(migration), db_string(migration_type)))
+        return bool(rows)
+
+    @staticmethod
+    def create(migration, migration_type, timestamp=None):
+        """Record ``migration`` as applied."""
+        Database.query(
+            "INSERT OR REPLACE INTO migrations (migration, type, timestamp) VALUES (?, ?, ?)",
+            (db_string(migration), db_string(migration_type), db_timestamp(timestamp)))
+        return True
+
+    @staticmethod
+    def delete(migration, migration_type):
+        """Forget ``migration`` (after it has been rolled back)."""
+        Database.query("DELETE FROM migrations WHERE migration = ? AND type = ?",
+                       (db_string(migration), db_string(migration_type)))
+        return True
+
+
+class MigrationError(Exception):
+    """Raised by a migration that cannot be applied."""
+
+
+class MigrationFileNotFound(MigrationError):
+    """Raised when a discovered migration artifact is missing on disk."""
+
+    def __init__(self, path):
+        super().__init__("Unable to find migration file '%s'." % path)
+        self.path = path
+
+
+# Registered migrations: name -> {"type": ..., "up": callable, "down": callable or None}.
+MIGRATIONS = {}
+MIGRATION_TYPES = ("db", "container")
+MIGRATIONS_DIR_NAME = "migrations"
+MIGRATION_EXTENSION = ".py"
+
+
+def register_migration(name, up, down=None, migration_type="db"):
+    MIGRATIONS[name] = {"type": migration_type, "up": up, "down": down}
+
+
+class MigrationArtifact:
+    """One migration: a ``<name>.py`` file found in a source, or a registered callable.
+
+    File based migrations are identified as ``<source>:<name>`` so that migrations
+    with the same file name shipped by different sources stay distinct. They are
+    ordered by name (a ``YYYYMMDDHHMMSS_description`` prefix is the convention),
+    then by source.
+    """
+
+    def __init__(self, name, migration_type="db", source=None, path=None, up=None, down=None):
+        self.name = str(name)
+        self.type = migration_type
+        self.source = source
+        self.path = path
+        self.up = up
+        self.down = down
+
+    @property
+    def identity(self):
+        return self.name if self.source is None else "%s:%s" % (self.source, self.name)
+
+    @property
+    def sort_key(self):
+        return (self.name, self.source or "")
+
+    def load(self):
+        """Return the ``(up, down)`` callables, loading the file from its own source."""
+        if self.path is None:
+            return self.up, self.down
+        if not os.path.isfile(self.path):
+            raise MigrationFileNotFound(self.path)
+        import hashlib
+        import importlib.util
+
+        digest = hashlib.sha1(("%s\0%s\0%s" % (self.source, self.type, self.path))
+                              .encode("utf-8")).hexdigest()
+        spec = importlib.util.spec_from_file_location("%s_migration_%s" % (PROG, digest),
+                                                      self.path)
+        if spec is None or spec.loader is None:
+            raise MigrationError("Unable to load migration file '%s'." % self.path)
+        module = importlib.util.module_from_spec(spec)
+        module.appctl = sys.modules[__name__]
+        spec.loader.exec_module(module)
+        up, down = getattr(module, "up", None), getattr(module, "down", None)
+        klass = getattr(module, "Migration", None)
+        if not callable(up) and isinstance(klass, type):
+            instance = klass()
+            up, down = getattr(instance, "up", None), getattr(instance, "down", None)
+        if not callable(up):
+            raise MigrationError("Migration file '%s' does not define an up() function."
+                                 % self.path)
+        return up, down if callable(down) else None
+
+
+def tool_migrations_dir():
+    return (os.environ.get("APPCTL_MIGRATIONS_DIR")
+            or os.path.join(os.path.dirname(script_path()), MIGRATIONS_DIR_NAME))
+
+
+def _sorted_dirs(directory):
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return []
+    return [name for name in names
+            if not name.startswith(".") and os.path.isdir(os.path.join(directory, name))]
+
+
+def migration_sources():
+    """``(source, migrations directory)`` of the tool and of every installed extension.
+
+    Extensions live in the packages directory as ``<name>/`` or ``<vendor>/<name>/``
+    and ship their migrations in a ``migrations/`` directory.
+    """
+    sources = [(PROG, tool_migrations_dir())]
+    base = packages_dir()
+    for name in _sorted_dirs(base):
+        path = os.path.join(base, name)
+        if os.path.isdir(os.path.join(path, MIGRATIONS_DIR_NAME)):
+            candidates = [(name, path)]
+        else:
+            candidates = [("%s/%s" % (name, child), os.path.join(path, child))
+                          for child in _sorted_dirs(path)]
+        for source, directory in candidates:
+            migrations = os.path.join(directory, MIGRATIONS_DIR_NAME)
+            if source != PROG and os.path.isdir(migrations):
+                sources.append((source, migrations))
+    return sources
+
+
+def discover_migrations(migration_type="db"):
+    """Every migration of ``migration_type`` (files and registered ones), sorted."""
+    found = []
+    for source, directory in migration_sources():
+        type_dir = os.path.join(directory, migration_type)
+        try:
+            names = os.listdir(type_dir)
+        except OSError:
+            continue
+        for filename in names:
+            path = os.path.join(type_dir, filename)
+            if (not filename.endswith(MIGRATION_EXTENSION) or filename.startswith(("_", "."))
+                    or os.path.isdir(path)):
+                continue
+            found.append(MigrationArtifact(filename[:-len(MIGRATION_EXTENSION)], migration_type,
+                                           source, path))
+    for name, spec in MIGRATIONS.items():
+        if spec.get("type", "db") == migration_type:
+            found.append(MigrationArtifact(name, migration_type, up=spec["up"],
+                                           down=spec.get("down")))
+    return sorted(found, key=lambda artifact: artifact.sort_key)
+
+
+def pending_migrations(migration_type="db"):
+    """Discovered migrations that are not in the migration history yet."""
+    applied = set(Migration.get_migrations(migration_type))
+    return [artifact for artifact in discover_migrations(migration_type)
+            if artifact.identity not in applied]
+
+
+class MigrationBatch:
+    """Run migrations in order; when one fails, roll the whole batch back."""
+
+    def __init__(self, migrations):
+        self.migrations = list(migrations)
+        self.completed = []
+
+    def run(self):
+        for artifact in self.migrations:
+            write_log("Running %s migration: %s" % (artifact.type, artifact.identity))
+            debug("Running %s migration: %s" % (artifact.type, artifact.identity), "migrations")
+            down = None
+            try:
+                up, down = artifact.load()
+                up()
+                Migration.create(artifact.identity, artifact.type)
+            except BaseException as exc:
+                write_log("Migration %s failed: %s" % (artifact.identity, exc))
+                self._revert(artifact, down)
+                self.rollback()
+                if not isinstance(exc, Exception) or isinstance(exc, MigrationFileNotFound):
+                    raise
+                raise MigrationError("Migration '%s' failed: %s"
+                                     % (artifact.identity, exc)) from exc
+            self.completed.append((artifact, down))
+        return [artifact.identity for artifact, _ in self.completed]
+
+    @staticmethod
+    def _revert(artifact, down):
+        write_log("Reverting %s migration: %s" % (artifact.type, artifact.identity))
+        debug("Reverting %s migration: %s" % (artifact.type, artifact.identity), "migrations")
+        try:
+            if down is not None:
+                down()
+        except Exception as exc:
+            warning("Encountered error while reverting migration '%s': %s"
+                    % (artifact.identity, exc))
+        try:
+            Migration.delete(artifact.identity, artifact.type)
+        except Exception as exc:
+            warning("Unable to remove the record of migration '%s': %s"
+                    % (artifact.identity, exc))
+
+    def rollback(self):
+        """Undo completed migrations in reverse order and forget their records."""
+        while self.completed:
+            artifact, down = self.completed.pop()
+            self._revert(artifact, down)
+
+
+def run_migrations(migrations=None, migration_type=None):
+    """Apply pending registered migrations in name order as one batch.
+
+    A migration is recorded only after it completes. When one fails, it and every
+    migration completed before it in the batch are rolled back (newest first) and
+    their records removed; MigrationError is raised. Returns the applied names.
+    """
+    migrations = MIGRATIONS if migrations is None else migrations
+    artifacts = []
+    for name, spec in migrations.items():
+        kind = spec.get("type", "db")
+        if migration_type not in (None, kind) or Migration.is_applied(name, kind):
+            continue
+        artifacts.append(MigrationArtifact(name, kind, up=spec["up"], down=spec.get("down")))
+    artifacts.sort(key=lambda artifact: (artifact.name, artifact.type))
+    return MigrationBatch(artifacts).run()
+
+
+def rollback_migration(name, spec=None):
+    """Undo ``name`` and remove its record from the migration history."""
+    spec = spec or MIGRATIONS[name]
+    migration_type = spec.get("type", "db")
+    if spec.get("down"):
+        try:
+            spec["down"]()
+        finally:
+            Migration.delete(name, migration_type)
+    else:
+        Migration.delete(name, migration_type)
+
+
+class Project:
+    """The projects managed by the tool."""
+
+    @staticmethod
+    def all():
+        rows = Database.query("SELECT name, path, enabled FROM projects ORDER BY name, id")
+        return [{"name": n, "path": p or "", "enabled": e not in (0, "0", "", None)}
+                for n, p, e in rows]
+
+    @staticmethod
+    def create(name, path="", enabled=True):
+        Database.query(
+            "INSERT OR REPLACE INTO projects (name, path, enabled, created_on) VALUES (?, ?, ?, ?)",
+            (db_string(name), db_string(path), 1 if enabled else 0, db_timestamp()))
+        return True
+
+    @staticmethod
+    def delete(name):
+        Database.query("DELETE FROM projects WHERE name = ?", (db_string(name),))
+        return True
+
+
+# ---------------------------------------------------------------------------
+# Revertable multi-step operations
+# ---------------------------------------------------------------------------
+
+class RevertableStepProcessor:
+    """Run steps in order; when one fails, undo it and every earlier step, newest first.
+
+    Steps may add further steps while the processor runs. Steps without an undo
+    action are skipped during rollback; a failing undo action is logged and the
+    rollback continues.
+    """
+
+    def __init__(self):
+        self.steps = []
+        self.error = None
+        self.failed_step = None
+
+    def add_step(self, step_id, up, down=None, context_up=(), context_down=()):
+        self.steps.append({"id": step_id, "up": up, "down": down,
+                           "context_up": tuple(context_up), "context_down": tuple(context_down)})
+        return self
+
+    def execute(self):
+        """Run every step. Returns False (after rolling back) when a step fails."""
+        self.error = self.failed_step = None
+        index = 0
+        try:
+            while index < len(self.steps):
+                step = self.steps[index]
+                debug("Executing step: %s" % step["id"], "upgrade")
+                try:
+                    step["up"](*step["context_up"])
+                except BaseException as exc:
+                    self.error, self.failed_step = exc, step["id"]
+                    write_log("Encountered error while processing %s: %s" % (step["id"], exc))
+                    debug("Encountered error while processing %s: %s" % (step["id"], exc),
+                          "upgrade")
+                    self.rollback(self.steps[:index + 1])
+                    if not isinstance(exc, Exception):
+                        raise
+                    return False
+                index += 1
+            return True
+        finally:
+            self.steps = []
+
+    @staticmethod
+    def rollback(steps):
+        for step in reversed(steps):
+            if step["down"] is None:
+                continue
+            debug("Rolling back step: %s" % step["id"], "upgrade")
+            write_log("Rolling back %s" % step["id"])
+            try:
+                step["down"](*step["context_down"])
+            except Exception as exc:
+                warning("Encountered error while reverting %s: %s" % (step["id"], exc))
+
+
+# ---------------------------------------------------------------------------
+# Archive extraction
+# ---------------------------------------------------------------------------
+
+class ExtractionError(Exception):
+    """Raised when an archive cannot be extracted."""
+
+
+def archive_type(path):
+    lowered = path.lower()
+    if lowered.endswith(".zip"):
+        return "zip"
+    if lowered.endswith(".tar.gz"):
+        return "tar.gz"
+    return None
+
+
+def _is_writable(path):
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return False
+    import stat
+    return os.access(path, os.W_OK) and bool(mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+
+
+def _source_root(tempdir):
+    """Strip a single top-level directory wrapping the whole archive."""
+    entries = os.listdir(tempdir)
+    if len(entries) == 1:
+        only = os.path.join(tempdir, entries[0])
+        if os.path.isdir(only) and not os.path.islink(only) and os.listdir(only):
+            return only
+    return tempdir
+
+
+def copy_overwrite_files(source, dest):
+    """Copy the tree ``source`` into ``dest``; warn about files that cannot be overwritten."""
+    import shutil
+
+    failed = []
+    for directory, dirs, files in os.walk(source):
+        dirs.sort()
+        relative_dir = os.path.relpath(directory, source)
+        target_dir = dest if relative_dir == "." else os.path.join(dest, relative_dir)
+        if not os.path.isdir(target_dir):
+            try:
+                os.makedirs(target_dir, exist_ok=True)
+            except OSError:
+                pass
+        for name in sorted(files + [d for d in dirs if os.path.islink(os.path.join(directory, d))]):
+            item = os.path.join(directory, name)
+            relative = name if relative_dir == "." else os.path.join(relative_dir, name)
+            relative = relative.replace(os.sep, "/")
+            target = os.path.join(target_dir, name)
+            ok = True
+            if os.path.lexists(target) and (os.path.isdir(target) or not _is_writable(target)):
+                ok = False
+            else:
+                try:
+                    if os.path.islink(item):
+                        if os.path.lexists(target):
+                            os.unlink(target)
+                        os.symlink(os.readlink(item), target)
+                    else:
+                        shutil.copyfile(item, target)
+                        shutil.copymode(item, target)
+                except OSError:
+                    ok = False
+            if not ok:
+                failed.append(relative)
+                warning("Unable to copy '%s' to current directory." % relative)
+    if failed:
+        raise ExtractionError("There was an error overwriting existing files.")
+
+
+def _extract_zip(archive, tempdir):
+    try:
+        import zipfile
+    except ImportError:
+        raise ExtractionError("Extracting a zip file requires the zipfile module.")
+    try:
+        with zipfile.ZipFile(archive) as handle:
+            handle.extractall(tempdir)
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, ValueError, RuntimeError) as exc:
+        raise ExtractionError("Failed to unzip '%s': %s." % (archive, exc))
+
+
+def _extract_tarball(archive, tempdir):
+    try:
+        import tarfile
+        with tarfile.open(archive, "r:gz") as handle:
+            try:
+                handle.extractall(tempdir, filter="data")
+            except TypeError:
+                handle.extractall(tempdir)
+        return
+    except ImportError as exc:
+        reason = str(exc)
+    except Exception as exc:  # noqa: BLE001 - any tarfile failure triggers the fallback
+        reason = str(exc) or exc.__class__.__name__
+    warning("Python tarfile failed, falling back to 'tar xz' (%s)" % reason)
+    import shutil
+    for name in os.listdir(tempdir):
+        path = os.path.join(tempdir, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    command = ["tar", "xz", "--directory=%s" % tempdir, "-f", archive]
+    result = launch(command, exit_on_error=False, return_detailed=True)
+    if result.return_code != 0:
+        message = " ".join(result.stderr.split()) or "exit code %d" % result.return_code
+        raise ExtractionError("Failed to execute `%s`: %s." % (command_string(command), message))
+
+
+def extract(archive, dest):
+    """Extract a ``.zip`` or ``.tar.gz`` archive into ``dest``."""
+    import shutil
+    import tempfile
+
+    kind = archive_type(archive)
+    if kind is None:
+        raise ExtractionError("Extraction only supported for '.zip' and '.tar.gz' file types.")
+    try:
+        os.makedirs(dest, exist_ok=True)
+    except OSError as exc:
+        raise ExtractionError("Failed to create directory '%s': %s." % (dest, exc.strerror or exc))
+    tempdir = tempfile.mkdtemp(prefix="appctl-extract-")
+    try:
+        if kind == "zip":
+            _extract_zip(archive, tempdir)
+        else:
+            _extract_tarball(archive, tempdir)
+        copy_overwrite_files(_source_root(tempdir), dest)
+    finally:
+        shutil.rmtree(tempdir, ignore_errors=True)
+
+
+def extract_archive_command(assoc):
+    archive = assoc["archive"]
+    if not isinstance(archive, str) or archive == "":
+        error("The --archive parameter needs a value.")
+    if archive_type(archive) is None:
+        error("Extraction only supported for '.zip' and '.tar.gz' file types.")
+    archive = os.path.abspath(os.path.expanduser(archive))
+    if not os.path.isfile(archive):
+        error("Archive '%s' does not exist." % assoc["archive"])
+    if not os.access(archive, os.R_OK):
+        error("Archive '%s' is not readable." % assoc["archive"])
+    dest = assoc.get("path")
+    if not isinstance(dest, str) or not dest:
+        dest = Runtime.config.get("path")
+    if not isinstance(dest, str) or not dest:
+        dest = os.getcwd()
+    dest = os.path.abspath(os.path.expanduser(dest))
+    debug("Extracting '%s' to '%s'" % (archive, dest), "extract")
+    try:
+        extract(archive, dest)
+    except ExtractionError as exc:
+        error(str(exc))
+    success("Extracted '%s' to '%s'." % (assoc["archive"], dest))
+
+
+# ---------------------------------------------------------------------------
+# System requirements
+# ---------------------------------------------------------------------------
+
+REQUIREMENT_EXEMPT_FAMILIES = ("cli", "config", "help")
+MIN_RUNTIME_VERSION = "3.8.0"
+RUNTIME_CHECK_ATTEMPTS = 4
+RUNTIME_CHECK_DELAY = 0.5        # seconds; doubles after every failed attempt
+RUNTIME_CHECK_MAX_DELAY = 4.0
+PROBE_TIMEOUT = 30
+CONTAINER_RUNTIME_ERROR = "Container runtime (docker) is either not installed or not running."
+DARWIN_RUNTIME_HINT = ("Please install it with your system package manager: "
+                       "brew install --cask docker")
+COMPOSE_MISSING_ERROR = ("Compose tool (docker-compose) is not installed. Please install "
+                         "version %s or newer.")
+COMPOSE_UNKNOWN_ERROR = "Unable to determine the version of the compose tool `%s`."
+COMPOSE_OLD_ERROR = ("Compose tool version %s is older than the minimum required version %s. "
+                     "Please upgrade the compose tool.")
+RUNTIME_OLD_ERROR = "Python version %s is older than the minimum required version %s."
+LOOSE_VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?(-[0-9A-Za-z.-]+)?")
+BARE_VERSION_RE = re.compile(r"^v?\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.+-]*)?$")
+
+
+def _env_float(name, default):
+    value = os.environ.get(name, "").strip()
+    try:
+        return float(value) if value else default
+    except ValueError:
+        return default
+
+
+def probe(command, timeout=PROBE_TIMEOUT):
+    """Run ``command`` quietly; return ``(return_code, stdout)`` (127 when it cannot start)."""
+    import subprocess
+
+    debug("Running command: %s" % command_string(command), "requirements")
+    try:
+        proc = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        debug("Command failed: %s" % exc, "requirements")
+        return 127, ""
+    debug("Return code: %d" % proc.returncode, "requirements")
+    return proc.returncode, proc.stdout.decode("utf-8", "replace")
+
+
+def loose_version(text):
+    """The first ``X.Y[.Z][-pre]`` version in ``text`` as a semantic version, else None."""
+    match = LOOSE_VERSION_RE.search(str(text))
+    if not match:
+        return None
+    major, minor, patch, pre = match.groups()
+    return "%d.%d.%d%s" % (int(major), int(minor), int(patch or 0), pre or "")
+
+
+def container_runtime_responsive():
+    import shutil
+
+    binary = shutil.which(DOCKER_BIN)
+    if binary is None:
+        return False
+    return any(probe([binary] + args)[0] == 0 for args in (["ps"], ["info"]))
+
+
+def check_container_runtime():
+    """None when the container runtime responds (retrying with backoff), else an error."""
+    attempts = max(1, _env_int("APPCTL_RUNTIME_CHECK_ATTEMPTS", RUNTIME_CHECK_ATTEMPTS))
+    delay = max(0.0, _env_float("APPCTL_RUNTIME_CHECK_DELAY", RUNTIME_CHECK_DELAY))
+    for attempt in range(1, attempts + 1):
+        if container_runtime_responsive():
+            return None
+        if attempt < attempts:
+            wait = min(delay * 2 ** (attempt - 1), RUNTIME_CHECK_MAX_DELAY)
+            debug("Container runtime is not responding (attempt %d of %d); retrying in %.2fs."
+                  % (attempt, attempts, wait), "requirements")
+            time.sleep(wait)
+    message = CONTAINER_RUNTIME_ERROR
+    if is_darwin():
+        message += " " + DARWIN_RUNTIME_HINT
+    return message
+
+
+def detect_compose_tool():
+    """``(command, version or None)`` of the compose tool (standalone first), or None."""
+    import shutil
+
+    if shutil.which(DOCKER_COMPOSE_BIN):
+        for args in (["version", "--short"], ["--version"], ["version"]):
+            code, output = probe([DOCKER_COMPOSE_BIN] + args)
+            version = loose_version(output) if code == 0 else None
+            if version:
+                return [DOCKER_COMPOSE_BIN], version
+        return [DOCKER_COMPOSE_BIN], None
+    if shutil.which(DOCKER_BIN):
+        code, output = probe([DOCKER_BIN, "compose", "version", "--short"])
+        lines = output.strip().splitlines() if code == 0 else []
+        first = lines[0].strip() if lines else ""
+        if BARE_VERSION_RE.match(first) or "compose" in first.lower():
+            version = loose_version(first)
+            if version:
+                return [DOCKER_BIN, "compose"], version
+    return None
+
+
+def minimum_compose_version():
+    return os.environ.get("APPCTL_MIN_COMPOSE_VERSION") or MIN_COMPOSE_VERSION
+
+
+def check_compose_tool():
+    minimum = minimum_compose_version()
+    found = detect_compose_tool()
+    if found is None:
+        return COMPOSE_MISSING_ERROR % minimum
+    command, version = found
+    if version is None:
+        return COMPOSE_UNKNOWN_ERROR % command_string(command)
+    if compare_semver(version, loose_version(minimum) or minimum) < 0:
+        return COMPOSE_OLD_ERROR % (version, minimum)
+    return None
+
+
+def check_host_runtime():
+    import platform
+
+    minimum = os.environ.get("APPCTL_MIN_RUNTIME_VERSION") or MIN_RUNTIME_VERSION
+    current = loose_version(platform.python_version())
+    if compare_semver(current, loose_version(minimum) or minimum) < 0:
+        return RUNTIME_OLD_ERROR % (platform.python_version(), minimum)
+    return None
+
+
+def requirement_errors():
+    errors = []
+    for check in (check_container_runtime, check_compose_tool, check_host_runtime):
+        message = check()
+        if message:
+            errors.append(message)
+    return errors
+
+
+def check_requirements():
+    """Exit with code 1 (after reporting every problem) unless the host meets the requirements."""
+    errors = requirement_errors()
+    if not errors:
+        return
+    for message in errors:
+        sys.stderr.write(colorize_prefix("Error") + " " + message + "\n")
+        write_log("Error: " + message)
+    raise AppctlExit(1)
+
+
+# ---------------------------------------------------------------------------
+# Updates
+# ---------------------------------------------------------------------------
+
+RELEASES_URL = "https://api.github.com/repos/appctl/appctl/releases?per_page=100"
+BUILDS_URL = "https://raw.githubusercontent.com/appctl/appctl-builds/main"
+HTTP_TIMEOUT = 30
+UPDATE_CHECK_OPTION = "last_update_check"
+SELF_UPDATE_DARWIN_ERROR = ("Self-update is not available. Please use your system package "
+                            "manager to update.")
+BROKEN_UPDATE_ERROR = "The downloaded update is broken, try running '%s cli update' again." % PROG
+
+
+def releases_url():
+    return os.environ.get("APPCTL_RELEASES_URL") or RELEASES_URL
+
+
+def nightly_version_url():
+    return os.environ.get("APPCTL_NIGHTLY_VERSION_URL") or BUILDS_URL + "/NIGHTLY_VERSION"
+
+
+def nightly_package_url():
+    return os.environ.get("APPCTL_NIGHTLY_URL") or BUILDS_URL + "/%s-nightly.pyz" % PROG
+
+
+def stable_package_url():
+    return os.environ.get("APPCTL_STABLE_URL") or BUILDS_URL + "/%s.pyz" % PROG
+
+
+def http_get(url, headers=None, timeout=HTTP_TIMEOUT):
+    """GET ``url``; returns ``(status, body)`` with status 0 when the request failed."""
+    import urllib.error
+    import urllib.request
+
+    request_headers = {"User-Agent": "%s/%s" % (PROG, VERSION)}
+    request_headers.update(headers or {})
+    debug("HTTP GET %s" % url, "http")
+    try:
+        request = urllib.request.Request(url, headers=request_headers)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = getattr(response, "status", None) or 200
+            return int(status), response.read()
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read()
+        except Exception:
+            body = b""
+        return int(exc.code or 0), body
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        debug("HTTP request to %s failed: %s" % (url, exc), "http")
+        return 0, b""
+
+
+def named_semver(new_version, original_version):
+    """``patch``, ``minor`` or ``major`` when ``new_version`` is newer, else None."""
+    if compare_semver(new_version, original_version) <= 0:
+        return None
+    new, original = parse_semver(new_version), parse_semver(original_version)
+    if new[:2] == original[:2]:
+        return "patch"
+    if new[0] == original[0]:
+        return "minor"
+    return "major"
+
+
+def nightly_updates():
+    status, body = http_get(nightly_version_url())
+    if status != 200:
+        error("Failed to get current nightly version (HTTP code %d)." % status)
+    nightly = body.decode("utf-8", "replace").strip()
+    if not nightly or nightly == VERSION:
+        return []
+    return [{"version": nightly, "update_type": "nightly", "package_url": nightly_package_url(),
+             "status": "available"}]
+
+
+def get_updates(filter_type=None):
+    """Newer releases, one per update type (newest first: major, minor, patch)."""
+    if is_nightly():
+        return nightly_updates()
+    headers = {"Accept": "application/json"}
+    if os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = "token %s" % os.environ["GITHUB_TOKEN"]
+    status, body = http_get(releases_url(), headers)
+    if status != 200:
+        error("Failed to get latest version (HTTP code %d)." % status)
+    try:
+        releases = json.loads(body.decode("utf-8", "replace"))
+    except ValueError:
+        error("Failed to get latest version (invalid response).")
+    if not isinstance(releases, list):
+        error("Failed to get latest version (invalid response).")
+    current = VERSION if parse_semver(VERSION) else loose_version(VERSION) or "0.0.0"
+    updates = dict.fromkeys(UPDATE_TYPES)
+    for release in releases:
+        if not isinstance(release, dict) or release.get("draft"):
+            continue
+        version = str(release.get("tag_name") or release.get("version") or "").strip()
+        if version.startswith("v"):
+            version = version[1:]
+        if parse_semver(version) is None:
+            continue
+        kind = named_semver(version, current)
+        if kind is None:
+            continue
+        if updates[kind] and compare_semver(version, updates[kind]["version"]) <= 0:
+            continue
+        assets = release.get("assets") if isinstance(release.get("assets"), list) else []
+        package_url = ""
+        if assets and isinstance(assets[0], dict):
+            package_url = str(assets[0].get("browser_download_url") or "")
+        updates[kind] = {"version": version, "update_type": kind, "package_url": package_url,
+                         "status": "available"}
+    if filter_type:
+        return [updates[filter_type]] if updates.get(filter_type) else []
+    return [updates[kind] for kind in UPDATE_TYPES if updates[kind]]
+
+
+def _writable(path):
+    return os.access(path, os.W_OK)
+
+
+def validate_download(path, url):
+    """Verify the checksum and run the downloaded build; returns the version it reports."""
+    import hashlib
+    import shutil
+    import subprocess
+    import tempfile
+
+    status, body = http_get(url + ".md5")
+    if status != 200:
+        error("Couldn't access md5 hash for release (HTTP code %d)." % status)
+    expected = (body.decode("utf-8", "replace").split() or [""])[0].lower()
+    with open(path, "rb") as handle:
+        actual = hashlib.md5(handle.read()).hexdigest()
+    if actual != expected:
+        error("md5 hash for download (%s) is different than the release hash (%s)."
+              % (actual, expected))
+    log("md5 hash verified: %s" % expected)
+    sandbox = tempfile.mkdtemp(prefix="%s-update-check-" % PROG)
+    env = dict(os.environ, APPCTL_ROOT_DIR=sandbox, APPCTL_DISABLE_AUTO_CHECK_UPDATE="1")
+    for name in ("APPCTL_CONFIG_PATH", "APPCTL_CACHE_DIR", "APPCTL_PACKAGES_DIR"):
+        env.pop(name, None)
+    try:
+        proc = subprocess.run([runtime_binary(), path, "cli", "version"], env=env,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=120)
+        code, stdout, stderr = (proc.returncode, proc.stdout.decode("utf-8", "replace"),
+                                proc.stderr.decode("utf-8", "replace"))
+    except (OSError, subprocess.SubprocessError) as exc:
+        code, stdout, stderr = 127, "", str(exc)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+    version = loose_version(stdout) if code == 0 else None
+    if version is None:
+        for line in stderr.strip().splitlines():
+            sys.stderr.write(line + "\n")
+        error(BROKEN_UPDATE_ERROR)
+    log("New version works. Proceeding to replace.")
+    return version
+
+
+def install_update(url, version=None):
+    """Download ``url``, validate it and replace the running binary. Returns the version."""
+    import tempfile
+
+    binary = binary_path()
+    log("Downloading from %s..." % url)
+    handle, temp = tempfile.mkstemp(prefix=".%s-update-" % PROG, dir=os.path.dirname(binary))
+    try:
+        os.close(handle)
+        status, body = http_get(url)
+        if status != 200 or not body:
+            error("Failed to download the update from %s (HTTP code %d)." % (url, status))
+        with open(temp, "wb") as stream:
+            stream.write(body)
+        reported = validate_download(temp, url)
+        try:
+            os.chmod(temp, os.stat(binary).st_mode & 0o777)
+        except OSError as exc:
+            error("Cannot chmod %s: %s" % (temp, exc.strerror or exc))
+        try:
+            os.replace(temp, binary)
+        except OSError as exc:
+            error("Cannot move %s to %s: %s" % (temp, binary, exc.strerror or exc))
+    finally:
+        if os.path.lexists(temp):
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+    return version or reported
+
+
+def cmd_cli_update(args, assoc):
+    if "archive" in assoc:
+        extract_archive_command(assoc)
+        return False
+    if is_darwin():
+        error(SELF_UPDATE_DARWIN_ERROR)
+    binary = binary_path()
+    if not _writable(binary):
+        error("%s is not writable by current user." % binary)
+    if not _writable(os.path.dirname(binary)):
+        error("%s is not writable by current user." % os.path.dirname(binary))
+    version = None
+    if assoc.get("nightly"):
+        question = "You have version %s. Would you like to update to the latest nightly?"
+        url = nightly_package_url()
+    elif assoc.get("stable"):
+        question = "You have version %s. Would you like to update to the latest stable release?"
+        url = stable_package_url()
+    else:
+        filter_type = update_filter(Runtime.assoc_list or list(assoc.items()))
+        updates = get_updates(filter_type)
+        if not updates:
+            success("%s is at the latest%sversion." % (PROG, update_type_str(filter_type)))
+            return False
+        newest = updates[0]
+        version, url = newest["version"], newest["package_url"]
+        question = "You have version %%s. Would you like to update to %s?" % version
+        if not url:
+            error("No download is available for version %s." % version)
+    if not confirm(question % VERSION, assoc):
+        return False
+    installed = install_update(url, version)
+    success("Updated AppCtl to %s." % installed)
+    return True
+
+
+def auto_check_update(command):
+    """Periodically look for updates in interactive sessions and offer to install them."""
+    if os.environ.get("APPCTL_DISABLE_AUTO_CHECK_UPDATE", "").strip().lower() not in (
+            "", "0", "false", "no", "off"):
+        return
+    if command is None or command.path in ("cli update", "cli check-update", "cli completions",
+                                           "cli has-command", "cli self-uninstall"):
+        return
+    if is_darwin():
+        return
+    try:
+        if not (sys.stdout.isatty() and _stdin_is_tty()):
+            return
+    except (AttributeError, ValueError):
+        return
+    binary = binary_path()
+    if not _writable(binary) or not _writable(os.path.dirname(binary)):
+        return
+    days = _env_int("APPCTL_AUTO_CHECK_UPDATE_DAYS", 1)
+    if days < 0:
+        days = 1
+    now = int(time.time())
+    last = Option.get(UPDATE_CHECK_OPTION)
+    if last is False or not str(last).strip().isdigit():
+        Option.set(UPDATE_CHECK_OPTION, now)
+        return
+    if (now - int(last)) // 86400 < days:
+        return
+    Option.set(UPDATE_CHECK_OPTION, now)
+    try:
+        updates = get_updates()
+    except AppctlExit:
+        return
+    if not updates:
+        return
+    if cmd_cli_update([], {}):
+        raise AppctlExit(0)
+
+
+# ---------------------------------------------------------------------------
+# Self-uninstall
+# ---------------------------------------------------------------------------
+
+def remove_labeled_resources(kind, list_args, remove_args):
+    log("Removing %s..." % kind)
+    result = docker_run(list_args)
+    if result.return_code != 0:
+        warning("Unable to list %s: %s" % (kind, (result.stderr or result.stdout).strip()))
+        return
+    ids = []
+    for item in result.stdout.split():
+        if item not in ids:
+            ids.append(item)
+    if not ids:
+        return
+    result = docker_run(remove_args + ids)
+    if result.return_code != 0:
+        warning("Unable to remove %s: %s" % (kind, (result.stderr or result.stdout).strip()))
+
+
+def remove_tree(path):
+    import shutil
+
+    if os.path.islink(path) or os.path.isfile(path):
+        os.unlink(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path)
+
+
+def cmd_cli_self_uninstall(args, assoc):
+    check_requirements()
+    if not confirm("Are you sure you want to remove %s and all its sites (along with their "
+                   "data)? This is an irreversible action." % PROG, assoc):
+        return
+    label = "label=%s" % LABEL_VENDOR
+    remove_labeled_resources("containers", ["ps", "-aq", "--filter", label], ["rm", "-f"])
+    remove_labeled_resources("networks", ["network", "ls", "-q", "--filter", label],
+                             ["network", "rm"])
+    remove_labeled_resources("volumes", ["volume", "ls", "-q", "--filter", label],
+                             ["volume", "rm", "-f"])
+    remove_labeled_resources("images", ["image", "ls", "-q", "--filter", label],
+                             ["image", "rm", "-f"])
+    log("Removing project directories...")
+    directories = []
+    try:
+        directories = [project_directory(project) for project in Project.all()]
+    except Exception as exc:
+        warning("Unable to read the list of projects: %s" % exc)
+    directories.append(absolutize(str(Runtime.config.get("projects_path")
+                                      or os.path.join(root_dir(), "sites")), root_dir()))
+    for directory in directories:
+        try:
+            remove_tree(directory)
+        except OSError as exc:
+            warning("Unable to remove '%s': %s" % (directory, exc.strerror or exc))
+    log("Removing %s root directory..." % PROG)
+    write_log("Removing %s root directory %s" % (PROG, root_dir()))
+    Database.close()
+    FileLog.enabled = False
+    Runtime.cache = None
+    try:
+        remove_tree(root_dir())
+    except OSError as exc:
+        error("Unable to remove '%s': %s" % (root_dir(), exc.strerror or exc))
+    archive = archive_path()
+    if archive:
+        log("Removing %s binary..." % PROG)
+        try:
+            os.unlink(archive)
+        except OSError as exc:
+            error("Unable to remove '%s': %s" % (archive, exc.strerror or exc))
+    success("%s and all its sites have been removed successfully." % PROG)
+
+
+# ---------------------------------------------------------------------------
+# Version upgrade
+# ---------------------------------------------------------------------------
+
+VERSION_OPTION = "version"
+UPGRADE_ERROR = "There was some error while migrating. Please check logs."
+MIN_DISK_SPACE = 5 * 1024 ** 3
+DISK_SPACE_ERROR = ("Unable to upgrade: minimum 5GB disk space is required on the filesystem "
+                    "containing the %s '%s' (%.2f GB available).")
+IMAGE_VERSIONS_FILE = "img-versions.json"
+GLOBAL_SERVICES_DIR = "services"
+MIN_COMPOSE_VERSION = "2.0.0"
+COMPOSE_DOWNLOAD_URL = ("https://github.com/docker/compose/releases/download/v{version}/"
+                        "docker-compose-{system}-{machine}")
+COMPOSE_DOWNLOAD_TIMEOUT = 30
+SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
+IMAGE_LINE_RE = re.compile(r"^(\s*(?:-\s+)?image\s*:\s*)([\"']?)([^\s\"'#]+)\2(\s*(?:#.*)?)$")
+
+
+class UpgradeError(Exception):
+    """Raised by an upgrade step that cannot be completed."""
+
+
+# -- semantic versions ----------------------------------------------------------------
+
+def parse_semver(text):
+    """Return ``(major, minor, patch, prerelease)`` for a semantic version, else None."""
+    match = SEMVER_RE.match(str(text).strip())
+    if not match:
+        return None
+    major, minor, patch, pre = match.groups()
+    return int(major), int(minor), int(patch), tuple(pre.split(".")) if pre else ()
+
+
+def compare_semver(a, b):
+    """Compare two semantic versions by precedence: -1, 0 or 1."""
+    left, right = parse_semver(a), parse_semver(b)
+    if left is None or right is None:
+        raise ValueError("Invalid semantic version: %s" % (a if left is None else b))
+    if left[:3] != right[:3]:
+        return -1 if left[:3] < right[:3] else 1
+    pre_a, pre_b = left[3], right[3]
+    if pre_a == pre_b:
+        return 0
+    if not pre_a or not pre_b:
+        return 1 if not pre_a else -1
+    for x, y in zip(pre_a, pre_b):
+        if x == y:
+            continue
+        if x.isdigit() and y.isdigit():
+            return -1 if int(x) < int(y) else 1
+        if x.isdigit() != y.isdigit():
+            return -1 if x.isdigit() else 1
+        return -1 if x < y else 1
+    return -1 if len(pre_a) < len(pre_b) else 1
+
+
+# -- disk space -------------------------------------------------------------------------
+
+def free_disk_space(path):
+    """Free bytes on the filesystem containing ``path`` (or its nearest existing parent)."""
+    import shutil
+
+    path = os.path.abspath(path)
+    while not os.path.exists(path):
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    return shutil.disk_usage(path).free
+
+
+def runtime_data_root():
+    """The container runtime data root directory, or None when it cannot be determined."""
+    if not runtime_installed():
+        return None
+    result = docker_run(["info", "--format", "{{.DockerRootDir}}"])
+    lines = result.stdout.strip().splitlines() if result.return_code == 0 else []
+    root = lines[0].strip() if lines else ""
+    return root if os.path.isabs(root) else None
+
+
+def check_disk_space():
+    """Exit with an error unless both the tool root and the runtime data root have 5 GiB."""
+    for label, path in (("tool root directory", root_dir()),
+                        ("container runtime data root", runtime_data_root())):
+        if not path:
+            continue
+        try:
+            free = free_disk_space(path)
+        except OSError as exc:
+            debug("Unable to check disk space of %s: %s" % (path, exc), "upgrade")
+            continue
+        debug("Free disk space on %s: %d bytes" % (path, free), "upgrade")
+        if free < MIN_DISK_SPACE:
+            error(DISK_SPACE_ERROR % (label, path, free / float(1024 ** 3)))
+
+
+# -- image versions ---------------------------------------------------------------------
+
+def image_versions_path():
+    return (os.environ.get("APPCTL_IMAGE_VERSIONS_FILE")
+            or os.path.join(os.path.dirname(script_path()), IMAGE_VERSIONS_FILE))
+
+
+def target_image_versions():
+    """The image -> version tag map shipped with the tool (``img-versions.json``)."""
+    path = image_versions_path()
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError) as exc:
+        error("Unable to read image versions from '%s': %s" % (path, exc))
+    if not isinstance(data, dict) or not all(isinstance(v, (str, int, float))
+                                             and not isinstance(v, bool) for v in data.values()):
+        error("Unable to read image versions from '%s': expected an image to version map."
+              % path)
+    return {str(image): str(version) for image, version in data.items()}
+
+
+def split_image_reference(reference):
+    """Split ``[registry/]name[:tag][@digest]`` into ``(name, tag or None)``."""
+    reference = str(reference).split("@", 1)[0]
+    slash, colon = reference.rfind("/"), reference.rfind(":")
+    if colon > slash:
+        return reference[:colon], reference[colon + 1:]
+    return reference, None
+
+
+def image_available(image, version):
+    if not runtime_installed():
+        return False
+    return docker_run(["image", "inspect", "--format", "{{.Id}}",
+                       "%s:%s" % (image, version)]).return_code == 0
+
+
+def current_image_versions(targets):
+    """The version each managed image is at: recorded state, else what the runtime has."""
+    current = {}
+    for image in sorted(targets):
+        recorded = Option.get(image)
+        if recorded is False and image_available(image, targets[image]):
+            recorded = targets[image]
+        current[image] = recorded if recorded is not False else None
+    return current
+
+
+def pull_images(images, targets):
+    """Pull ``images`` one after the other; stop at the first failure."""
+    for image in images:
+        reference = "%s:%s" % (image, targets[image])
+        write_log("Pulling image %s" % reference)
+        result = docker_run(["pull", reference])
+        if result.return_code != 0:
+            write_log("Pulling %s failed: %s" % (reference, (result.stderr or result.stdout)
+                                                 .strip()))
+            raise UpgradeError("Unable to pull %s. Please check logs for more details." % image)
+
+
+# -- compose files and containers --------------------------------------------------------
+
+def upgrade_backup_root():
+    return os.path.join(root_dir(), "backups", "upgrade")
+
+
+def _write_file_atomic(path, text):
+    import tempfile
+
+    directory = os.path.dirname(os.path.abspath(path))
+    handle, temp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), dir=directory)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="") as stream:
+            stream.write(text)
+        try:
+            os.chmod(temp, os.stat(path).st_mode & 0o7777)
+        except OSError:
+            pass
+        os.replace(temp, path)
+    except BaseException:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+        raise
+
+
+def rewrite_compose_images(path, versions):
+    """Point every ``image:`` of ``path`` naming an image in ``versions`` at its new tag."""
+    with open(path, encoding="utf-8", newline="") as handle:
+        lines = handle.read().splitlines(True)
+    changed = False
+    for index, line in enumerate(lines):
+        body = line.rstrip("\r\n")
+        match = IMAGE_LINE_RE.match(body)
+        if not match or "$" in match.group(3):
+            continue
+        name, tag = split_image_reference(match.group(3))
+        if name not in versions or match.group(3) == "%s:%s" % (name, versions[name]):
+            continue
+        lines[index] = "%s%s%s:%s%s%s%s" % (match.group(1), match.group(2), name, versions[name],
+                                            match.group(2), match.group(4), line[len(body):])
+        changed = True
+    if changed:
+        _write_file_atomic(path, "".join(lines))
+    return changed
+
+
+def compose_run_checked(project_dir, files, args):
+    command = compose_command(project_dir, files=files) + list(args)
+    result = run_detailed(command, cwd=project_dir)
+    if result.return_code != 0:
+        output = (result.stderr or result.stdout).strip()
+        raise UpgradeError("Failed to execute `%s`: %s"
+                           % (command_string(command),
+                              output or "exit code %d" % result.return_code))
+    return result
+
+
+def running_services(project_dir, files):
+    result = compose_run_checked(project_dir, files,
+                                 ["ps", "--services", "--filter", "status=running"])
+    return set(result.stdout.split())
+
+
+class ComposeProjectUpgrade:
+    """Revertable replacement of the containers of a compose project whose images changed."""
+
+    def __init__(self, label, project_dir, changed, targets):
+        self.label = label
+        self.project_dir = os.path.abspath(project_dir)
+        self.versions = {image: targets[image] for image in changed}
+        self.backup_dir = os.path.join(upgrade_backup_root(),
+                                       re.sub(r"[^A-Za-z0-9._-]", "_", label))
+        self.files = get_compose_files(self.project_dir, "") if os.path.isdir(project_dir) else []
+        self.services = self._affected_services()
+        self.backups = []
+        self.running = []
+
+    def _affected_services(self):
+        services = load_compose_config(files=self.files).get("services") if self.files else None
+        affected = []
+        for name, definition in (services or {}).items():
+            image = definition.get("image") if isinstance(definition, dict) else None
+            if isinstance(image, str) and split_image_reference(image)[0] in self.versions:
+                affected.append(str(name))
+        return affected
+
+    def add_steps(self, processor):
+        """Queue the upgrade steps; returns False when no service image changed."""
+        if not self.services:
+            return False
+        label = self.label
+        processor.add_step("inspect-%s-containers" % label, self.inspect)
+        processor.add_step("backup-%s-compose-files" % label, self.backup, self.restore)
+        processor.add_step("update-%s-compose-files" % label, self.update, self.restore)
+        processor.add_step("upgrade-%s-containers" % label, self.recreate, self.revert_containers)
+        return True
+
+    def inspect(self):
+        running = running_services(self.project_dir, self.files)
+        self.running = [service for service in self.services if service in running]
+
+    def backup(self):
+        import shutil
+
+        os.makedirs(self.backup_dir, exist_ok=True)
+        for index, path in enumerate(self.files):
+            target = os.path.join(self.backup_dir, "%d-%s.backup" % (index, os.path.basename(path)))
+            shutil.copy2(path, target)
+            self.backups.append((path, target))
+
+    def restore(self):
+        import shutil
+
+        for path, backup in self.backups:
+            if os.path.isfile(backup):
+                shutil.copy2(backup, path)
+
+    def update(self):
+        for path in self.files:
+            rewrite_compose_images(path, self.versions)
+
+    def recreate(self):
+        if self.running:
+            compose_run_checked(self.project_dir, self.files,
+                                ["up", "-d", "--no-deps"] + self.running)
+
+    def revert_containers(self):
+        if self.running:
+            self.restore()
+            compose_run_checked(self.project_dir, self.files,
+                                ["up", "-d", "--no-deps"] + self.running)
+
+    def cleanup(self):
+        import shutil
+
+        shutil.rmtree(self.backup_dir, ignore_errors=True)
+
+
+def global_services_dir():
+    return os.path.join(root_dir(), GLOBAL_SERVICES_DIR)
+
+
+def project_directory(project):
+    path = project.get("path")
+    if path:
+        return absolutize(str(path), root_dir())
+    base = Runtime.config.get("projects_path") or os.path.join(root_dir(), "sites")
+    return absolutize(os.path.join(str(base), str(project["name"])), root_dir())
+
+
+# -- compose tool ------------------------------------------------------------------------
+
+def installed_compose_version(command=None):
+    """``(command, version)`` of the working compose tool, or None."""
+    import shutil
+
+    command = list(command or compose_binary())
+    if not (os.path.isfile(command[0]) or shutil.which(command[0])):
+        return None
+    result = run_detailed(command + ["version", "--short"])
+    lines = result.stdout.strip().splitlines() if result.return_code == 0 else []
+    version = lines[0].strip() if lines else ""
+    return (command, version) if parse_semver(version) else None
+
+
+def compose_install_path(command):
+    import shutil
+
+    if command == [DOCKER_COMPOSE_BIN]:
+        return os.path.realpath(shutil.which(DOCKER_COMPOSE_BIN))
+    config = os.environ.get("DOCKER_CONFIG") or os.path.join(os.path.expanduser("~"), ".docker")
+    return os.path.join(config, "cli-plugins", "docker-compose")
+
+
+def compose_download_url(version):
+    import platform
+
+    system = platform.system().lower()
+    machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(platform.machine().lower(),
+                                                         platform.machine().lower())
+    template = os.environ.get("APPCTL_COMPOSE_DOWNLOAD_URL") or COMPOSE_DOWNLOAD_URL
+    return template.format(version=version, system=system, machine=machine)
+
+
+def _remove_file(path):
+    if os.path.lexists(path):
+        os.unlink(path)
+
+
+class ComposeToolUpgrade:
+    """Replace a compose tool older than the minimum version, keeping the old one on failure."""
+
+    def __init__(self):
+        self.minimum = os.environ.get("APPCTL_MIN_COMPOSE_VERSION") or MIN_COMPOSE_VERSION
+        self.target = self.download = self.backup = None
+        self.upgraded = False
+
+    def run(self):
+        found = installed_compose_version()
+        if found is None:
+            debug("No compose tool version found; skipping compose tool upgrade.", "upgrade")
+            return
+        command, version = found
+        if compare_semver(version, self.minimum) >= 0:
+            debug("Compose tool %s satisfies minimum version %s." % (version, self.minimum),
+                  "upgrade")
+            return
+        write_log("Upgrading compose tool from %s to %s" % (version, self.minimum))
+        self.target = compose_install_path(command)
+        self.download = self.target + ".%s-download" % PROG
+        self.backup = self.target + ".%s-backup" % PROG
+        processor = RevertableStepProcessor()
+        processor.add_step("download-compose-tool", self.fetch, _remove_file, (),
+                           (self.download,))
+        processor.add_step("verify-downloaded-compose-tool", self.verify, None,
+                           ([self.download],))
+        processor.add_step("backup-compose-tool", self.take_backup, self.restore_backup)
+        processor.add_step("install-compose-tool", self.install, _remove_file, (),
+                           (self.target,))
+        processor.add_step("verify-compose-tool", self.verify, None, (command,))
+        if processor.execute():
+            self.upgraded = True
+            write_log("Upgraded compose tool to %s" % self.minimum)
+            return
+        warning("Unable to upgrade the compose tool to %s (%s). Keeping version %s."
+                % (self.minimum, processor.error, version))
+
+    def fetch(self):
+        import urllib.request
+
+        os.makedirs(os.path.dirname(self.target), exist_ok=True)
+        url = compose_download_url(self.minimum)
+        write_log("Downloading %s" % url)
+        with urllib.request.urlopen(url, timeout=COMPOSE_DOWNLOAD_TIMEOUT) as response:
+            with open(self.download, "wb") as handle:
+                while True:
+                    chunk = response.read(1 << 16)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+        os.chmod(self.download, 0o755)
+
+    def verify(self, command):
+        found = installed_compose_version(command)
+        if found is None or compare_semver(found[1], self.minimum) < 0:
+            raise UpgradeError("compose tool `%s` does not report version %s or newer"
+                               % (command_string(command), self.minimum))
+
+    def take_backup(self):
+        if os.path.lexists(self.target):
+            os.replace(self.target, self.backup)
+
+    def restore_backup(self):
+        if os.path.lexists(self.backup):
+            os.replace(self.backup, self.target)
+
+    def install(self):
+        os.replace(self.download, self.target)
+
+    def revert(self):
+        """Put the previous compose tool back (used when a later upgrade step fails)."""
+        if self.upgraded:
+            _remove_file(self.target)
+            self.restore_backup()
+            self.upgraded = False
+
+    def cleanup(self):
+        if self.upgraded and self.backup:
+            try:
+                _remove_file(self.backup)
+            except OSError:
+                pass
+
+
+# -- orchestration -----------------------------------------------------------------------
+
+class Upgrade:
+    """Upgrade from ``previous`` to the running tool version as one revertable operation.
+
+    Order: compose tool, database migrations, custom container migrations, image pulls,
+    global containers, project containers, persisted versions. When any step fails the
+    finished steps are undone. Pruning old images and networks afterwards is cleanup only.
+    """
+
+    def __init__(self, previous, pending):
+        self.previous = previous
+        self.pending = pending
+        self.targets = {}
+        self.current = {}
+        self.changed = []
+        self.compose = ComposeToolUpgrade()
+        self.batches = {kind: MigrationBatch(pending.get(kind, ())) for kind in MIGRATION_TYPES}
+        self.projects = []
+        self.saved_images = {}
+        self.processor = RevertableStepProcessor()
+
+    def run(self):
+        write_log("Upgrading %s from %s to %s" % (PROG, self.previous or "(none)", VERSION))
+        self.targets = target_image_versions()
+        check_disk_space()
+        processor = self.processor
+        processor.add_step("upgrade-compose-tool", self.upgrade_compose_tool, self.compose.revert)
+        processor.add_step("run-db-migrations", self.batches["db"].run,
+                           self.batches["db"].rollback)
+        processor.add_step("run-container-migrations", self.batches["container"].run,
+                           self.batches["container"].rollback)
+        processor.add_step("plan-container-upgrade", self.plan)
+        if not processor.execute():
+            failure = processor.error
+            if failure is not None and str(failure) and not isinstance(failure, AppctlExit):
+                sys.stderr.write("%s %s\n" % (colorize_prefix("Error"), failure))
+                write_log("Error: %s" % failure)
+            error(UPGRADE_ERROR)
+        self.finalize()
+
+    def upgrade_compose_tool(self):
+        try:
+            self.compose.run()
+        except Exception as exc:
+            warning("Unable to upgrade the compose tool: %s" % exc)
+
+    def plan(self):
+        """Queue image and container steps once the migrations have run."""
+        self.current = current_image_versions(self.targets)
+        self.changed = [image for image in sorted(self.targets)
+                        if self.current.get(image) != self.targets[image]]
+        processor = self.processor
+        if self.changed:
+            write_log("Images to upgrade: %s" % ", ".join(self.changed))
+            processor.add_step("pull-images", pull_images, None, (self.changed, self.targets))
+            candidates = [("global", global_services_dir())]
+            for project in Project.all():
+                directory = project_directory(project)
+                if not os.path.isdir(directory):
+                    warning("Unable to find the directory of project '%s' at '%s'."
+                            % (project["name"], directory))
+                    continue
+                candidates.append(("project-%s" % project["name"], directory))
+            for label, directory in candidates:
+                if not os.path.isdir(directory):
+                    continue
+                upgrade = ComposeProjectUpgrade(label, directory, self.changed, self.targets)
+                if upgrade.add_steps(processor):
+                    self.projects.append(upgrade)
+                else:
+                    debug("No image changed for %s; skipping." % label, "upgrade")
+        processor.add_step("save-image-versions", self.save_image_versions,
+                           self.restore_image_versions)
+        processor.add_step("save-version", self.save_version, self.restore_version)
+
+    def save_image_versions(self):
+        for image in sorted(self.targets):
+            self.saved_images[image] = Option.get(image)
+            Option.set(image, self.targets[image])
+
+    def restore_image_versions(self):
+        for image, value in self.saved_images.items():
+            if value is False:
+                Option.delete(image)
+            else:
+                Option.set(image, value)
+
+    def save_version(self):
+        Option.set(VERSION_OPTION, VERSION)
+
+    def restore_version(self):
+        if self.previous in (None, False):
+            Option.delete(VERSION_OPTION)
+        else:
+            Option.set(VERSION_OPTION, self.previous)
+
+    def finalize(self):
+        """Cleanup after a successful upgrade; failures here are never fatal."""
+        actions = [upgrade.cleanup for upgrade in self.projects] + [self.compose.cleanup]
+        if self.changed:
+            actions += [self.prune_images, self.prune_networks]
+        actions.append(lambda: os.path.isdir(upgrade_backup_root())
+                       and os.removedirs(upgrade_backup_root()))
+        for action in actions:
+            try:
+                action()
+            except Exception as exc:
+                debug("Upgrade cleanup failed: %s" % exc, "upgrade")
+        write_log("Upgraded %s to %s" % (PROG, VERSION))
+
+    def prune_images(self):
+        for image in self.changed:
+            old = self.current.get(image)
+            if old and old != self.targets[image]:
+                result = docker_run(["image", "rm", "%s:%s" % (image, old)])
+                if result.return_code != 0:
+                    debug("Unable to remove image %s:%s" % (image, old), "upgrade")
+        result = docker_run(["image", "prune", "--force", "--filter", "label=%s" % LABEL_VENDOR])
+        if result.return_code != 0:
+            debug("Unable to prune old images: %s" % result.stderr.strip(), "upgrade")
+
+    def prune_networks(self):
+        result = docker_run(["network", "prune", "--force", "--filter",
+                             "label=%s" % LABEL_VENDOR])
+        if result.return_code != 0:
+            debug("Unable to prune old networks: %s" % result.stderr.strip(), "upgrade")
+
+
+FIRST_RUN_MESSAGE = "%s has been set up successfully." % PROG
+DARWIN_SETUP_INSTRUCTIONS = (
+    "To finish configuring the container runtime on macOS:",
+    "  1. Start Docker Desktop and wait until it reports that it is running.",
+    "  2. In Docker Desktop > Settings > Resources > File sharing, share the directory '%s'.",
+    "  3. Give Docker Desktop at least 4 GB of memory in Settings > Resources > Advanced.",
+)
+OLDER_BINARY_MESSAGE = ("The %s binary (version %s) is older than the version recorded in its "
+                        "database (%s).")
+
+
+def maybe_upgrade():
+    """Upgrade when the tool version changed or migrations are pending; silent otherwise."""
+    previous = Option.get(VERSION_OPTION)
+    pending = {kind: pending_migrations(kind) for kind in MIGRATION_TYPES}
+    if previous == VERSION and not any(pending.values()) and not is_nightly():
+        return False
+    Upgrade(previous, pending).run()
+    return True
+
+
+def compare_with_stored(stored):
+    """Compare the running version with ``stored``: -1, 0, 1 or None when not comparable."""
+    left = VERSION if parse_semver(VERSION) else loose_version(VERSION)
+    right = stored if parse_semver(stored) else loose_version(stored)
+    if not left or not right:
+        return None
+    return compare_semver(left, right)
+
+
+def first_run(show_message):
+    """Create the store and run every pending migration when no version has been persisted."""
+    write_log("First run of %s %s" % (PROG, VERSION))
+    Database.get()
+    maybe_upgrade()
+    if not show_message:
+        return
+    success(FIRST_RUN_MESSAGE)
+    if is_darwin() and not Runtime.quiet:
+        lines = list(DARWIN_SETUP_INSTRUCTIONS)
+        lines[2] = lines[2] % root_dir()
+        for line in lines:
+            out(line)
+
+
+def bootstrap(family, show_message=True, silent=False):
+    """First-run setup and the startup comparison of the binary and stored versions."""
+    stored = Option.get(VERSION_OPTION)
+    if stored is False:
+        first_run(show_message)
+        return
+    if is_nightly():
+        maybe_upgrade()
+        return
+    comparison = compare_with_stored(stored)
+    if comparison is not None and comparison < 0:
+        message = OLDER_BINARY_MESSAGE % (PROG, VERSION, stored)
+        if family == "cli":
+            if not silent:
+                warning(message + " Please update %s with '%s cli update'." % (PROG, PROG))
+            return
+        error(message + " Please update %s to %s or newer with '%s cli update'."
+              % (PROG, stored, PROG))
+    maybe_upgrade()
+
+
+class _Silenced:
+    """Swallow everything written to STDOUT and STDERR inside the ``with`` block."""
+
+    def __enter__(self):
+        self.streams = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
+        return self
+
+    def __exit__(self, *exc):
+        sys.stdout, sys.stderr = self.streams
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def build_registry():
+    register("help", "Get help on appctl, or on a specific command.",
+             "[<command>...]", handler=cmd_help)
+
+    register("cli", "Review current appctl info, check for updates, or see defined aliases.")
+    register("cli version", "Print appctl version.", "", handler=cmd_cli_version)
+    register("cli info", "Print various details about the appctl environment.",
+             "[--format=<format>]", handler=cmd_cli_info, defaults={"format": "list"})
+    register("cli check-update", "Check to see if there is a newer version of appctl available.",
+             "[--patch] [--minor] [--major] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_cli_check_update, defaults={"format": "table"})
+    register("cli update", "Update appctl to the latest release.",
+             "[--patch] [--minor] [--major] [--stable] [--nightly] [--yes] "
+             "[--archive=<archive>] [--path=<path>]",
+             handler=cmd_cli_update)
+    register("cli has-command", "Detect if a command exists.", "<command_name>...",
+             handler=cmd_cli_has_command)
+    register("cli completions", "Generate tab completion strings.",
+             "--line=<line> [--point=<point>] [--shell=<shell>]", handler=cmd_cli_completions,
+             defaults={"shell": "bash"})
+    register("cli cmd-dump", "Dump the list of installed commands, as JSON.", "",
+             handler=cmd_cli_cmd_dump)
+    register("cli param-dump", "Dump the list of global parameters, as JSON or in var_export "
+             "format.", "[--with-values] [--format=<format>]", handler=cmd_cli_param_dump,
+             defaults={"format": "json"})
+    register("cli self-uninstall", "Remove appctl, its containers, networks, volumes, images "
+             "and sites from the system.", "[--yes]", handler=cmd_cli_self_uninstall)
+    register("cli alias", "List available appctl aliases.", "[--format=<format>]",
+             handler=cmd_cli_alias_list, defaults={"format": "yaml"})
+    register("cli aliases", "List available appctl aliases.", "[--format=<format>]",
+             handler=cmd_cli_alias_list, defaults={"format": "yaml"})
+    register("cli alias list", "List available appctl aliases.", "[--format=<format>]",
+             handler=cmd_cli_alias_list, defaults={"format": "yaml"})
+    register("cli alias add", "Create an alias.",
+             "<key> [--set-user=<user>] [--set-url=<url>] [--set-path=<path>] [--grouping=<grouping>]",
+             handler=cmd_cli_alias_add)
+    register("cli alias delete", "Delete an alias.", "<key>", handler=cmd_cli_alias_delete)
+
+    register("site", "Create, delete, list, and update sites.")
+    register("site create", "Create a site.",
+             "<site-name> [--type=<type>] [--title=<title>] [--email=<email>] [--porcelain]",
+             handler=cmd_site_create, defaults={"type": "standard"})
+    register("site delete", "Delete a site.", "<site-name> [--yes] [--keep-tables]",
+             alias="rm", handler=cmd_site_delete)
+    register("site list", "List all sites.",
+             "[--field=<field>] [--fields=<fields>] [--format=<format>]",
+             alias="ls", handler=cmd_site_list, defaults={"format": "table"})
+    register("site update", "Update one or more fields of a site.",
+             "<site-name> [--<field>=<value>]", handler=cmd_site_update)
+    register("site activate", "Activate one or more sites.", "<site-name>...",
+             handler=cmd_site_activate)
+    register("site deactivate", "Deactivate one or more sites.", "<site-name>...",
+             handler=cmd_site_deactivate)
+    register("site empty", "Empty a site of its content.", "[--uploads] [--yes]",
+             handler=cmd_site_empty)
+    register("site config", "Display the merged compose configuration of a site.",
+             "[<site-name>] [--services] [--custom-compose=<path>]", handler=cmd_site_config)
+    register("site meta", "Add, update, get, and delete site metadata.")
+    register("site meta get", "Get a meta field.", "<site-name> <key> [--format=<format>]",
+             handler=cmd_site_meta_get, defaults={"format": "var_export"})
+    register("site meta set", "Set a meta field.", "<site-name> <key> <value> [--format=<format>]",
+             handler=cmd_site_meta_set, defaults={"format": "plaintext"}, stdin_args=("value",))
+    register("site meta delete", "Delete a meta field.", "<site-name> <key> [--all]",
+             handler=cmd_site_meta_delete)
+    register("site meta list", "List all metadata associated with a site.",
+             "<site-name> [--keys=<keys>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_site_meta_list, defaults={"format": "table"})
+
+    register("config", "Generate and read the application configuration file.", alias="cfg")
+    register("config get", "Get the value of a specific constant or variable.",
+             "<name> [--type=<type>] [--format=<format>]",
+             handler=cmd_config_get, defaults={"type": "all", "format": "var_export"})
+    register("config set", "Set the value of a specific constant or variable.",
+             "<name> <value> [--add] [--raw] [--anchor=<anchor>] [--type=<type>]",
+             handler=cmd_config_set, defaults={"type": "all"}, stdin_args=("value",))
+    register("config delete", "Delete a specific constant or variable.",
+             "<name> [--type=<type>]", handler=cmd_config_delete, defaults={"type": "all"})
+    register("config list", "List variables, constants, and file includes.",
+             "[<filter>...] [--fields=<fields>] [--format=<format>] [--strict]",
+             handler=cmd_config_list, defaults={"format": "table"})
+    register("config path", "Get the path to the configuration file.", "",
+             handler=cmd_config_path)
+    register("config create", "Generate a configuration file.",
+             "--dbname=<dbname> --dbuser=<dbuser> [--dbpass=<dbpass>] [--dbhost=<dbhost>] "
+             "[--dbprefix=<dbprefix>] [--skip-check] [--force]",
+             handler=cmd_config_create, defaults={"dbhost": "localhost", "dbprefix": "app_"})
+
+    register("cache", "Add, remove, fetch, and flush the object cache.")
+    register("cache flush", "Flush the object cache.", "", handler=cmd_cache_flush)
+    register("cache get", "Get a value from the object cache.", "<key> [<group>]",
+             handler=cmd_cache_get, defaults={"group": "default"})
+    register("cache set", "Set a value to the object cache.",
+             "<key> <value> [<group>] [<expiration>]", handler=cmd_cache_set,
+             defaults={"group": "default", "expiration": 0}, stdin_args=("value",))
+    register("cache delete", "Remove a value from the object cache.", "<key> [<group>]",
+             handler=cmd_cache_delete, defaults={"group": "default"})
+
+    register("db", "Perform basic database operations.")
+    register("db create", "Create a new database.", "", handler=cmd_db_create)
+    register("db drop", "Delete the existing database.", "[--yes]", handler=cmd_db_drop)
+    register("db reset", "Remove all tables from the database.", "[--yes]", handler=cmd_db_reset)
+    register("db export", "Export the database to a file or to STDOUT.",
+             "[<file>] [--tables=<tables>] [--exclude_tables=<tables>] [--porcelain]",
+             handler=cmd_db_export)
+    register("db import", "Import a database from a file or from STDIN.",
+             "[<file>] [--skip-optimization]", handler=cmd_db_import,
+             defaults={"file": "database.sql"})
+    register("db query", "Execute a SQL query against the database.", "[<sql>]",
+             handler=cmd_db_query, stdin_args=("sql",))
+    register("db size", "Display the database name and size.",
+             "[--size_format=<format>] [--tables] [--format=<format>]",
+             handler=cmd_db_size, defaults={"format": "table"})
+
+    register("option", "Retrieve and set site options.")
+    register("option get", "Get the value for an option.", "<key> [--format=<format>]",
+             handler=cmd_option_get, defaults={"format": "var_export"})
+    register("option add", "Add a new option value.",
+             "<key> [<value>] [--format=<format>] [--autoload=<autoload>]",
+             handler=cmd_option_add, defaults={"format": "plaintext", "autoload": "yes"},
+             stdin_args=("value",))
+    register("option update", "Update an option value.",
+             "<key> [<value>] [--autoload=<autoload>] [--format=<format>]",
+             handler=cmd_option_update, defaults={"format": "plaintext"}, stdin_args=("value",))
+    register("option delete", "Delete an option.", "<key>...", handler=cmd_option_delete)
+    register("option list", "List options and their values.",
+             "[--search=<pattern>] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_option_list, defaults={"format": "table"})
+
+    register("plugin", "Manage plugins.")
+    register("plugin install", "Install one or more plugins.",
+             "<plugin|zip|url>... [--version=<version>] [--force] [--activate]",
+             handler=cmd_plugin_install)
+    register("plugin activate", "Activate one or more plugins.",
+             "[<plugin>...] [--all] [--network]", handler=cmd_plugin_activate)
+    register("plugin deactivate", "Deactivate one or more plugins.",
+             "[<plugin>...] [--uninstall] [--all] [--network]", handler=cmd_plugin_deactivate)
+    register("plugin delete", "Delete plugin files without deactivating or uninstalling.",
+             "[<plugin>...] [--all]", handler=cmd_plugin_delete)
+    register("plugin uninstall", "Uninstall one or more plugins.",
+             "[<plugin>...] [--deactivate] [--skip-delete] [--all]", handler=cmd_plugin_uninstall)
+    register("plugin update", "Update one or more plugins.",
+             "[<plugin>...] [--all] [--format=<format>] [--version=<version>] [--dry-run]",
+             handler=cmd_plugin_update, defaults={"format": "table"})
+    register("plugin list", "Get a list of plugins.",
+             "[--status=<status>] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_plugin_list, defaults={"format": "table"})
+    register("plugin status", "Reveal the status of one or all plugins.", "[<plugin>]",
+             handler=cmd_plugin_status)
+
+    register("theme", "Manage themes.")
+    register("theme activate", "Activate a theme.", "<theme>", handler=cmd_theme_activate)
+    register("theme install", "Install one or more themes.",
+             "<theme|zip|url>... [--version=<version>] [--force] [--activate]",
+             handler=cmd_theme_install)
+    register("theme delete", "Delete one or more themes.", "[<theme>...] [--all] [--force]",
+             handler=cmd_theme_delete)
+    register("theme list", "Get a list of themes.",
+             "[--status=<status>] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_theme_list, defaults={"format": "table"})
+
+    register("post", "Manage posts, content, and meta.")
+    register("post create", "Create a new post.",
+             "[--post_title=<title>] [--post_type=<type>] [--post_status=<status>] "
+             "[--<field>=<value>] [--porcelain]",
+             handler=cmd_post_create, defaults={"post_type": "post", "post_status": "draft"})
+    register("post get", "Get details about a post.",
+             "<id> [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_post_get, defaults={"format": "table"})
+    register("post list", "Get a list of posts.",
+             "[--<field>=<value>] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_post_list, defaults={"format": "table"})
+    register("post update", "Update one or more existing posts.",
+             "<id>... [--<field>=<value>]", handler=cmd_post_update)
+    register("post delete", "Delete an existing post.", "<id>... [--force] [--defer-term-counting]",
+             handler=cmd_post_delete)
+
+    register("user", "Manage users, along with their roles, capabilities, and meta.")
+    register("user create", "Create a new user.",
+             "<user-login> <user-email> [--role=<role>] [--user_pass=<password>] "
+             "[--display_name=<name>] [--send-email] [--porcelain]",
+             handler=cmd_user_create, defaults={"role": "subscriber"})
+    register("user delete", "Delete one or more users.",
+             "<user>... [--network] [--reassign=<user-id>] [--yes]", handler=cmd_user_delete)
+    register("user get", "Get details about a user.",
+             "<user> [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_user_get, defaults={"format": "table"})
+    register("user list", "List users.",
+             "[--role=<role>] [--field=<field>] [--fields=<fields>] [--format=<format>]",
+             handler=cmd_user_list, defaults={"format": "table"})
+    register("user update", "Update an existing user.",
+             "<user>... [--user_pass=<password>] [--<field>=<value>] [--skip-email]",
+             handler=cmd_user_update)
+
+
+build_registry()
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+PROJECT_CONFIG_FILES = ("appctl.local.yml", "appctl.yml")
+# Values written to the global config file when they are missing.
+AUTO_CONFIG = (("locale", "en_US"), ("installer_version", "stable"))
+
+
+def root_dir():
+    return os.environ.get("APPCTL_ROOT_DIR") or os.path.join(os.path.expanduser("~"), ".appctl")
+
+
+def packages_dir():
+    return os.environ.get("APPCTL_PACKAGES_DIR") or os.path.join(root_dir(), "packages")
+
+
+def global_config_path():
+    return os.environ.get("APPCTL_CONFIG_PATH") or os.path.join(root_dir(), "config", "config.yml")
+
+
+def project_config_path():
+    """Search upward from the working directory for a project config file."""
+    try:
+        directory = os.getcwd()
+    except OSError:
+        return None
+    while True:
+        for name in PROJECT_CONFIG_FILES:
+            candidate = os.path.join(directory, name)
+            if os.path.isfile(candidate):
+                return candidate
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            return None
+        directory = parent
+
+
+def absolutize(path, base_dir):
+    path = os.path.expanduser(path)
+    if os.path.isabs(path):
+        return path
+    return os.path.normpath(os.path.join(base_dir, path))
+
+
+def read_yaml_file(path):
+    """Return the mapping stored in ``path`` ({} when missing or empty)."""
+    with open(path, encoding="utf-8") as handle:
+        data = yaml_load(handle.read())
+    return data if isinstance(data, dict) else {}
+
+
+def ensure_global_config():
+    """Add missing auto-created values (locale, installer_version) to the global config."""
+    path = global_config_path()
+    explicit = bool(os.environ.get("APPCTL_CONFIG_PATH") or os.environ.get("APPCTL_ROOT_DIR"))
+    text = ""
+    try:
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        existing = yaml_load(text)
+    except YamlError:
+        return
+    except (OSError, UnicodeDecodeError) as exc:
+        if explicit:
+            error("Unable to read the global config file '%s': %s."
+                  % (path, getattr(exc, "strerror", None) or exc))
+        return
+    if existing is None:
+        existing = {}
+    if not isinstance(existing, dict):
+        return
+    missing = [(key, value) for key, value in AUTO_CONFIG if key not in existing]
+    if not missing:
+        return
+    if existing and text.lstrip().startswith("{"):
+        merged = dict(existing)
+        merged.update(missing)
+        content, mode = "\n".join(yaml_dump_lines(merged)) + "\n", "w"
+    else:
+        content = "\n" if text and not text.endswith("\n") else ""
+        content += "".join("%s: %s\n" % (key, value) for key, value in missing)
+        mode = "a"
+    try:
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(path, mode, encoding="utf-8") as handle:
+            handle.write(content)
+    except OSError as exc:
+        if explicit:
+            error("Unable to write the global config file '%s': %s."
+                  % (path, exc.strerror or exc))
+        debug("Unable to write the global config file '%s'." % path, "bootstrap")
+
+
+ALIAS_RE = re.compile(r"^@[A-Za-z0-9_.\-]+$")
+ALIAS_KEYS = ("user", "url", "path", "ssh", "http", "proxyjump", "key")
+ALL_ALIAS_DESCRIPTION = "Run command against every registered alias."
+
+
+def is_alias_name(name):
+    return isinstance(name, str) and ALIAS_RE.match(name) is not None
+
+
+def parse_alias(value, base_dir=None):
+    """Normalize an alias definition: a dict of connection values or a group list."""
+    if isinstance(value, list):
+        return [item if isinstance(item, str) else str(item) for item in value]
+    alias = {}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if item is None:
+                continue
+            if key in ALIAS_KEYS or (key in GLOBAL_SPEC and GLOBAL_SPEC[key]["file"]):
+                alias[key] = item
+        if base_dir and isinstance(alias.get("path"), str) and "ssh" not in alias:
+            alias["path"] = absolutize(alias["path"], base_dir)
+    return alias
+
+
+class ConfigLoader:
+    """Accumulate global parameters and aliases from config files."""
+
+    def __init__(self):
+        self.config = {}
+        self.aliases = {}
+
+    def merge_file(self, path, chain=()):
+        path = os.path.abspath(path)
+        if path in chain or not os.path.isfile(path):
+            return
+        try:
+            data = read_yaml_file(path)
+        except (OSError, UnicodeDecodeError, YamlError) as exc:
+            warning("Unable to parse config file '%s': %s" % (path, exc))
+            return
+        base_dir = os.path.dirname(path)
+        meta = data.get("_") if isinstance(data.get("_"), dict) else {}
+        inherit = meta.get("inherit")
+        if isinstance(inherit, str) and inherit:
+            parent = absolutize(inherit, base_dir)
+            if not os.path.isfile(parent) and os.path.isfile(os.path.abspath(inherit)):
+                parent = os.path.abspath(inherit)
+            self.merge_file(parent, chain + (path,))
+        merge = bool(meta.get("merge"))
+        for key, value in data.items():
+            if key == "_":
+                continue
+            if is_alias_name(key):
+                self.aliases[key] = parse_alias(value, base_dir)
+                continue
+            spec = GLOBAL_SPEC.get(key)
+            if spec is None or not spec["file"]:
+                continue
+            if key == "path" and isinstance(value, str):
+                value = absolutize(value, base_dir)
+            if spec["multiple"] and value is not None and not isinstance(value, list):
+                value = [value]
+            current = self.config.get(key)
+            if merge and isinstance(current, list) and isinstance(value, list):
+                value = current + value
+            self.config[key] = value
+
+    def merge_runtime_aliases(self, encoded):
+        try:
+            data = json.loads(encoded)
+        except ValueError:
+            warning("APPCTL_RUNTIME_ALIAS does not contain valid JSON.")
+            return
+        if not isinstance(data, dict):
+            return
+        for key, value in data.items():
+            if is_alias_name(key):
+                self.aliases[key] = parse_alias(value)
+
+
+def load_config():
+    """Load global and project config files. Returns the populated loader."""
+    loader = ConfigLoader()
+    global_path = global_config_path()
+    if os.path.isfile(global_path):
+        debug("Using global config: %s" % global_path, "bootstrap")
+        loader.merge_file(global_path)
+    else:
+        debug("No readable global config found", "bootstrap")
+    project_path = project_config_path()
+    if project_path:
+        debug("Using project config: %s" % project_path, "bootstrap")
+        loader.merge_file(project_path)
+    else:
+        debug("No project config found", "bootstrap")
+    runtime_aliases = os.environ.get("APPCTL_RUNTIME_ALIAS")
+    if runtime_aliases:
+        loader.merge_runtime_aliases(runtime_aliases)
+    if loader.aliases and "@all" not in loader.aliases:
+        loader.aliases = dict([("@all", ALL_ALIAS_DESCRIPTION)] + list(loader.aliases.items()))
+    Runtime.global_config_path = global_path
+    Runtime.project_config_path = project_path
+    Runtime.aliases = loader.aliases
+    return loader
+
+
+def compose_config(file_config, alias_config, runtime):
+    """Merge defaults < config files < alias < runtime flags."""
+    config = {name: (list(spec["default"]) if isinstance(spec["default"], list)
+                     else spec["default"]) for name, spec in GLOBAL_SPEC.items()}
+    config.update(file_config)
+    config.update(alias_config)
+    config.update(runtime)
+    if runtime.get("blog") not in (None, True, False) and "url" not in runtime:
+        config["url"] = runtime["blog"]
+    return config
+
+
+def disabled_commands():
+    value = Runtime.config.get("disabled_commands") or []
+    if not isinstance(value, list):
+        value = [value]
+    return {" ".join(str(item).split()) for item in value if item is not None}
+
+
+def is_command_disabled(command):
+    disabled = disabled_commands()
+    node = command
+    while node is not None and node.parent is not None:
+        if node.path in disabled:
+            return True
+        node = node.parent
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Remote execution
+# ---------------------------------------------------------------------------
+
+SSH_URL_RE = re.compile(
+    r"^(?:(docker|docker-compose|docker-compose-run|ssh|vagrant):(?://)?)?"
+    r"(?:([^@:/]+)@)?([^:/~]+)(?::(\d*))?((?:/|~).*)?$")
+
+
+def escapeshellarg(value):
+    return "'" + str(value).replace("'", "'\\''") + "'"
+
+
+def parse_ssh_url(url):
+    match = SSH_URL_RE.match(str(url))
+    if not match:
+        return {"scheme": None, "user": None, "host": str(url), "port": None, "path": None}
+    scheme, user, host, port, path = match.groups()
+    return {"scheme": scheme, "user": user, "host": host, "port": port or None,
+            "path": path or None}
+
+
+def generate_ssh_command(bits, command, config):
+    is_tty = sys.stdout.isatty() and not config.get("skip-tty")
+    scheme = bits["scheme"] or "ssh"
+    user_opt = "--user %s " % escapeshellarg(bits["user"]) if bits["user"] else ""
+    workdir_opt = "--workdir %s " % escapeshellarg(bits["path"]) if bits["path"] else ""
+    if scheme == "docker":
+        return "docker exec %s%s%s%s sh -c %s" % (
+            user_opt, workdir_opt, "-t " if is_tty else "", escapeshellarg(bits["host"]),
+            escapeshellarg(command))
+    if scheme == "docker-compose":
+        return "docker-compose exec %s%s%s%s sh -c %s" % (
+            user_opt, workdir_opt, "" if is_tty else "-T ", escapeshellarg(bits["host"]),
+            escapeshellarg(command))
+    if scheme == "docker-compose-run":
+        return "docker-compose run %s%s%s%s sh -c %s" % (
+            user_opt, workdir_opt, "" if is_tty else "-T ", escapeshellarg(bits["host"]),
+            escapeshellarg(command))
+    if scheme == "vagrant":
+        return "vagrant ssh -c %s %s" % (escapeshellarg(command), escapeshellarg(bits["host"]))
+    options = []
+    if config.get("proxyjump"):
+        options.append("-J %s" % escapeshellarg(config["proxyjump"]))
+    if bits["port"]:
+        options.append("-p %d" % int(bits["port"]))
+    if config.get("key"):
+        options.append("-i %s" % escapeshellarg(config["key"]))
+    options.append("-t" if is_tty else "-T")
+    options.append("-vvv" if Runtime.debug else "-q")
+    host = "%s@%s" % (bits["user"], bits["host"]) if bits["user"] else bits["host"]
+    return "ssh %s %s %s" % (" ".join(options), escapeshellarg(host), escapeshellarg(command))
+
+
+def run_remote(invocation, config, alias, alias_config):
+    """Run the invocation on the endpoint named by the ``ssh`` config value."""
+    import subprocess
+
+    bits = parse_ssh_url(config["ssh"])
+    pre_cmd = os.environ.get("APPCTL_SSH_PRE_CMD", "")
+    if pre_cmd:
+        warning("APPCTL_SSH_PRE_CMD found, executing the following command(s) on the "
+                "remote machines:")
+        sys.stderr.write(pre_cmd + "\n")
+        pre_cmd = pre_cmd.rstrip().rstrip(";") + "; "
+    if bits["path"] and (bits["scheme"] or "ssh") in ("ssh", "vagrant"):
+        pre_cmd += "cd %s; " % escapeshellarg(bits["path"])
+    env_vars = "%s=1 " % STRICT_ENV if os.environ.get(STRICT_ENV) else ""
+    binary = PROG
+    if alias:
+        runtime_alias = {k: v for k, v in alias_config.items() if k != "ssh"}
+        if runtime_alias:
+            binary = "APPCTL_RUNTIME_ALIAS=%s %s %s" % (
+                escapeshellarg(json.dumps({alias: runtime_alias})), PROG, alias)
+    args = [arg for arg in invocation.argv if not arg.startswith("--ssh=")]
+    command = pre_cmd + env_vars + binary
+    if args:
+        command += " " + " ".join(escapeshellarg(arg) for arg in args)
+    full_command = generate_ssh_command(bits, command, config)
+    debug("Running SSH command: %s" % full_command, "ssh")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    code = subprocess.call(full_command, shell=True)
+    if code == 255:
+        error("Cannot connect over SSH using provided configuration.", 255)
+    return code
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+class Invocation:
+    """The parsed command line, shared by every alias the command runs against."""
+
+    def __init__(self, argv, positionals, assoc_list, runtime, loader):
+        self.argv = argv
+        self.positionals = positionals
+        self.assoc_list = assoc_list
+        self.runtime = runtime
+        self.file_config = loader.config
+        self.aliases = loader.aliases
+
+
+def extract_alias(argv):
+    """Remove and return a leading ``@alias`` positional from ``argv``."""
+    for index, token in enumerate(argv):
+        if token == "--":
+            return None
+        if parse_token(token) is not None:
+            continue
+        if is_alias_name(token):
+            del argv[index]
+            return token
+        return None
+    return None
+
+
+def apply_runtime_config(config, runtime):
+    Runtime.config = config
+    Runtime.quiet = bool(runtime.get("quiet"))
+    value = runtime.get("debug")
+    Runtime.debug = value not in (None, False)
+    Runtime.debug_group = value if isinstance(value, str) and value else None
+
+
+def dispatch(alias, invocation, stack=()):
+    """Run the invocation, resolving ``alias`` (and alias groups) first."""
+    aliases = invocation.aliases
+    if alias is None:
+        return execute(invocation, None, {})
+    if alias == "@all" and "@all" not in aliases:
+        error("Cannot use '@all' when no aliases are registered.")
+    if alias == "@all" and isinstance(aliases["@all"], str):
+        names = sorted((name for name in aliases if name != "@all"), key=sort_key)
+        return run_alias_group(names, invocation, stack + (alias,))
+    if alias not in aliases:
+        message = "Alias '%s' not found." % alias
+        suggestion = get_suggestion(alias, aliases.keys(), synonyms=False)
+        if suggestion:
+            message += "\nDid you mean '%s'?" % suggestion
+        error(message)
+    definition = aliases[alias]
+    if isinstance(definition, list):
+        members = []
+        for name in definition:
+            if name not in members:
+                members.append(name)
+        invalid = [name for name in members if name not in aliases]
+        if invalid:
+            error("Group '%s' contains one or more invalid aliases: %s."
+                  % (alias, ", ".join(invalid)))
+        return run_alias_group(members, invocation, stack + (alias,))
+    return execute(invocation, alias, definition if isinstance(definition, dict) else {})
+
+
+def run_alias_group(names, invocation, stack):
+    code = 0
+    for name in names:
+        if name in stack:
+            continue
+        log(name)
+        try:
+            result = dispatch(name, invocation, stack)
+        except AppctlExit as exc:
+            result = exc.code
+        sys.stdout.flush()
+        if result:
+            code = result
+    return code
+
+
+def execute(invocation, alias, alias_config):
+    config = compose_config(invocation.file_config, alias_config, invocation.runtime)
+    apply_runtime_config(config, invocation.runtime)
+    if alias:
+        debug("Using alias: %s" % alias, "bootstrap")
+    debug("Resolved config: %s" % json.dumps(config, sort_keys=True, default=str), "bootstrap")
+
+    if config.get("ssh"):
+        return run_remote(invocation, config, alias, alias_config)
+
+    positionals = invocation.positionals
+    if not positionals:
+        show_root_help()
+        return 0
+
+    command, remaining = resolve_command(positionals)
+    debug("Running command: %s" % command.path, "commands")
+
+    if command.handler is None:
+        command.show_usage()
+        return 0
+
+    args, assoc = validate_and_prepare(command, remaining, invocation.assoc_list)
+    Runtime.assoc_list = list(invocation.assoc_list)
+    command.handler(args, assoc)
+    return 0
+
+
+def is_completion(positionals):
+    """Tab completion invocations never write to the log file."""
+    return positionals[:2] == ["cli", "completions"]
+
+
+# Commands whose output is meant for machines or shells; first-run messaging stays off them.
+MACHINE_READABLE_COMMANDS = ("cli version", "cli has-command", "cli completions",
+                             "cli cmd-dump", "cli param-dump", "cli alias", "cli aliases",
+                             "cli alias list", "config path", "db export")
+HUMAN_FORMATS = ("table", "list", "plaintext")
+
+
+def peek_command(positionals):
+    """The command ``positionals`` name (without reporting errors), or None."""
+    node = ROOT
+    for token in positionals:
+        if not node.can_have_subcommands():
+            break
+        child = node.find_subcommand(token)
+        if child is None:
+            break
+        node = child
+    return None if node is ROOT else node
+
+
+def command_family(command):
+    node = command
+    while node is not None and node.parent is not None and node.parent is not ROOT:
+        node = node.parent
+    return node.name if node is not None else None
+
+
+def machine_readable(command, assoc_list):
+    """Whether the output of ``command`` must stay parseable (JSON, values, porcelain...)."""
+    if command is None:
+        return False
+    if command.path in MACHINE_READABLE_COMMANDS:
+        return True
+    assoc = dict(assoc_list)
+    fmt = assoc.get("format", command.defaults.get("format"))
+    if isinstance(fmt, str) and fmt not in HUMAN_FORMATS:
+        return True
+    return bool(assoc.get("field") or assoc.get("porcelain"))
+
+
+def runs_remotely(alias, loader, runtime):
+    if runtime.get("ssh") or loader.config.get("ssh"):
+        return True
+    if alias is None:
+        return False
+    definition = loader.aliases.get(alias)
+    return not isinstance(definition, dict) or bool(definition.get("ssh"))
+
+
+def run(argv):
+    strict = bool(os.environ.get(STRICT_ENV))
+    argv = list(argv)
+    alias = extract_alias(argv)
+    tokens = rewrite_args(argv)
+    positionals, assoc_list, runtime = split_args(tokens, strict)
+    FileLog.enabled = not is_completion(positionals)
+    log_invocation(argv if alias is None else [alias] + argv)
+    apply_runtime_config(dict(runtime), runtime)
+    if Runtime.debug:
+        debug("Runtime config: %s" % json.dumps(runtime, sort_keys=True), "bootstrap")
+    for name in runtime:
+        if GLOBAL_SPEC[name]["deprecated"]:
+            warning("The --%s global parameter is deprecated." % name)
+
+    Runtime.runtime_args = dict(runtime)
+    ensure_global_config()
+    loader = load_config()
+    if not is_completion(positionals):
+        get_cache()
+        apply_runtime_config(compose_config(loader.config, {}, runtime), runtime)
+        command = peek_command(positionals)
+        family = command_family(command)
+        if (family is not None and family not in REQUIREMENT_EXEMPT_FAMILIES
+                and not runs_remotely(alias, loader, runtime)):
+            check_requirements()
+        Database.get()
+        silent = command is not None and command.path == "cli has-command"
+        show_message = not machine_readable(command, assoc_list)
+        if silent:
+            with _Silenced():
+                bootstrap(family, False, True)
+        else:
+            bootstrap(family, show_message)
+        auto_check_update(command)
+    invocation = Invocation(argv, positionals, assoc_list, runtime, loader)
+    return dispatch(alias, invocation)
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    Runtime.start_time = time.time()
+    Runtime.cache = None
+    try:
+        code = run(argv)
+    except AppctlExit as exc:
+        code = exc.code
+    except BrokenPipeError:
+        code = 0
+    finally:
+        if Runtime.cache is not None:
+            try:
+                Runtime.cache.clean()
+            except OSError:
+                pass
+        Database.close()
+    sys.stdout.flush()
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

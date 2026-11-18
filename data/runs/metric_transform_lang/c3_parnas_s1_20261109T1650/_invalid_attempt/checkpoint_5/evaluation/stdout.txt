@@ -1,0 +1,3685 @@
+
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.16, pytest-9.2.0, pluggy-1.7.0 -- /tmp/uv-cache/archive-v0/bZVEDcqIwjii4vS6/bin/python
+cachedir: .pytest_cache
+metadata: {'Python': '3.12.16', 'Platform': 'Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41', 'Packages': {'pytest': '9.2.0', 'pluggy': '1.7.0'}, 'Plugins': {'timeout': '2.4.0', 'json-report': '1.5.0', 'metadata': '3.1.1', 'json-ctrf': '0.6.1'}}
+rootdir: /workspace
+configfile: pytest.ini
+plugins: timeout-2.4.0, json-report-1.5.0, metadata-3.1.1, json-ctrf-0.6.1
+timeout: 20.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 74 items
+
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_spec_correct[01_fresh_run_basic] FAILED [  1%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_spec_error[01_missing_version_header] FAILED [  2%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_spec_error[02_unsupported_major] PASSED [  4%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_spec_error[03_minor_gating_join_requires_14] PASSED [  5%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_resume_error[01_resume_requires_state_dir] PASSED [  6%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_resume_error[02_resume_missing_state_file] PASSED [  8%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_file_output[01_outputs_and_state] FAILED [  9%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[01_join_left_outer] FAILED [ 10%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[02_join_right_outer] FAILED [ 12%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[03_join_full_outer] FAILED [ 13%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[04_with_calcs_filters] FAILED [ 14%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[05_mapping_comprehensive] FAILED [ 16%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[06_chained_joins] FAILED [ 17%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[07_glob_formats] FAILED [ 18%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[08_temporal_within_delta] FAILED [ 20%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[09_alias_calc_filter] FAILED [ 21%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[10_param_threshold] FAILED [ 22%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[11_mapping_defaults] FAILED [ 24%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[12_single_source_window_params] FAILED [ 25%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[13_result_alias_chain] FAILED [ 27%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[14_multi_file_glob] FAILED [ 28%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[15_single_source_aggregates] FAILED [ 29%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[16_multisource_group_only] FAILED [ 31%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[17_post_agg_lag] FAILED [ 32%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[01_group_by_single] FAILED [ 33%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[02_group_by_multi] FAILED [ 35%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[03_window_various] FAILED [ 36%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[04_comparison_ops] FAILED [ 37%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[05_logical_ops] FAILED [ 39%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[06_in_operator] FAILED [ 40%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[07_column_compare] FAILED [ 41%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[08_timestamp_transforms] FAILED [ 43%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[09_round_function] FAILED [ 44%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[10_apply_order] FAILED [ 45%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[11_null_aggregates] FAILED [ 47%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[12_cli_timezone] FAILED [ 48%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[13_schema_inheritance_pre_calc] FAILED [ 50%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[14_params_and_filter] FAILED [ 51%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[15_post_agg_lag] FAILED [ 52%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[16_group_by_pre_calc_key] FAILED [ 54%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[17_post_agg_lead_param_coalesce] FAILED [ 55%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[18_string_ops_basic] FAILED [ 56%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[19_string_ops_with_params] FAILED [ 58%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[20_multiple_params_various_types] FAILED [ 59%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[21_type_widening_override] FAILED [ 60%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[22_multiple_pre_calcs] FAILED [ 62%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[23_multiple_post_agg_calcs] FAILED [ 63%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[24_post_agg_calc_simple] FAILED [ 64%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[25_lag_with_group_by_only] FAILED [ 66%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[26_window_group_lag_combined] FAILED [ 67%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[27_cast_basic] FAILED [ 68%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[28_regression_filter_apply] FAILED [ 70%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[29_regression_window_group] FAILED [ 71%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[30_regression_all_aggregates] FAILED [ 72%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[31_multi_input_union] FAILED [ 74%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[32_tsv_and_format_flag] FAILED [ 75%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[33_recursive_directory] FAILED [ 77%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[34_null_markers_and_filter] FAILED [ 78%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[35_order_independence_window] FAILED [ 79%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[36_count_col_with_nulls] FAILED [ 81%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[37_three_valued_logic_filter] FAILED [ 82%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[38_null_aware_aggregations] FAILED [ 83%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[39_mixed_formats] FAILED [ 85%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[40_glob_pattern] FAILED [ 86%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[41_non_strict_bad_records_out] FAILED [ 87%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[42_non_strict_without_bad_out] FAILED [ 89%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[43_custom_null_markers] FAILED [ 90%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[44_regression_multi_file_with_calcs] FAILED [ 91%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[45_regression_multi_file_lag_lead] FAILED [ 93%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[46_regression_multi_file_params] FAILED [ 94%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[47_join_inner_simple] FAILED [ 95%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[48_temporal_within_join] FAILED [ 97%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_edge_meta_out_omitted FAILED [ 98%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_edge_resume_output_stable FAILED [100%]
+
+=================================== FAILURES ===================================
+______________ test_checkpoint_5_spec_correct[01_fresh_run_basic] ______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_spec_correct/01_fresh_run_basic')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_spec_correct0')
+
+    @pytest.mark.parametrize(
+        "case_dir",
+        SPEC_CORRECT_CASES,
+        ids=[case_dir.name for case_dir in SPEC_CORRECT_CASES],
+    )
+    def test_checkpoint_5_spec_correct(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "spec_correct", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:36: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_spec_correct/01_fresh_run_basic')
+group_name = 'spec_correct', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_spec_correct0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+___________ test_checkpoint_5_spec_error[01_missing_version_header] ____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_spec_error/01_missing_version_header')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_spec_error_00')
+
+    @pytest.mark.error
+    @pytest.mark.parametrize(
+        "case_dir",
+        SPEC_ERROR_CASES,
+        ids=[case_dir.name for case_dir in SPEC_ERROR_CASES],
+    )
+    def test_checkpoint_5_spec_error(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "spec_error", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:50: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_spec_error/01_missing_version_header')
+group_name = 'spec_error', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_spec_error_00')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+>           assert result.returncode != 0
+                   ^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError
+
+.evaluation_tests/case_utils.py:238: AssertionError
+_____________ test_checkpoint_5_file_output[01_outputs_and_state] ______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_file_output/01_outputs_and_state')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_file_output_0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        FILE_OUTPUT_CASES,
+        ids=[case_dir.name for case_dir in FILE_OUTPUT_CASES],
+    )
+    def test_checkpoint_5_file_output(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "file_output", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:78: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_file_output/01_outputs_and_state')
+group_name = 'file_output', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_file_output_0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_________________ test_checkpoint_5_hidden[01_join_left_outer] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/01_join_left_outer')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_01_jo0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/01_join_left_outer')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_01_jo0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+________________ test_checkpoint_5_hidden[02_join_right_outer] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/02_join_right_outer')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_02_jo0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/02_join_right_outer')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_02_jo0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_________________ test_checkpoint_5_hidden[03_join_full_outer] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/03_join_full_outer')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_03_jo0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/03_join_full_outer')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_03_jo0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_______________ test_checkpoint_5_hidden[04_with_calcs_filters] ________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/04_with_calcs_filters')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_04_wi0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/04_with_calcs_filters')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_04_wi0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+______________ test_checkpoint_5_hidden[05_mapping_comprehensive] ______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/05_mapping_comprehensive')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_05_ma0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/05_mapping_comprehensive')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_05_ma0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+__________________ test_checkpoint_5_hidden[06_chained_joins] __________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/06_chained_joins')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_06_ch0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/06_chained_joins')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_06_ch0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+__________________ test_checkpoint_5_hidden[07_glob_formats] ___________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/07_glob_formats')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_07_gl0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/07_glob_formats')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_07_gl0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+______________ test_checkpoint_5_hidden[08_temporal_within_delta] ______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/08_temporal_within_delta')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_08_te0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/08_temporal_within_delta')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_08_te0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+________________ test_checkpoint_5_hidden[09_alias_calc_filter] ________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/09_alias_calc_filter')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_09_al0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/09_alias_calc_filter')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_09_al0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_________________ test_checkpoint_5_hidden[10_param_threshold] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/10_param_threshold')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_10_pa0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/10_param_threshold')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_10_pa0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+________________ test_checkpoint_5_hidden[11_mapping_defaults] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/11_mapping_defaults')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_11_ma0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/11_mapping_defaults')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_11_ma0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+___________ test_checkpoint_5_hidden[12_single_source_window_params] ___________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/12_single_source_window_params')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_12_si0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/12_single_source_window_params')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_12_si0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_______________ test_checkpoint_5_hidden[13_result_alias_chain] ________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/13_result_alias_chain')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_13_re0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/13_result_alias_chain')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_13_re0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_________________ test_checkpoint_5_hidden[14_multi_file_glob] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/14_multi_file_glob')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_14_mu0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/14_multi_file_glob')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_14_mu0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+____________ test_checkpoint_5_hidden[15_single_source_aggregates] _____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/15_single_source_aggregates')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_15_si0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/15_single_source_aggregates')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_15_si0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_____________ test_checkpoint_5_hidden[16_multisource_group_only] ______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/16_multisource_group_only')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_16_mu0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/16_multisource_group_only')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_16_mu0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+__________________ test_checkpoint_5_hidden[17_post_agg_lag] ___________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/17_post_agg_lag')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_17_po0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_dir",
+        HIDDEN_CASES,
+        ids=[case_dir.name for case_dir in HIDDEN_CASES],
+    )
+    def test_checkpoint_5_hidden(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "hidden", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_hidden/17_post_agg_lag')
+group_name = 'hidden', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_hidden_17_po0')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_______________ test_checkpoint_5_regression[01_group_by_single] _______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/01_group_by_single')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_00')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/01_group_by_single')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_00')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_______________ test_checkpoint_5_regression[02_group_by_multi] ________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/02_group_by_multi')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_01')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/02_group_by_multi')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_01')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_______________ test_checkpoint_5_regression[03_window_various] ________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/03_window_various')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_02')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/03_window_various')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_02')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_______________ test_checkpoint_5_regression[04_comparison_ops] ________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/04_comparison_ops')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_03')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/04_comparison_ops')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_03')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_________________ test_checkpoint_5_regression[05_logical_ops] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/05_logical_ops')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_04')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/05_logical_ops')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_04')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_________________ test_checkpoint_5_regression[06_in_operator] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/06_in_operator')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_05')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/06_in_operator')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_05')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_______________ test_checkpoint_5_regression[07_column_compare] ________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/07_column_compare')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_06')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/07_column_compare')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_06')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+____________ test_checkpoint_5_regression[08_timestamp_transforms] _____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/08_timestamp_transforms')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_07')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/08_timestamp_transforms')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_07')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_______________ test_checkpoint_5_regression[09_round_function] ________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/09_round_function')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_08')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/09_round_function')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_08')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_________________ test_checkpoint_5_regression[10_apply_order] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/10_apply_order')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_10')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/10_apply_order')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_10')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_______________ test_checkpoint_5_regression[11_null_aggregates] _______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/11_null_aggregates')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_11')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/11_null_aggregates')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_11')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+________________ test_checkpoint_5_regression[12_cli_timezone] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/12_cli_timezone')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_12')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/12_cli_timezone')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_12')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_________ test_checkpoint_5_regression[13_schema_inheritance_pre_calc] _________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/13_schema_inheritance_pre_calc')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_13')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/13_schema_inheritance_pre_calc')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_13')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+______________ test_checkpoint_5_regression[14_params_and_filter] ______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/14_params_and_filter')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_14')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/14_params_and_filter')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_14')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+________________ test_checkpoint_5_regression[15_post_agg_lag] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/15_post_agg_lag')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_15')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/15_post_agg_lag')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_15')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+____________ test_checkpoint_5_regression[16_group_by_pre_calc_key] ____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/16_group_by_pre_calc_key')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_16')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/16_group_by_pre_calc_key')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_16')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+________ test_checkpoint_5_regression[17_post_agg_lead_param_coalesce] _________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/17_post_agg_lead_param_coalesce')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_17')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/17_post_agg_lead_param_coalesce')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_17')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+______________ test_checkpoint_5_regression[18_string_ops_basic] _______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/18_string_ops_basic')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_18')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/18_string_ops_basic')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_18')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+___________ test_checkpoint_5_regression[19_string_ops_with_params] ____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/19_string_ops_with_params')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_19')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/19_string_ops_with_params')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_19')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+________ test_checkpoint_5_regression[20_multiple_params_various_types] ________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/20_multiple_params_various_types')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_20')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/20_multiple_params_various_types')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_20')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+___________ test_checkpoint_5_regression[21_type_widening_override] ____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/21_type_widening_override')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_21')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/21_type_widening_override')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_21')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_____________ test_checkpoint_5_regression[22_multiple_pre_calcs] ______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/22_multiple_pre_calcs')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_22')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/22_multiple_pre_calcs')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_22')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+___________ test_checkpoint_5_regression[23_multiple_post_agg_calcs] ___________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/23_multiple_post_agg_calcs')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_23')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/23_multiple_post_agg_calcs')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_23')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+____________ test_checkpoint_5_regression[24_post_agg_calc_simple] _____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/24_post_agg_calc_simple')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_24')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/24_post_agg_calc_simple')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_24')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+___________ test_checkpoint_5_regression[25_lag_with_group_by_only] ____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/25_lag_with_group_by_only')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_25')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/25_lag_with_group_by_only')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_25')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+__________ test_checkpoint_5_regression[26_window_group_lag_combined] __________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/26_window_group_lag_combined')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_26')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/26_window_group_lag_combined')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_26')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_________________ test_checkpoint_5_regression[27_cast_basic] __________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/27_cast_basic')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_27')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/27_cast_basic')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_27')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+___________ test_checkpoint_5_regression[28_regression_filter_apply] ___________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/28_regression_filter_apply')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_28')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/28_regression_filter_apply')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_28')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+___________ test_checkpoint_5_regression[29_regression_window_group] ___________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/29_regression_window_group')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_29')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/29_regression_window_group')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_29')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+__________ test_checkpoint_5_regression[30_regression_all_aggregates] __________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/30_regression_all_aggregates')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_30')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/30_regression_all_aggregates')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_30')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+______________ test_checkpoint_5_regression[31_multi_input_union] ______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/31_multi_input_union')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_31')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/31_multi_input_union')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_31')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_____________ test_checkpoint_5_regression[32_tsv_and_format_flag] _____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/32_tsv_and_format_flag')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_32')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/32_tsv_and_format_flag')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_32')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_____________ test_checkpoint_5_regression[33_recursive_directory] _____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/33_recursive_directory')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_33')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/33_recursive_directory')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_33')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+___________ test_checkpoint_5_regression[34_null_markers_and_filter] ___________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/34_null_markers_and_filter')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_34')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/34_null_markers_and_filter')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_34')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+__________ test_checkpoint_5_regression[35_order_independence_window] __________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/35_order_independence_window')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_35')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/35_order_independence_window')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_35')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+____________ test_checkpoint_5_regression[36_count_col_with_nulls] _____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/36_count_col_with_nulls')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_36')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/36_count_col_with_nulls')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_36')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+__________ test_checkpoint_5_regression[37_three_valued_logic_filter] __________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/37_three_valued_logic_filter')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_37')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/37_three_valued_logic_filter')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_37')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+___________ test_checkpoint_5_regression[38_null_aware_aggregations] ___________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/38_null_aware_aggregations')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_38')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/38_null_aware_aggregations')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_38')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+________________ test_checkpoint_5_regression[39_mixed_formats] ________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/39_mixed_formats')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_39')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/39_mixed_formats')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_39')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+________________ test_checkpoint_5_regression[40_glob_pattern] _________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/40_glob_pattern')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_40')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/40_glob_pattern')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_40')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_________ test_checkpoint_5_regression[41_non_strict_bad_records_out] __________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/41_non_strict_bad_records_out')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_41')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/41_non_strict_bad_records_out')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_41')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_________ test_checkpoint_5_regression[42_non_strict_without_bad_out] __________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/42_non_strict_without_bad_out')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_42')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/42_non_strict_without_bad_out')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_42')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_____________ test_checkpoint_5_regression[43_custom_null_markers] _____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/43_custom_null_markers')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_43')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/43_custom_null_markers')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_43')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+______ test_checkpoint_5_regression[44_regression_multi_file_with_calcs] _______
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/44_regression_multi_file_with_calcs')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_44')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/44_regression_multi_file_with_calcs')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_44')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+_______ test_checkpoint_5_regression[45_regression_multi_file_lag_lead] ________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/45_regression_multi_file_lag_lead')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_45')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/45_regression_multi_file_lag_lead')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_45')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+________ test_checkpoint_5_regression[46_regression_multi_file_params] _________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/46_regression_multi_file_params')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_46')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/46_regression_multi_file_params')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_46')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+______________ test_checkpoint_5_regression[47_join_inner_simple] ______________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/47_join_inner_simple')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_47')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/47_join_inner_simple')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_47')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+____________ test_checkpoint_5_regression[48_temporal_within_join] _____________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/48_temporal_within_join')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_48')
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "case_dir",
+        REGRESSION_CASES,
+        ids=[case_dir.name for case_dir in REGRESSION_CASES],
+    )
+    def test_checkpoint_5_regression(
+        entrypoint_argv: list[str],
+        case_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+>       run_case(case_dir, "regression", entrypoint_argv, tmp_path)
+
+.evaluation_tests/test_checkpoint_5.py:106: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+case_dir = PosixPath('/workspace/.evaluation_tests/assets/checkpoint_5_regression/48_temporal_within_join')
+group_name = 'regression', entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_regression_48')
+checkpoint_name = None
+
+    def run_case(
+        case_dir: Path,
+        group_name: str,
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+        checkpoint_name: str | None = None,
+    ) -> None:
+        copy_inputs(case_dir, tmp_path)
+        args = normalize_args(read_arguments(case_dir), checkpoint_name)
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+    
+        expected_status, _stderr = read_meta(case_dir)
+        if expected_status is None:
+            expected_status = default_status(group_name)
+    
+        if expected_status != 0:
+            assert result.returncode != 0
+            return
+    
+>       assert result.returncode == expected_status
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+.evaluation_tests/case_utils.py:241: AssertionError
+___________________ test_checkpoint_5_edge_meta_out_omitted ____________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_edge_meta_ou0')
+
+    @pytest.mark.functionality
+    def test_checkpoint_5_edge_meta_out_omitted(
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+    ) -> None:
+        write_basic_inputs(tmp_path)
+        args = [
+            "--input",
+            "input.csv",
+            "--dsl",
+            "pipeline.mtl",
+            "--out",
+            "out.json",
+        ]
+        result = run_command(entrypoint_argv, args, cwd=tmp_path)
+>       assert result.returncode == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['uv', 'run', '/workspace/mtl.py', '--input', 'input.csv', '--dsl', 'pipeline.mtl', '--out', 'out.json'], returncode=1, stdout='', stderr='ERROR:bad_dsl:line 1: expected a schema or pipeline block\n').returncode
+
+.evaluation_tests/test_checkpoint_5.py:155: AssertionError
+_________________ test_checkpoint_5_edge_resume_output_stable __________________
+
+entrypoint_argv = ['uv', 'run', 'mtl.py']
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_checkpoint_5_edge_resume_0')
+
+    @pytest.mark.functionality
+    def test_checkpoint_5_edge_resume_output_stable(
+        entrypoint_argv: list[str],
+        tmp_path: Path,
+    ) -> None:
+        write_basic_inputs(tmp_path)
+        state_dir = tmp_path / "state"
+        args = [
+            "--input",
+            "input.csv",
+            "--dsl",
+            "pipeline.mtl",
+            "--out",
+            "out.json",
+            "--state-dir",
+            "state",
+            "--checkpoint-granularity",
+            "line",
+        ]
+        first = run_command(entrypoint_argv, args, cwd=tmp_path)
+>       assert first.returncode == 0
+E       AssertionError: assert 3 == 0
+E        +  where 3 = CompletedProcess(args=['uv', 'run', '/workspace/mtl.py', '--input', 'input.csv', '--dsl', 'pipeline.mtl', '--out', 'out.json', '--state-dir', 'state', '--checkpoint-granularity', 'line'], returncode=3, stdout='', stderr='ERROR:bad_io:invalid arguments: unrecognized arguments: --state-dir state --checkpoint-granularity line\n').returncode
+
+.evaluation_tests/test_checkpoint_5.py:180: AssertionError
+--------------------------------- JSON report ----------------------------------
+report saved to: .scbench/pytest-report.json
+=========================== short test summary info ============================
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_spec_correct[01_fresh_run_basic] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_spec_error[01_missing_version_header] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_file_output[01_outputs_and_state] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[01_join_left_outer] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[02_join_right_outer] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[03_join_full_outer] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[04_with_calcs_filters] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[05_mapping_comprehensive] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[06_chained_joins] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[07_glob_formats] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[08_temporal_within_delta] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[09_alias_calc_filter] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[10_param_threshold] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[11_mapping_defaults] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[12_single_source_window_params] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[13_result_alias_chain] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[14_multi_file_glob] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[15_single_source_aggregates] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[16_multisource_group_only] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[17_post_agg_lag] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[01_group_by_single] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[02_group_by_multi] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[03_window_various] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[04_comparison_ops] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[05_logical_ops] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[06_in_operator] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[07_column_compare] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[08_timestamp_transforms] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[09_round_function] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[10_apply_order] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[11_null_aggregates] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[12_cli_timezone] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[13_schema_inheritance_pre_calc] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[14_params_and_filter] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[15_post_agg_lag] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[16_group_by_pre_calc_key] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[17_post_agg_lead_param_coalesce] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[18_string_ops_basic] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[19_string_ops_with_params] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[20_multiple_params_various_types] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[21_type_widening_override] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[22_multiple_pre_calcs] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[23_multiple_post_agg_calcs] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[24_post_agg_calc_simple] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[25_lag_with_group_by_only] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[26_window_group_lag_combined] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[27_cast_basic] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[28_regression_filter_apply] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[29_regression_window_group] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[30_regression_all_aggregates] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[31_multi_input_union] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[32_tsv_and_format_flag] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[33_recursive_directory] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[34_null_markers_and_filter] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[35_order_independence_window] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[36_count_col_with_nulls] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[37_three_valued_logic_filter] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[38_null_aware_aggregations] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[39_mixed_formats] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[40_glob_pattern] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[41_non_strict_bad_records_out] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[42_non_strict_without_bad_out] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[43_custom_null_markers] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[44_regression_multi_file_with_calcs] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[45_regression_multi_file_lag_lead] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[46_regression_multi_file_params] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[47_join_inner_simple] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[48_temporal_within_join] - AssertionError
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_edge_meta_out_omitted - AssertionError: assert 1 == 0
+ +  where 1 = CompletedProcess(args=['uv', 'run', '/workspace/mtl.py', '--input', 'input.csv', '--dsl', 'pipeline.mtl', '--out', 'out.json'], returncode=1, stdout='', stderr='ERROR:bad_dsl:line 1: expected a schema or pipeline block\n').returncode
+FAILED .evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_edge_resume_output_stable - AssertionError: assert 3 == 0
+ +  where 3 = CompletedProcess(args=['uv', 'run', '/workspace/mtl.py', '--input', 'input.csv', '--dsl', 'pipeline.mtl', '--out', 'out.json', '--state-dir', 'state', '--checkpoint-granularity', 'line'], returncode=3, stdout='', stderr='ERROR:bad_io:invalid arguments: unrecognized arguments: --state-dir state --checkpoint-granularity line\n').returncode
+======================== 70 failed, 4 passed in 16.42s =========================

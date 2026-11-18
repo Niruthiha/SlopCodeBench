@@ -1,0 +1,4 @@
+2026-11-09: checkpoint_5 INVALID - every agent attempt ended "Failed to authenticate: OAuth token revoked" (3 tries, 0 turns of work, $0.00).
+Checkpoints 1-4 ran normally (isolation PASS for those). The 0-scores at ckpt5 are an auth outage, not an agent result.
+Cell is re-run from scratch as a new c3_parnas s1 run after the user re-logged in; this dir is kept, not deleted.
+check_cell.py now fails any checkpoint whose agent result is_error (added after this incident).

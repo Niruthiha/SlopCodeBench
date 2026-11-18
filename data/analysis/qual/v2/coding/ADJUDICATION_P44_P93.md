@@ -1,0 +1,8 @@
+# P44 and P93 failure-cause disagreements: adjudication (analyst, 2026-11-11, blind to condition)
+
+| Packet | Test | A | B | Adjudicated | Basis |
+|---|---|---|---|---|---|
+| P44 | test_circular_import_hides_name_not_yet_defined | F1 | F2 | **F2** (B) | spec/checkpoint_3.md:100: "resolve what is available at the point of the circular reference and move on. Names not yet defined ... are simply not visible." Under "move on", a.py continues and defines `late = 1`, which is the tool's answer (int). The test (tests/test_checkpoint_3.py:658-669) expects real-Python ImportError cascade (no definition). Spec does not cover the cascade. |
+| P44 | test_runtime_attribute_completion_from_namespaces | F2 | F1 | **F1** (B) | spec/checkpoint_6.md:34: "For namespace-derived results, `description` is exactly `"{type} (runtime)"` and `type` is the namespace type string." `groupby` comes from the namespace `attributes` list; the tool labelled it `statement`; the test expects `DataFrame` / `DataFrame (runtime)`. |
+| P93 | 5 check-update / update tests (ck8) | F2 | F6 | **F6** (B) | The tool queries a remote releases API (spec/checkpoint_8.md:79, no URL given); the eval environment has no network → "HTTP code 0". All three recli runs fail these 5 tests identically (checked in report.json). Precedence F6 > F2. Candidate benchmark/environment defect. |
+| P93 | test_non_writable_nested_archive_entry_warns_with_relative_path | F2 | F4 | **F4** (B) | spec/checkpoint_4.md:81 "extract ... to a destination directory" and :115 warning names `<relative_path>`; the code adds `_source_root` "Strip a single top-level directory wrapping the whole archive." (code/checkpoint_4/appctl.py:2496), not asked for by the spec. Local design error. F2 also defensible. |

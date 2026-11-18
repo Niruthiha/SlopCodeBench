@@ -1,0 +1,512 @@
+### blueprints.py (created)
+--- blueprints.py
++++ blueprints.py
+@@ -0,0 +1,87 @@
++"""Industry recipes: which blueprint builds what, from what, and how fast.
++
++Secret: how the industry activity tables link blueprints, products,
++materials and times; which activities count as "building" an item; and
++which blueprint is chosen when several (possibly unpublished) ones exist.
++"""
++
++from dataclasses import dataclass
++
++import sde_source
++
++# Build activities in order of preference.
++_BUILD_ACTIVITIES = ("Manufacturing", "Reactions")
++
++
++@dataclass(frozen=True)
++class Recipe:
++    product_id: int
++    activity: str
++    output_quantity: int
++    seconds: int
++    materials: tuple  # of (material_type_id, quantity_per_run)
++
++
++class Industry:
++    def __init__(self, sde_dir, catalog):
++        self._catalog = catalog
++        names = dict(sde_source.activities(sde_dir))
++        self._activity_rank = {}
++        self._activity_name = {}
++        for rank, wanted in enumerate(_BUILD_ACTIVITIES):
++            for activity_id, name in names.items():
++                if name == wanted:
++                    self._activity_rank[activity_id] = rank
++                    self._activity_name[activity_id] = name
++
++        # (blueprint, activity) -> (product, quantity); product -> [(blueprint, activity)]
++        self._outputs = {}
++        self._makers = {}
++        for bp, act, product, qty in sde_source.activity_products(sde_dir):
++            if act not in self._activity_rank:
++                continue
++            if not (catalog.is_valid(bp) and catalog.is_valid(product)):
++                continue
++            key = (bp, act)
++            if key in self._outputs:
++                continue
++            self._outputs[key] = (product, qty)
++            self._makers.setdefault(product, []).append(key)
++
++        self._times = {}
++        for bp, act, seconds in sde_source.activity_times(sde_dir):
++            if (bp, act) in self._outputs:
++                self._times[(bp, act)] = seconds
++
++        self._materials = {}
++        for bp, act, material, qty in sde_source.activity_materials(sde_dir):
++            if (bp, act) in self._outputs:
++                self._materials.setdefault((bp, act), []).append((material, qty))
++
++    def _rank(self, key):
++        return (self._activity_rank[key[1]], key[0])
++
++    def _job_for_blueprint(self, type_id):
++        keys = [key for key in self._outputs if key[0] == type_id]
++        return min(keys, key=self._rank) if keys else None
++
++    def _job_for_product(self, type_id):
++        keys = self._makers.get(type_id)
++        return min(keys, key=self._rank) if keys else None
++
++    def recipe_for(self, type_id):
++        """Recipe for a blueprint, or for the product it builds; None if neither."""
++        key = self._job_for_blueprint(type_id) or self._job_for_product(type_id)
++        if key is None:
++            return None
++        product, quantity = self._outputs[key]
++        return Recipe(
++            product_id=product,
++            activity=self._activity_name[key[1]],
++            output_quantity=quantity,
++            seconds=self._times.get(key, 0),
++            materials=tuple(self._materials.get(key, ())),
++        )
++
++    def is_buildable(self, type_id):
++        return type_id in self._makers
+
+### catalog.py (created)
+--- catalog.py
++++ catalog.py
+@@ -0,0 +1,72 @@
++"""Item metadata: names, classification, market location and tech level.
++
++Secret: how type, group, category, market-group and meta-group records are
++indexed and joined, which records count as valid (published), and how a
++meta group is translated into a tech level label.
++"""
++
++import re
++
++import sde_source
++
++_TECH_LABEL = re.compile(r"\bTech (I{1,3})$")
++_DEFAULT_TECH = "Tech I"
++
++
++class Catalog:
++    def __init__(self, sde_dir):
++        self._types = {}
++        self._ids_by_name = {}
++        for type_id, name, group_id, volume, published, market_id in sde_source.types(sde_dir):
++            if not published:
++                continue
++            self._types[type_id] = (name, group_id, volume, market_id)
++            self._ids_by_name.setdefault(name, []).append(type_id)
++
++        self._groups = {gid: (cid, name) for gid, cid, name, _ in sde_source.groups(sde_dir)}
++        self._categories = {cid: name for cid, name, _ in sde_source.categories(sde_dir)}
++        self._markets = {mid: (parent, name) for mid, parent, name in sde_source.market_groups(sde_dir)}
++
++        meta_names = dict(sde_source.meta_groups(sde_dir))
++        self._tech = {}
++        for type_id, meta_id in sde_source.meta_types(sde_dir):
++            match = _TECH_LABEL.search(meta_names.get(meta_id) or "")
++            if match:
++                self._tech[type_id] = "Tech " + match.group(1)
++
++    def ids_named(self, name):
++        """Published type IDs whose name matches exactly, ascending."""
++        return sorted(self._ids_by_name.get(name, []))
++
++    def is_valid(self, type_id):
++        return type_id in self._types
++
++    def name(self, type_id):
++        return self._types[type_id][0]
++
++    def group_name(self, type_id):
++        group = self._groups.get(self._types[type_id][1])
++        return group[1] if group else ""
++
++    def category_name(self, type_id):
++        group = self._groups.get(self._types[type_id][1])
++        return self._categories.get(group[0], "") if group else ""
++
++    def base_volume(self, type_id):
++        """Volume as recorded on the type, as an exact decimal string."""
++        return self._types[type_id][2] or "0"
++
++    def market_path(self, type_id):
++        """Market group names from root to leaf; empty if not on the market."""
++        path = []
++        seen = set()
++        current = self._types[type_id][3]
++        while current is not None and current in self._markets and current not in seen:
++            seen.add(current)
++            parent, name = self._markets[current]
++            path.append(name)
++            current = parent
++        return list(reversed(path))
++
++    def tech_level(self, type_id):
++        return self._tech.get(type_id, _DEFAULT_TECH)
+
+### industry.py (created)
+--- industry.py
++++ industry.py
+@@ -0,0 +1,73 @@
++"""EVE Online industry planner CLI.
++
++Usage: python industry.py recipe <Product or Blueprint name> --sde <SDE directory>
++
++This module only parses arguments and wires the other modules together.
++"""
++
++import argparse
++import sys
++
++import blueprints
++import catalog
++import report
++import volumes
++
++
++def _build_report(name, sde_dir):
++    items = catalog.Catalog(sde_dir)
++    industry = blueprints.Industry(sde_dir, items)
++    volume_of = volumes.VolumeResolver(sde_dir, items)
++
++    candidates = items.ids_named(name)
++    if not candidates:
++        raise LookupError("No published item named %r" % name)
++    recipe = next(
++        (r for r in (industry.recipe_for(t) for t in candidates) if r is not None), None
++    )
++    if recipe is None:
++        raise LookupError("%r cannot be manufactured or reacted" % name)
++
++    product = recipe.product_id
++    volume, packaged = volume_of.volume(product)
++    materials = tuple(
++        (items.name(mid) if items.is_valid(mid) else str(mid), qty, industry.is_buildable(mid))
++        for mid, qty in recipe.materials
++    )
++    return report.render(
++        report.ReportInput(
++            item_name=items.name(product),
++            type_id=product,
++            category=items.category_name(product),
++            group=items.group_name(product),
++            market_path=tuple(items.market_path(product)),
++            tech_level=items.tech_level(product),
++            volume=volume,
++            volume_is_packaged=packaged,
++            activity=recipe.activity,
++            output_quantity=recipe.output_quantity,
++            seconds=recipe.seconds,
++            materials=materials,
++        )
++    )
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description="EVE Online industry planner")
++    commands = parser.add_subparsers(dest="command", required=True)
++    recipe = commands.add_parser("recipe", help="show the recipe for a product or blueprint")
++    recipe.add_argument("name", nargs="+", help="exact product or blueprint typeName")
++    recipe.add_argument("--sde", required=True, help="SDE directory")
++    args = parser.parse_args(argv)
++
++    try:
++        text = _build_report(" ".join(args.name), args.sde)
++    except (LookupError, OSError) as exc:
++        print("error: %s" % exc, file=sys.stderr)
++        return 1
++    print(text)
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+
+### report.py (created)
+--- report.py
++++ report.py
+@@ -0,0 +1,55 @@
++"""Canonical recipe report text.
++
++Secret: the exact layout of the report -- labels, ordering, number
++formatting, time rounding, and how the materials table is sorted and drawn.
++"""
++
++import math
++from dataclasses import dataclass
++
++
++@dataclass(frozen=True)
++class ReportInput:
++    item_name: str
++    type_id: int
++    category: str
++    group: str
++    market_path: tuple  # market group names, root to leaf
++    tech_level: str
++    volume: float
++    volume_is_packaged: bool
++    activity: str
++    output_quantity: int
++    seconds: int
++    materials: tuple  # of (name, quantity, buildable)
++
++
++def _volume_text(volume, packaged):
++    if packaged:
++        return "%.2f" % volume
++    text = repr(float(volume))
++    if "e" in text or "E" in text:
++        text = format(volume, "f").rstrip("0")
++        text = text + "0" if text.endswith(".") else text
++    return text
++
++
++def render(data):
++    market = " > ".join(data.market_path) if data.market_path else "None"
++    lines = [
++        "ITEM: %s (%d)" % (data.item_name, data.type_id),
++        "Group: %s > %s" % (data.category, data.group),
++        "Market Group: %s" % market,
++        "Tech Level: %s" % data.tech_level,
++        "Volume: %s" % _volume_text(data.volume, data.volume_is_packaged),
++        "",
++        "Recipe:",
++        "Activity: %s" % data.activity,
++        "Output Quantity: %d" % data.output_quantity,
++        "Run Time: %d" % math.ceil(data.seconds / 60),
++        "| Item | Quantity | Buildable |",
++        "|:-:|:---:|---:|",
++    ]
++    for name, quantity, buildable in sorted(data.materials, key=lambda m: (m[0].lower(), m[0])):
++        lines.append("| %s | %d | %s |" % (name, quantity, "Yes" if buildable else "No"))
++    return "\n".join(lines)
+
+### requirements.txt (created)
+--- requirements.txt
++++ requirements.txt
+@@ -0,0 +1 @@
++PyYAML>=6.0
+
+### sde_source.py (created)
+--- sde_source.py
++++ sde_source.py
+@@ -0,0 +1,140 @@
++"""Raw access to the EVE Static Data Export.
++
++Secret: the on-disk layout of the SDE -- file names, BZ2 compression, CSV
++dialect, column names, the textual encoding of nulls/booleans, and the YAML
++format of the ship volume file.
++
++Every function yields plain tuples of Python primitives (int, str, float,
++bool, None), so callers never learn how the export is stored.
++"""
++
++import bz2
++import csv
++import io
++import os
++
++import yaml
++
++_NULLS = {"", "None", "none", "NULL", "null"}
++
++
++def _rows(sde_dir, filename):
++    path = os.path.join(sde_dir, filename)
++    with bz2.open(path, "rb") as raw:
++        with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
++            yield from csv.DictReader(text)
++
++
++def _int(value):
++    if value is None or value.strip() in _NULLS:
++        return None
++    return int(float(value))
++
++
++def _text(value):
++    if value is None or value in _NULLS:
++        return None
++    return value
++
++
++def _flag(value):
++    return _int(value) == 1
++
++
++def types(sde_dir):
++    """Yield (type_id, name, group_id, volume_text, published, market_group_id).
++
++    volume_text is the exact decimal string from the export (or None).
++    """
++    for row in _rows(sde_dir, "invTypes.csv.bz2"):
++        yield (
++            _int(row["typeID"]),
++            row["typeName"],
++            _int(row["groupID"]),
++            _text(row["volume"]),
++            _flag(row["published"]),
++            _int(row["marketGroupID"]),
++        )
++
++
++def groups(sde_dir):
++    """Yield (group_id, category_id, name, published)."""
++    for row in _rows(sde_dir, "invGroups.csv.bz2"):
++        yield (
++            _int(row["groupID"]),
++            _int(row["categoryID"]),
++            row["groupName"],
++            _flag(row["published"]),
++        )
++
++
++def categories(sde_dir):
++    """Yield (category_id, name, published)."""
++    for row in _rows(sde_dir, "invCategories.csv.bz2"):
++        yield (_int(row["categoryID"]), row["categoryName"], _flag(row["published"]))
++
++
++def market_groups(sde_dir):
++    """Yield (market_group_id, parent_id_or_None, name)."""
++    for row in _rows(sde_dir, "invMarketGroups.csv.bz2"):
++        yield (
++            _int(row["marketGroupID"]),
++            _int(row["parentGroupID"]),
++            row["marketGroupName"],
++        )
++
++
++def meta_types(sde_dir):
++    """Yield (type_id, meta_group_id)."""
++    for row in _rows(sde_dir, "invMetaTypes.csv.bz2"):
++        yield (_int(row["typeID"]), _int(row["metaGroupID"]))
++
++
++def meta_groups(sde_dir):
++    """Yield (meta_group_id, name)."""
++    for row in _rows(sde_dir, "invMetaGroups.csv.bz2"):
++        yield (_int(row["metaGroupID"]), row["metaGroupName"])
++
++
++def activities(sde_dir):
++    """Yield (activity_id, name)."""
++    for row in _rows(sde_dir, "ramActivities.csv.bz2"):
++        yield (_int(row["activityID"]), row["activityName"])
++
++
++def activity_times(sde_dir):
++    """Yield (blueprint_type_id, activity_id, seconds)."""
++    for row in _rows(sde_dir, "industryActivity.csv.bz2"):
++        yield (_int(row["typeID"]), _int(row["activityID"]), _int(row["time"]))
++
++
++def activity_products(sde_dir):
++    """Yield (blueprint_type_id, activity_id, product_type_id, quantity)."""
++    for row in _rows(sde_dir, "industryActivityProducts.csv.bz2"):
++        yield (
++            _int(row["typeID"]),
++            _int(row["activityID"]),
++            _int(row["productTypeID"]),
++            _int(row["quantity"]),
++        )
++
++
++def activity_materials(sde_dir):
++    """Yield (blueprint_type_id, activity_id, material_type_id, quantity)."""
++    for row in _rows(sde_dir, "industryActivityMaterials.csv.bz2"):
++        yield (
++            _int(row["typeID"]),
++            _int(row["activityID"]),
++            _int(row["materialTypeID"]),
++            _int(row["quantity"]),
++        )
++
++
++def ship_packaged_volumes(sde_dir):
++    """Yield (ship_group_name, packaged_volume)."""
++    path = os.path.join(sde_dir, "ship_volumes.yaml")
++    with open(path, encoding="utf-8") as handle:
++        data = yaml.safe_load(handle) or {}
++    for name, volume in data.items():
++        if volume is not None:
++            yield (str(name), float(volume))
+
+### volumes.py (created)
+--- volumes.py
++++ volumes.py
+@@ -0,0 +1,49 @@
++"""Volume an item occupies as an industry output.
++
++Secret: the packaged-volume rule -- which items count as ships, where their
++packaged volumes come from, and how current ship group names are reconciled
++with the (older) group names used as keys in the packaged-volume table.
++"""
++
++import sde_source
++
++_SHIP_CATEGORY = "Ship"
++
++# Current SDE group name -> equivalent key(s) in the packaged-volume table,
++# tried in order.  Covers groups that CCP renamed or added after the table's
++# naming was fixed; the fallback is a hull of the same packaged size.
++_GROUP_ALIASES = {
++    "Hauler": ["Industrial"],
++    "Deep Space Transport": ["Transport Ship"],
++    "Combat Battlecruiser": ["Battlecruiser"],
++    "Heavy Assault Cruiser": ["Heavy Assault Ship"],
++    "Heavy Interdiction Cruiser": ["Heavy Interdictors"],
++    "Electronic Attack Ship": ["Electronic Attack Ships"],
++    "Corvette": ["Rookieship"],
++    "Logistics Frigate": ["Frigate"],
++    "Command Destroyer": ["Destroyer"],
++    "Force Auxiliary": ["Carrier"],
++    "Flag Cruiser": ["Cruiser"],
++}
++
++
++class VolumeResolver:
++    def __init__(self, sde_dir, catalog):
++        self._catalog = catalog
++        self._packaged = dict(sde_source.ship_packaged_volumes(sde_dir))
++
++    def _packaged_volume(self, type_id):
++        if self._catalog.category_name(type_id) != _SHIP_CATEGORY:
++            return None
++        group = self._catalog.group_name(type_id)
++        for key in [group] + _GROUP_ALIASES.get(group, []):
++            if key in self._packaged:
++                return self._packaged[key]
++        return None
++
++    def volume(self, type_id):
++        """Return (volume_m3, is_packaged) for the item as produced by industry."""
++        packaged = self._packaged_volume(type_id)
++        if packaged is not None:
++            return packaged, True
++        return float(self._catalog.base_volume(type_id)), False
+

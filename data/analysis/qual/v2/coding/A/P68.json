@@ -1,0 +1,1128 @@
+{
+ "packet": "P68",
+ "checkpoints": [
+  {
+   "ck": 1,
+   "V": {
+    "present": [
+     "V2",
+     "V5"
+    ],
+    "primary": "V5",
+    "evidence": {
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 8,
+       "line": null,
+       "quote": "All three spec examples match. Let me sweep every published product/blueprint in-process to make sure nothing crashes."
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 9,
+       "line": null,
+       "quote": ".venv/bin/python - <<'EOF' from pathlib import Path from eve_industry.inventory import Inventory"
+      },
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 9,
+       "line": null,
+       "quote": "8211 0 []"
+      }
+     ]
+    }
+   },
+   "summary": "Explored SDE files with inline Python, wrote a multi-module eve_industry package plus industry.py, checked output against the three spec examples, then swept all 8,211 published products in-process for crashes."
+  },
+  {
+   "ck": 2,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "eve_industry/constants.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 3,
+        "line": null,
+        "quote": "cd /workspace/eve_industry; for f in *.py; do echo \"=== $f\"; cat $f; done"
+       },
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 14,
+        "line": null,
+        "quote": "cd /workspace/eve_industry; python3 - <<'EOF' p='constants.py' s=open(p).read()"
+       }
+      ]
+     },
+     {
+      "place": "eve_industry/cli.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 3,
+        "line": null,
+        "quote": "cd /workspace/eve_industry; for f in *.py; do echo \"=== $f\"; cat $f; done"
+       },
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 16,
+        "line": null,
+        "quote": "p='cli.py' s=open(p).read()"
+       }
+      ]
+     },
+     {
+      "place": "industry.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 2,
+        "line": null,
+        "quote": "cd /workspace; cat industry.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 15,
+       "line": null,
+       "quote": "Write /workspace/eve_industry/invention.py (12347 chars, 311 lines)"
+      },
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": null,
+       "step": null,
+       "line": null,
+       "quote": "+++ eve_industry/invention.py"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 3,
+       "line": null,
+       "quote": "cd /workspace/eve_industry; for f in *.py; do echo \"=== $f\"; cat $f; done"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "new invention planner classifies skills via existing Inventory.group_name_of",
+      "evidence": [
+       {
+        "src": "code/checkpoint_2/eve_industry/invention.py",
+        "ck": null,
+        "step": null,
+        "line": 225,
+        "quote": "elif self.inventory.group_name_of(skill) == SCIENCE_GROUP_NAME:"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 7,
+       "line": null,
+       "quote": "cd /tmp; cat > /tmp/t.py <<'EOF' dec=[0,20,80,-40,90,-10,50,10,0]"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 8,
+       "line": null,
+       "quote": "cat > /tmp/t2.py <<'EOF' import math from decimal import Decimal, ROUND_HALF_UP, ROUND_HALF_EVEN"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 18,
+       "line": null,
+       "quote": "$PY industry.py invention \"Capital Remote Shield Booster II\" --sde sde | head -16"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 19,
+       "line": null,
+       "quote": "Error: No published item named '' found in the SDE"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 17,
+       "line": null,
+       "quote": "All three spec examples match byte-for-byte."
+      }
+     ]
+    }
+   },
+   "summary": "Read whole package, probed the probability formula and rounding against spec numbers in /tmp scripts, added new invention.py module plus CLI subcommand, diffed spec examples, ran edge cases; the clamp check ran with an empty name."
+  },
+  {
+   "ck": 3,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "eve_industry/models.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 3,
+        "line": null,
+        "quote": "cat eve_industry/industry_data.py eve_industry/models.py"
+       }
+      ]
+     },
+     {
+      "place": "eve_industry/recipe.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py eve_industry/cli.py eve_industry/recipe.py eve_industry/report.py; wc -l eve_industry/*.py; ls sde"
+       }
+      ]
+     },
+     {
+      "place": "eve_industry/report.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py eve_industry/cli.py eve_industry/recipe.py eve_industry/report.py; wc -l eve_industry/*.py; ls sde"
+       }
+      ]
+     },
+     {
+      "place": "eve_industry/cli.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py eve_industry/cli.py eve_industry/recipe.py eve_industry/report.py; wc -l eve_industry/*.py; ls sde"
+       }
+      ]
+     },
+     {
+      "place": "industry.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py eve_industry/cli.py eve_industry/recipe.py eve_industry/report.py; wc -l eve_industry/*.py; ls sde"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": null,
+       "step": null,
+       "line": 165,
+       "quote": "+        # Material and time efficiency only apply to manufacturing jobs."
+      },
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": null,
+       "step": null,
+       "line": 208,
+       "quote": "+    if show_waste:"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": null,
+       "step": null,
+       "line": 130,
+       "quote": "+    def resolve(self, name: str, me: int = 0, te: int = 0) -> Recipe:"
+      },
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": null,
+       "step": null,
+       "line": 65,
+       "quote": "+    recipe = RecipeResolver(inventory, industry).resolve(name, me=me, te=te)"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 3,
+       "line": null,
+       "quote": "cat eve_industry/industry_data.py eve_industry/models.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": []
+   },
+   "V": {
+    "present": [
+     "V2",
+     "V5"
+    ],
+    "primary": "V5",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 4,
+       "line": null,
+       "quote": "source .venv/bin/activate; time python industry.py recipe Naga --sde sde"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 7,
+       "line": null,
+       "quote": "All five Naga examples match the spec."
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 8,
+       "line": null,
+       "quote": "| Isogen | 24700 | 1300 | No |"
+      }
+     ]
+    }
+   },
+   "summary": "Read most modules, edited existing recipe/report/model bodies and CLI parser for ME/TE/waste (zeroing both ME and TE for reactions), then re-ran the Naga spec examples."
+  },
+  {
+   "ck": 4,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "eve_industry/cli.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 2,
+        "line": null,
+        "quote": "cd /workspace; cat industry.py; wc -l eve_industry/*.py; cat eve_industry/cli.py eve_industry/invention.py eve_industry/models.py eve_industry/constants.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 2,
+        "line": null,
+        "quote": "cd /workspace; cat industry.py; wc -l eve_industry/*.py; cat eve_industry/cli.py eve_industry/invention.py eve_industry/models.py eve_industry/constants.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 6,
+       "line": null,
+       "quote": "Write /workspace/eve_industry/plan.py (11370 chars, 287 lines)"
+      },
+      {
+       "src": "diffs/checkpoint_4.patch",
+       "ck": null,
+       "step": null,
+       "line": 16,
+       "quote": "+    plan = sub.add_parser(\"plan\", help=\"Create a build plan (jobs.csv, materials.csv) for an item\")"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 3,
+       "line": null,
+       "quote": "cd /workspace; cat eve_industry/sde_loader.py eve_industry/industry_data.py eve_industry/recipe.py eve_industry/inventory.py eve_industry/item_info.py eve_industry/report.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "plan invention inputs come from the existing InventionPlanner",
+      "evidence": [
+       {
+        "src": "code/checkpoint_4/eve_industry/plan.py",
+        "ck": null,
+        "step": null,
+        "line": 213,
+        "quote": "planner = InventionPlanner(self.inventory, self.industry, self.invention)"
+       }
+      ]
+     },
+     {
+      "code": "R2",
+      "what": "ME material rounding re-implemented inline in plan.py next to recipe.material_amount (variant max(runs,...))",
+      "evidence": [
+       {
+        "src": "code/checkpoint_4/eve_industry/plan.py",
+        "ck": null,
+        "step": null,
+        "line": 197,
+        "quote": "per_job = max(spec.runs, -(-qty * (100 - me) * spec.runs // 100))"
+       },
+       {
+        "src": "code/checkpoint_4/eve_industry/recipe.py",
+        "ck": null,
+        "step": null,
+        "line": 22,
+        "quote": "scaled = per_run * (100 - me) * runs"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V2",
+     "V5",
+     "V7"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 4,
+       "line": null,
+       "quote": "python industry.py invention Barrage L --sde sde --skill 3"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 5,
+       "line": null,
+       "quote": "python industry.py invention Proteus --sde sde --skill 3"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 8,
+       "line": null,
+       "quote": "Both spec examples match byte-for-byte. Quick regression check on the existing commands:"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 9,
+       "line": null,
+       "quote": "python industry.py recipe Barrage L --sde sde | head -3; python industry.py invention Barrage L --sde sde | head -3"
+      }
+     ]
+    }
+   },
+   "summary": "Read the full package, ran existing commands, wrote a new plan.py module and wired a plan subcommand, matched both spec examples, then briefly re-ran recipe and invention."
+  },
+  {
+   "ck": 5,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "eve_industry/plan.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 2,
+        "line": null,
+        "quote": "cat requirements.txt industry.py; wc -l eve_industry/*.py; cat eve_industry/cli.py eve_industry/plan.py"
+       }
+      ]
+     },
+     {
+      "place": "eve_industry/cli.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 2,
+        "line": null,
+        "quote": "cat requirements.txt industry.py; wc -l eve_industry/*.py; cat eve_industry/cli.py eve_industry/plan.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 2,
+        "line": null,
+        "quote": "cat requirements.txt industry.py; wc -l eve_industry/*.py; cat eve_industry/cli.py eve_industry/plan.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": null,
+       "step": null,
+       "line": 125,
+       "quote": "+        if not build_all:"
+      },
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": null,
+       "step": null,
+       "line": 248,
+       "quote": "+def split_runs(runs: int, days_per_run: float, split_days: float) -> List[Tuple[int, int]]:"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": null,
+       "step": null,
+       "line": 112,
+       "quote": "+    def plan(self, spec: BuildSpec, config: PlanConfig, build_all: bool = False) -> BuildPlan:"
+      },
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": null,
+       "step": null,
+       "line": 27,
+       "quote": "+    plan = planner.plan(planner.parse(build), config, build_all=build_all)"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 3,
+       "line": null,
+       "quote": "cat eve_industry/inventory.py eve_industry/report.py eve_industry/invention.py eve_industry/constants.py eve_industry/models.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R3",
+      "what": "inline per-job material formula moved into _job_material, used by single-item and build-all paths",
+      "evidence": [
+       {
+        "src": "diffs/checkpoint_5.patch",
+        "ck": null,
+        "step": null,
+        "line": 121,
+        "quote": "-            per_job = max(spec.runs, -(-qty * (100 - me) * spec.runs // 100))"
+       },
+       {
+        "src": "diffs/checkpoint_5.patch",
+        "ck": null,
+        "step": null,
+        "line": 127,
+        "quote": "+                purchases[material_id] += _job_material(qty, me, spec.runs) * spec.jobs"
+       },
+       {
+        "src": "diffs/checkpoint_5.patch",
+        "ck": null,
+        "step": null,
+        "line": 143,
+        "quote": "+                    amount = _job_material(qty, me, job_runs) * job_count * count"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5",
+     "V6",
+     "V7"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 10,
+       "line": null,
+       "quote": "mkdir -p /tmp/t && cd /tmp/t"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 11,
+       "line": null,
+       "quote": "a 0.1 3.0 30.0 30 29.0"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 12,
+       "line": null,
+       "quote": "for n in \"Carbon Fiber\" \"Auto-Integrity Preservation Seal\""
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 16,
+       "line": null,
+       "quote": "grep -E \"Charon|Capital Jump\" /tmp/t/o5/jobs.csv"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 10,
+       "line": null,
+       "quote": "ERROR Exit code 1 o1 OK o2 OK"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 13,
+       "line": null,
+       "quote": "o1 OK o2 OK o3 OK"
+      }
+     ],
+     "V6": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 17,
+       "line": null,
+       "quote": "python -m pyflakes eve_industry 2>/dev/null || .venv/bin/python -m py_compile eve_industry/*.py && echo compiled"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 14,
+       "line": null,
+       "quote": "python /workspace/industry.py plan Barrage L 10 None x10 --config c3.yaml --sde /workspace/sde --output o4"
+      }
+     ]
+    }
+   },
+   "summary": "Read the package, added --build-all branch and split_runs to plan.py, iterated against three spec examples in /tmp/t until all matched, probed float floor behaviour, compiled; split_runs still uses float floor division."
+  },
+  {
+   "ck": 6,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "eve_industry/plan.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 2,
+        "line": null,
+        "quote": "cd /workspace; wc -l industry.py eve_industry/*.py; cat industry.py eve_industry/cli.py eve_industry/plan.py"
+       }
+      ]
+     },
+     {
+      "place": "eve_industry/cli.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 2,
+        "line": null,
+        "quote": "cd /workspace; wc -l industry.py eve_industry/*.py; cat industry.py eve_industry/cli.py eve_industry/plan.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 2,
+        "line": null,
+        "quote": "cd /workspace; wc -l industry.py eve_industry/*.py; cat industry.py eve_industry/cli.py eve_industry/plan.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 9,
+       "line": null,
+       "quote": "cat > /tmp/patch.py <<'EOF' import re p = \"eve_industry/plan.py\" s = open(p).read() start = s.index(\" # --- planning ---\")"
+      },
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": null,
+       "step": null,
+       "line": 226,
+       "quote": "+    def _consumer_order(self, roots: List[int], expand: Callable[[int], bool]) -> List[int]:"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": null,
+       "step": null,
+       "line": 224,
+       "quote": "-    def _consumer_order(self, root: ActivityKey) -> List[int]:"
+      },
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": null,
+       "step": null,
+       "line": 90,
+       "quote": "-    purchases: Dict[int, int] = field(default_factory=dict)"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 8,
+       "line": null,
+       "quote": "cd /workspace; cat eve_industry/industry_data.py eve_industry/sde_loader.py"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 4,
+       "line": null,
+       "quote": "cd /workspace; cat eve_industry/inventory.py eve_industry/invention.py eve_industry/item_info.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "stocks/targets name lookup reuses Inventory.published_by_name",
+      "evidence": [
+       {
+        "src": "code/checkpoint_6/eve_industry/plan.py",
+        "ck": null,
+        "step": null,
+        "line": 477,
+        "quote": "items = inventory.published_by_name(name) or sorted("
+       }
+      ]
+     },
+     {
+      "code": "R1",
+      "what": "build-all scheduling keeps using existing _job_material helper",
+      "evidence": [
+       {
+        "src": "code/checkpoint_6/eve_industry/plan.py",
+        "ck": null,
+        "step": null,
+        "line": 261,
+        "quote": "demand[material_id] += _job_material(qty, me, job_runs) * job_count * count"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5",
+     "V6",
+     "V7"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 5,
+       "line": null,
+       "quote": "cd /workspace; mkdir -p /tmp/ex && cd /tmp/ex && cat > config.yaml <<'EOF' split_days: 30"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 11,
+       "line": null,
+       "quote": "cd /tmp/ex; P=/workspace/.venv/bin/python; I=/workspace/industry.py"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 6,
+       "line": null,
+       "quote": "cd /workspace; for n in \"Fulleride Reaction Formula\" \"Carbon Polymers Reaction Formula\""
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 12,
+       "line": null,
+       "quote": "Running your example with `--build-all` reproduces `jobs.csv` exactly and every row of `materials.csv` except one"
+      }
+     ],
+     "V6": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 12,
+       "line": null,
+       "quote": ".venv/bin/python -W error -c \"import eve_industry.cli, eve_industry.plan; print('ok')\""
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": null,
+       "line": null,
+       "quote": "With no stocks or targets, output is byte-identical to before, with and without `--build-all`."
+      }
+     ]
+    }
+   },
+   "summary": "Read the package, rewrote the planning section of plan.py to use demand/stock/target accounting with a new MaterialRow result shape, ran the spec example in /tmp/ex (one Nitrogen Fuel Block value left at 35 vs spec 34), edge-case files, import check."
+  }
+ ],
+ "failures": [
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_2.py::test_invention_functionality[dual_giga-1]",
+    ".evaluation_tests/test_checkpoint_2.py::test_invention_functionality[dual_giga-5]",
+    ".evaluation_tests/test_checkpoint_2.py::test_probability_clamps_to_one"
+   ],
+   "first_ck": 2,
+   "regression": false,
+   "code": "F2",
+   "why": "Spec says 'sum of required science skill levels' without defining science; code counts only skills in the Science group, so Capital Ship Construction is dropped; tests count it (3 science skills), changing probabilities and the clamp.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_2.md",
+     "ck": null,
+     "step": null,
+     "line": 82,
+     "quote": "* (1 + (sum of required science skill levels)/30 + encryption skill / 40)"
+    },
+    {
+     "src": "code/checkpoint_2/eve_industry/invention.py",
+     "ck": null,
+     "step": null,
+     "line": 225,
+     "quote": "elif self.inventory.group_name_of(skill) == SCIENCE_GROUP_NAME:"
+    },
+    {
+     "src": "tests/cases/checkpoint_2/dual_giga.json",
+     "ck": null,
+     "step": null,
+     "line": 8,
+     "quote": "\"num_science_skills\": 3,"
+    },
+    {
+     "src": "tests/cases/checkpoint_2/dual_giga.json",
+     "ck": null,
+     "step": null,
+     "line": 18,
+     "quote": "\"skills\": \"Amarr Encryption Methods, Capital Ship Construction, High Energy Physics, Laser Physics\","
+    },
+    {
+     "src": "results/checkpoint_2.md",
+     "ck": null,
+     "step": null,
+     "line": 75,
+     "quote": "E       assert 94.21 == 100.0"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_3.py::test_fernite_carbide_te10"
+   ],
+   "first_ck": 3,
+   "regression": false,
+   "code": "F1",
+   "why": "Spec limits only ME to manufacturing and says time is impacted by TE; code zeroes TE as well for reactions, so Fernite Carbide TE=10 keeps run time 180 instead of 162.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": null,
+     "step": null,
+     "line": 10,
+     "quote": "* Only **Manufacturing** jobs are impacted by this. Not Reactions."
+    },
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": null,
+     "step": null,
+     "line": 20,
+     "quote": "So your `recipe` command now needs to have its `quantity` column updated based on the ME (if it is a manufacturing job) and its time impacted by the TE."
+    },
+    {
+     "src": "diffs/checkpoint_3.patch",
+     "ck": null,
+     "step": null,
+     "line": 165,
+     "quote": "+        # Material and time efficiency only apply to manufacturing jobs."
+    },
+    {
+     "src": "diffs/checkpoint_3.patch",
+     "ck": null,
+     "step": null,
+     "line": 167,
+     "quote": "+            me = te = 0"
+    },
+    {
+     "src": "results/checkpoint_3.md",
+     "ck": null,
+     "step": null,
+     "line": 62,
+     "quote": "E         Diff: {'values_changed': {\"root['run_time']\": {'new_value': 162, 'old_value': 180}}}"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[kronos_invent]",
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[revelation_10_3d]",
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[loki_l1_1d]"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F4",
+   "why": "split_runs computes max_runs with float floor division (30 // 0.1 = 299, 3 // 0.1 = 29), one below floor(split_days/days_per_run), so reaction jobs split into extra smaller jobs. Agent saw the 3//d=29 discrepancy in a probe.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 25,
+     "quote": "max_runs = floor(split_days / days_per_run)"
+    },
+    {
+     "src": "code/checkpoint_5/eve_industry/plan.py",
+     "ck": null,
+     "step": null,
+     "line": 396,
+     "quote": "max_runs = max(1, int(min(float(MAX_SPLIT_DAYS), split_days) // days_per_run))"
+    },
+    {
+     "src": "trace",
+     "ck": 5,
+     "step": 11,
+     "line": null,
+     "quote": "a 0.1 3.0 30.0 30 29.0"
+    },
+    {
+     "src": "results/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 62,
+     "quote": "E         Diff: {'values_changed': {\"root['Photonic Metamaterials Reaction Formula']\": {'new_value': {299: {'days': 29.9, 'count': 4}, 300: {'days': 30.0, 'count': 3}}, 'old_value': {262: {'day"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_build_all_with_stocks_functionality[kronos]"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F4",
+   "why": "Same float floor-division bug in split_runs carried into checkpoint 6: Photonic Metamaterials 2096 runs split as 8x262 instead of 4x299 + 3x300.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_6/eve_industry/plan.py",
+     "ck": null,
+     "step": null,
+     "line": 493,
+     "quote": "max_runs = max(1, int(min(float(MAX_SPLIT_DAYS), split_days) // days_per_run))"
+    },
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": null,
+     "step": null,
+     "line": 68,
+     "quote": "E         Diff: {'values_changed': {\"root['Photonic Metamaterials Reaction Formula']\": {'new_value': {299: {'days': 29.9, 'count': 4}, 300: {'days': 30.0, 'count': 3}}, 'old_value': {262: {'day"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_build_all_with_stocks_functionality[ion_siege_real]"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "Expected output has stocked datacores ending at 0 and omits target item Crystallite Alloy from materials.csv; spec does not say how invention datacore stock is consumed and says target outputs show up in materials.csv. Agent's reading is defensible.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_6.md",
+     "ck": null,
+     "step": null,
+     "line": 21,
+     "quote": "Outputs from stock targets show up in the `materials.csv` with whatever start amount they had if stockpile is present with the appropriate end amount based on the target quantity."
+    },
+    {
+     "src": "tests/cases/checkpoint_6/ion_siege_real/stock_target.txt",
+     "ck": null,
+     "step": null,
+     "line": 6,
+     "quote": "Crystallite Alloy 176008"
+    },
+    {
+     "src": "tests/cases/checkpoint_6/ion_siege_real/materials.csv",
+     "ck": null,
+     "step": null,
+     "line": 12,
+     "quote": "Datacore - Plasma Physics,0,0.0,1030,0"
+    },
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": null,
+     "step": null,
+     "line": 116,
+     "quote": "E         Diff: {'dictionary_item_removed': [\"root['Crystallite Alloy']\"], 'values_changed': {\"root['Datacore - Plasma Physics']['end_amount']\": {'new_value': 0, 'old_value': 1006}"
+    }
+   ]
+  }
+ ],
+ "observations": "In this run we observed a package of about ten modules built at checkpoint 1 and extended each session after a wholesale read: every later session began by cat-ing most or all modules (2.3, 3.2, 4.2-4.3, 5.2-5.4, 6.2-6.8). New features went into new modules at checkpoints 2 and 4 (invention.py 2.15, plan.py 4.6); later sessions edited bodies inside plan.py (5.9, 6.9). Verification leaned on spec examples each session (1.8, 2.17, 3.7, 4.8, 5.13, 6.12), with /tmp probe scripts for the probability formula at checkpoint 2 (2.7-2.11) and /tmp config fixtures at 5.10 and 6.5. Two checks did not reach their target: the clamp-to-100 check at 2.19 ran with an empty item name and returned an error the agent did not follow up, and the float probe at 5.11 showed 3//d giving 29.0 while split_runs kept using // (5.13, failing three tests at 5 and one at 6). At checkpoint 3 the agent applied 'only manufacturing' to TE as well as ME (3.6), failing a reaction TE test. At checkpoint 6 the agent reported one spec-example value it could not reproduce (Nitrogen Fuel Block 35 vs 34) and left it rather than forcing it (6.12). Brief regression re-runs appeared at 4.9, 5.14 and in the checkpoint 6 summary."
+}

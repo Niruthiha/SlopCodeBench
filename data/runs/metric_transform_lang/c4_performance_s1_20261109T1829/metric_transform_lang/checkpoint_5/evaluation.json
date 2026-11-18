@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "problem_name": "metric_transform_lang",
+  "problem_version": 1,
+  "checkpoint_name": "checkpoint_5",
+  "checkpoint_version": 1,
+  "duration": 36.233778953552246,
+  "entrypoint": "uv run mtl.py",
+  "tests": {
+    "checkpoint_5-Functionality": {
+      "passed": [
+        "test_checkpoint_5_edge_meta_out_omitted",
+        "test_checkpoint_5_edge_resume_output_stable",
+        "test_checkpoint_5_file_output[01_outputs_and_state]",
+        "test_checkpoint_5_hidden[01_join_left_outer]",
+        "test_checkpoint_5_hidden[02_join_right_outer]",
+        "test_checkpoint_5_hidden[04_with_calcs_filters]",
+        "test_checkpoint_5_hidden[05_mapping_comprehensive]",
+        "test_checkpoint_5_hidden[06_chained_joins]",
+        "test_checkpoint_5_hidden[07_glob_formats]",
+        "test_checkpoint_5_hidden[08_temporal_within_delta]",
+        "test_checkpoint_5_hidden[09_alias_calc_filter]",
+        "test_checkpoint_5_hidden[10_param_threshold]",
+        "test_checkpoint_5_hidden[11_mapping_defaults]",
+        "test_checkpoint_5_hidden[12_single_source_window_params]",
+        "test_checkpoint_5_hidden[13_result_alias_chain]",
+        "test_checkpoint_5_hidden[14_multi_file_glob]",
+        "test_checkpoint_5_hidden[15_single_source_aggregates]",
+        "test_checkpoint_5_hidden[16_multisource_group_only]",
+        "test_checkpoint_5_hidden[17_post_agg_lag]"
+      ],
+      "failed": [
+        "test_checkpoint_5_hidden[03_join_full_outer]"
+      ],
+      "skipped": []
+    },
+    "checkpoint_5-Regression": {
+      "passed": [
+        "test_checkpoint_5_regression[01_group_by_single]",
+        "test_checkpoint_5_regression[02_group_by_multi]",
+        "test_checkpoint_5_regression[03_window_various]",
+        "test_checkpoint_5_regression[04_comparison_ops]",
+        "test_checkpoint_5_regression[05_logical_ops]",
+        "test_checkpoint_5_regression[06_in_operator]",
+        "test_checkpoint_5_regression[07_column_compare]",
+        "test_checkpoint_5_regression[08_timestamp_transforms]",
+        "test_checkpoint_5_regression[09_round_function]",
+        "test_checkpoint_5_regression[10_apply_order]",
+        "test_checkpoint_5_regression[12_cli_timezone]",
+        "test_checkpoint_5_regression[13_schema_inheritance_pre_calc]",
+        "test_checkpoint_5_regression[14_params_and_filter]",
+        "test_checkpoint_5_regression[15_post_agg_lag]",
+        "test_checkpoint_5_regression[16_group_by_pre_calc_key]",
+        "test_checkpoint_5_regression[17_post_agg_lead_param_coalesce]",
+        "test_checkpoint_5_regression[18_string_ops_basic]",
+        "test_checkpoint_5_regression[19_string_ops_with_params]",
+        "test_checkpoint_5_regression[20_multiple_params_various_types]",
+        "test_checkpoint_5_regression[21_type_widening_override]",
+        "test_checkpoint_5_regression[22_multiple_pre_calcs]",
+        "test_checkpoint_5_regression[23_multiple_post_agg_calcs]",
+        "test_checkpoint_5_regression[24_post_agg_calc_simple]",
+        "test_checkpoint_5_regression[25_lag_with_group_by_only]",
+        "test_checkpoint_5_regression[26_window_group_lag_combined]",
+        "test_checkpoint_5_regression[27_cast_basic]",
+        "test_checkpoint_5_regression[28_regression_filter_apply]",
+        "test_checkpoint_5_regression[29_regression_window_group]",
+        "test_checkpoint_5_regression[30_regression_all_aggregates]",
+        "test_checkpoint_5_regression[31_multi_input_union]",
+        "test_checkpoint_5_regression[32_tsv_and_format_flag]",
+        "test_checkpoint_5_regression[34_null_markers_and_filter]",
+        "test_checkpoint_5_regression[35_order_independence_window]",
+        "test_checkpoint_5_regression[36_count_col_with_nulls]",
+        "test_checkpoint_5_regression[37_three_valued_logic_filter]",
+        "test_checkpoint_5_regression[38_null_aware_aggregations]",
+        "test_checkpoint_5_regression[39_mixed_formats]",
+        "test_checkpoint_5_regression[40_glob_pattern]",
+        "test_checkpoint_5_regression[41_non_strict_bad_records_out]",
+        "test_checkpoint_5_regression[42_non_strict_without_bad_out]",
+        "test_checkpoint_5_regression[43_custom_null_markers]",
+        "test_checkpoint_5_regression[44_regression_multi_file_with_calcs]",
+        "test_checkpoint_5_regression[45_regression_multi_file_lag_lead]",
+        "test_checkpoint_5_regression[46_regression_multi_file_params]",
+        "test_checkpoint_5_regression[47_join_inner_simple]",
+        "test_checkpoint_5_regression[48_temporal_within_join]"
+      ],
+      "failed": [
+        "test_checkpoint_5_regression[11_null_aggregates]",
+        "test_checkpoint_5_regression[33_recursive_directory]"
+      ],
+      "skipped": []
+    },
+    "checkpoint_5-Error": {
+      "passed": [
+        "test_checkpoint_5_resume_error[01_resume_requires_state_dir]",
+        "test_checkpoint_5_resume_error[02_resume_missing_state_file]",
+        "test_checkpoint_5_spec_error[01_missing_version_header]",
+        "test_checkpoint_5_spec_error[02_unsupported_major]",
+        "test_checkpoint_5_spec_error[03_minor_gating_join_requires_14]"
+      ],
+      "failed": [],
+      "skipped": []
+    },
+    "checkpoint_5-Core": {
+      "passed": [
+        "test_checkpoint_5_spec_correct[01_fresh_run_basic]"
+      ],
+      "failed": [],
+      "skipped": []
+    }
+  },
+  "pass_counts": {
+    "Core": 1,
+    "Functionality": 19,
+    "Regression": 46,
+    "Error": 5
+  },
+  "total_counts": {
+    "Core": 1,
+    "Functionality": 20,
+    "Regression": 48,
+    "Error": 5
+  },
+  "pytest_exit_code": 1,
+  "pytest_collected": 74,
+  "test_collection_hash": "7e2b6bed8b88f8f21ce697c895a8a92635ee94933c4c8c995849721fbd969d54",
+  "infrastructure_failure": false
+}

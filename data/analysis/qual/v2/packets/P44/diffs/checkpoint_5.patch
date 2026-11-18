@@ -1,0 +1,1671 @@
+### sith.py (modified)
+--- sith.py
++++ sith.py
+@@ -9,6 +9,11 @@
+     python sith.py references <file> <line> <col> [--scope file|project] [--project DIR]
+     python sith.py search <query> [--project DIR]
+     python sith.py names <file> [--all-scopes] [--project DIR]
++    python sith.py rename <file> <line> <col> --new-name NAME [--diff] [--project DIR]
++    python sith.py inline <file> <line> <col> [--diff] [--project DIR]
++    python sith.py extract-variable <file> <line> <col> --until LINE:COL --name NAME [--diff]
++    python sith.py extract-function <file> <line> <col> --until LINE:COL --name NAME [--diff]
++    python sith.py errors <file>
+ """
+ import sys
+ 
+
+### sithlib/cli.py (modified)
+--- sithlib/cli.py
++++ sithlib/cli.py
+@@ -21,7 +21,10 @@
+     "references": ("references",),
+     "search": ("definitions", "results"),
+     "names": ("names", "definitions"),
++    "errors": ("errors",),
+ }
++# Commands that compute a refactoring (JSON `changed_files`/`renames`, or a diff).
++_REFACTORINGS = ("rename", "inline", "extract-variable", "extract-function")
+ 
+ 
+ class _ArgumentParser(argparse.ArgumentParser):
+@@ -69,7 +72,65 @@
+     names.add_argument("--all-scopes", action="store_true",
+                        help="include names defined in nested scopes")
+     _add_project_argument(names)
++    errors = commands.add_parser("errors", help="report the syntax errors of a file")
++    errors.add_argument("file", help="Python source file")
++    rename = commands.add_parser("rename", help="rename the name at a cursor position")
++    _add_position_arguments(rename)
++    rename.add_argument("--new-name", required=True, help="the new name")
++    inline = commands.add_parser("inline", help="inline the variable at a cursor position")
++    _add_position_arguments(inline)
++    for command in ("extract-variable", "extract-function"):
++        extract = commands.add_parser(command, help=f"{command.replace('-', ' ')} from a selection")
++        _add_position_arguments(extract)
++        extract.add_argument("--until", required=True, type=_position,
++                             help="end of the selection, as LINE:COL")
++        extract.add_argument("--name", required=True, help="name of the new "
++                             + command.split("-")[1])
++    for command in _REFACTORINGS:
++        commands.choices[command].add_argument("--diff", action="store_true",
++                                               help="output a unified diff instead of JSON")
+     return parser
++
++
++def _position(text):
++    line, separator, col = text.partition(":")
++    try:
++        if separator:
++            return int(line), int(col)
++    except ValueError:
++        pass
++    raise argparse.ArgumentTypeError(f"invalid position {text!r} (expected LINE:COL)")
++
++
++def _refactor(args):
++    command = args.command
++    if command == "rename":
++        from .rename import rename
++        return rename(args.file, args.line, args.col, args.new_name, project=args.project)
++    if command == "inline":
++        from .inline import inline
++        return inline(args.file, args.line, args.col, project=args.project)
++    from .extract import extract_function, extract_variable
++    function = extract_variable if command == "extract-variable" else extract_function
++    return function(args.file, (args.line, args.col), args.until, args.name,
++                    project=args.project)
++
++
++def _main_refactoring(args):
++    try:
++        with contextlib.redirect_stdout(io.StringIO()):
++            refactoring = _refactor(args)
++    except SithError as error:
++        print(f"error: {error}", file=sys.stderr)
++        return 1
++    except Exception as error:  # never emit a partial or unsafe edit
++        print(f"error: refactoring failed: {error!r}", file=sys.stderr)
++        return 1
++    if args.diff:
++        sys.stdout.write(refactoring.to_diff())
++    else:
++        sys.stdout.write(json.dumps(refactoring.to_dict(), separators=(",", ":")) + "\n")
++    return 0
+ 
+ 
+ def _run(args):
+@@ -86,6 +147,9 @@
+         return search_project(args.query, project=args.project)
+     elif command == "names":
+         return list_names(args.file, all_scopes=args.all_scopes, project=args.project)
++    elif command == "errors":
++        from .syntax_errors import syntax_errors
++        results = syntax_errors(args.file)
+     else:
+         results = navigate(command, args.file, args.line, args.col, project=args.project,
+                            follow_imports=getattr(args, "follow_imports", False))
+@@ -96,6 +160,8 @@
+     keys = _RESULT_KEYS["complete"]
+     try:
+         args = build_parser().parse_args(argv)
++        if args.command in _REFACTORINGS:
++            return _main_refactoring(args)
+         keys = _RESULT_KEYS[args.command]
+         # Introspected modules may print; keep STDOUT reserved for the JSON result.
+         with contextlib.redirect_stdout(io.StringIO()):
+
+### sithlib/extract.py (created)
+--- sithlib/extract.py
++++ sithlib/extract.py
+@@ -0,0 +1,642 @@
++"""The `extract-variable` and `extract-function` commands."""
++import ast
++import os
++
++from .errors import SithError
++from .refactoring import (Refactoring, Source, apply_edits, check_identifier, dump,
++                          replaced_tree, same_tree)
++
++_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
++_FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
++_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
++_INDENT = "    "
++
++
++def _identifier_char(char):
++    return char == "_" or char.isalnum()
++
++
++def _selection(source, start, until):
++    """Absolute (start, end) offsets of the selection, with surrounding whitespace trimmed."""
++    for line, col in (start, until):
++        if not 1 <= line <= len(source.lines):
++            raise SithError(f"line {line} is out of range (file has {len(source.lines)} lines)")
++        if col < 0:
++            raise SithError(f"column {col} is out of range")
++    text = source.text
++    begin = source.offset(start[0], min(start[1], len(source.lines[start[0] - 1])))
++    end = source.offset(until[0], min(until[1], len(source.lines[until[0] - 1])))
++    if end < begin:
++        raise SithError("the selection ends before it starts")
++    # An end inside an identifier or number is taken to include it (an inclusive end column).
++    if begin < end < len(text) and _identifier_char(text[end - 1]) and _identifier_char(text[end]):
++        while end < len(text) and _identifier_char(text[end]):
++            end += 1
++    while begin < end and text[begin].isspace():
++        begin += 1
++    while end > begin and text[end - 1].isspace():
++        end -= 1
++    if begin == end:
++        raise SithError("the selection is empty")
++    return begin, end
++
++
++def _ancestors(source, node):
++    parent = source.parent(node)
++    while parent is not None:
++        yield parent
++        parent = source.parent(parent)
++
++
++def _statement_of(source, node):
++    for ancestor in _ancestors(source, node):
++        if isinstance(ancestor, ast.stmt):
++            return ancestor
++    return None
++
++
++# -- extract variable ----------------------------------------------------------------
++
++def extract_variable(path, start, until, name, project=None):
++    check_identifier(name, "--name")
++    source = Source(path)
++    begin, end = _selection(source, start, until)
++    node, begin, end = _expression_at(source, begin, end)
++    statement = _statement_of(source, node)
++    _check_extractable(source, node, statement)
++    text = source.text
++    expression = text[source.start(node):source.end(node)]
++    # The replacement, dropping parentheses that only grouped the extracted expression.
++    expected = dump(replaced_tree(source.tree, {id(node): ast.Name(id=name, ctx=ast.Load())}))
++    replace = (begin, end)
++    outer_begin, outer_end = begin, end
++    while True:
++        before = text[:outer_begin].rstrip()
++        after = text[outer_end:].lstrip()
++        if not (before.endswith("(") and after.startswith(")")):
++            break
++        outer_begin, outer_end = len(before) - 1, len(text) - len(after) + 1
++        if same_tree(text[:outer_begin] + name + text[outer_end:], expected):
++            replace = (outer_begin, outer_end)
++    assignment = f"{name} = {expression}"
++    value_dump = dump(node)
++    try:
++        parsed = ast.parse(assignment)
++        valid = len(parsed.body) == 1 and dump(parsed.body[0].value) == value_dump
++    except (SyntaxError, ValueError):
++        valid = False
++    if not valid:
++        assignment = f"{name} = ({expression})"
++    edits = [(replace[0], replace[1], name), _insertion(source, statement, assignment)]
++    refactoring = Refactoring(project or os.path.dirname(source.path))
++    refactoring.change(source.path, text, apply_edits(text, edits))
++    return refactoring
++
++
++def _expression_at(source, begin, end):
++    """The expression node spanning exactly [begin, end), allowing enclosing parentheses."""
++    spans = {}
++    for node in ast.walk(source.tree):
++        if isinstance(node, ast.expr):
++            spans.setdefault((source.start(node), source.end(node)), node)
++    text = source.text
++    inner_begin, inner_end = begin, end
++    while True:
++        node = spans.get((inner_begin, inner_end))
++        if node is not None:
++            return node, begin, end
++        if text[inner_begin] == "(" and text[inner_end - 1] == ")" and \
++                _matching_paren(text, inner_begin) == inner_end - 1:
++            inner_begin += 1
++            inner_end -= 1
++            while inner_begin < inner_end and text[inner_begin].isspace():
++                inner_begin += 1
++            while inner_end > inner_begin and text[inner_end - 1].isspace():
++                inner_end -= 1
++            continue
++        raise SithError("selection is not a complete expression")
++
++
++def _matching_paren(text, index):
++    depth = 0
++    quote = None
++    i = index
++    while i < len(text):
++        char = text[i]
++        if quote:
++            if char == "\\":
++                i += 1
++            elif text.startswith(quote, i):
++                i += len(quote) - 1
++                quote = None
++        elif char in "\"'":
++            quote = char * 3 if text.startswith(char * 3, i) else char
++            i += len(quote) - 1
++        elif char == "#":
++            newline = text.find("\n", i)
++            i = len(text) if newline < 0 else newline
++            continue
++        elif char in "([{":
++            depth += 1
++        elif char in ")]}":
++            depth -= 1
++            if depth == 0:
++                return i
++        i += 1
++    return None
++
++
++def _check_extractable(source, node, statement):
++    parent = source.parent(node)
++    in_format = isinstance(parent, ast.JoinedStr) or \
++        isinstance(parent, ast.FormattedValue) and node is parent.format_spec
++    if statement is None or in_format or isinstance(node, (ast.Starred, ast.Slice)):
++        raise SithError("selection is not a complete expression")
++    if not isinstance(getattr(node, "ctx", ast.Load()), ast.Load):
++        raise SithError("cannot extract an assignment target")
++    if isinstance(parent, ast.comprehension) and node is parent.target:
++        raise SithError("cannot extract an assignment target")
++    names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
++    for ancestor in _ancestors(source, node):
++        if ancestor is statement:
++            break
++        bound = set()
++        if isinstance(ancestor, ast.Lambda):
++            bound = {a.arg for a in _arguments(ancestor.args)}
++        elif isinstance(ancestor, _COMPREHENSIONS):
++            for generator in ancestor.generators:
++                bound |= {n.id for n in ast.walk(generator.target) if isinstance(n, ast.Name)}
++        if names & bound:
++            raise SithError("cannot extract an expression that uses names bound inside it "
++                            "(lambda parameters or comprehension variables)")
++    if isinstance(statement, ast.If) and statement.test is not None and \
++            any(statement is s for s in getattr(source.parent(statement), "orelse", [])) and \
++            source.text[source.start(statement):].startswith("elif") and \
++            _within(source, node, statement.test):
++        raise SithError("cannot extract from an elif condition")
++
++
++def _within(source, node, container):
++    return source.start(container) <= source.start(node) and \
++        source.end(node) <= source.end(container)
++
++
++def _arguments(arguments):
++    params = arguments.posonlyargs + arguments.args + arguments.kwonlyargs
++    return params + [a for a in (arguments.vararg, arguments.kwarg) if a is not None]
++
++
++def _first_line(statement):
++    decorators = getattr(statement, "decorator_list", None) or []
++    return min([statement.lineno] + [d.lineno for d in decorators])
++
++
++def _insertion(source, statement, code):
++    """An edit inserting the one-line statement `code` just before `statement`."""
++    line = _first_line(statement)
++    start = source.offset(line, 0)
++    first = source.start(statement) if line == statement.lineno else start
++    prefix = source.text[start:first]
++    if prefix.strip():  # after `;` or a block header on the same line
++        return first, first, f"{code}; "
++    return start, start, f"{prefix}{code}\n"
++
++
++# -- extract function ----------------------------------------------------------------
++
++def extract_function(path, start, until, name, project=None):
++    check_identifier(name, "--name")
++    source = Source(path)
++    begin, end = _selection(source, start, until)
++    text = source.text
++    remainder = text[end:text.find("\n", end) if "\n" in text[end:] else len(text)]
++    if len(remainder.strip()) == 1:  # an inclusive end column on the last character
++        end += len(remainder.rstrip())
++    # Whole lines: only whitespace before the selection and whitespace or a comment after it.
++    line_start = text.rfind("\n", 0, begin) + 1
++    line_end = text.find("\n", end)
++    line_end = len(text) if line_end < 0 else line_end
++    if text[line_start:begin].strip():
++        raise SithError("selection does not span complete statements")
++    statements = _selected_statements(source, begin, end)
++    trailing = text[source.end(statements[-1]):line_end].strip()
++    if trailing and not trailing.startswith("#"):
++        raise SithError("selection does not span complete statements")
++    scope = _enclosing_scope(source, statements[0])
++    analysis = _Analysis(source, scope, statements, begin, end)
++    first_indent = source.indent_of(statements[0].lineno)
++    body_lines = text[line_start:line_end].split("\n")
++    is_async = analysis.awaits
++
++    params = list(analysis.parameters)
++    returns = [] if analysis.ends_with_return else list(analysis.returns)
++    decorator = ""
++    receiver = ""
++    in_module = isinstance(scope, ast.Module)
++    if in_module:
++        indent = first_indent
++        insert_at = line_start
++    else:
++        indent = source.indent_of(_first_line(scope))
++        insert_at = source.offset(_first_line(scope), 0)
++        container = source.parent(scope)
++        if isinstance(scope, _FUNCTIONS) and isinstance(container, ast.ClassDef):
++            decorators = {d.id for d in scope.decorator_list if isinstance(d, ast.Name)}
++            if "staticmethod" in decorators:
++                decorator = "@staticmethod"
++                receiver = container.name + "."
++            else:
++                arguments = scope.args.posonlyargs + scope.args.args
++                if arguments:
++                    first = arguments[0].arg
++                    params = [first] + [p for p in params if p != first]
++                    receiver = first + "."
++                if "classmethod" in decorators:
++                    decorator = "@classmethod"
++    body_indent = indent + _INDENT
++    body = []
++    for line in body_lines:
++        if line.startswith(first_indent):
++            body.append(body_indent + line[len(first_indent):] if line.strip() else "")
++        else:
++            body.append(line if not line.strip() else body_indent + line.lstrip())
++    if returns:
++        body.append(f"{body_indent}return {', '.join(returns)}")
++    header = f"{indent}{'async ' if is_async else ''}def {name}({', '.join(params)}):"
++    function_lines = ([f"{indent}{decorator}"] if decorator else []) + [header] + body
++    separator = "\n\n\n" if not indent else "\n\n"
++    function_code = "\n".join(function_lines) + separator
++
++    call_arguments = [p for p in params if not (receiver and p == params[0] and
++                                                 p + "." == receiver)]
++    call = f"{'await ' if is_async else ''}{receiver}{name}({', '.join(call_arguments)})"
++    if analysis.ends_with_return:
++        call_line = f"{first_indent}return {call}"
++    elif returns:
++        call_line = f"{first_indent}{', '.join(returns)} = {call}"
++    else:
++        call_line = f"{first_indent}{call}"
++    if in_module:
++        edits = [(line_start, line_end, function_code + call_line)]
++    else:
++        edits = [(insert_at, insert_at, function_code), (line_start, line_end, call_line)]
++    refactoring = Refactoring(project or os.path.dirname(source.path))
++    refactoring.change(source.path, text, apply_edits(text, edits))
++    return refactoring
++
++
++def _selected_statements(source, begin, end):
++    """The consecutive sibling statements covering exactly the selection."""
++    selected = []
++    for node in ast.walk(source.tree):
++        if not isinstance(node, ast.stmt):
++            continue
++        node_start, node_end = source.start(node), source.end(node)
++        if node_end <= begin or node_start >= end:
++            continue
++        if node_start <= begin and node_end >= end and not (node_start == begin and
++                                                            node_end == end):
++            continue  # encloses the selection
++        if begin <= node_start and node_end <= end:
++            selected.append(node)
++            continue
++        raise SithError("selection does not span complete statements")
++    ids = {id(node) for node in selected}
++    top = [node for node in selected if not any(id(a) in ids for a in _ancestors(source, node))]
++    if not top:
++        raise SithError("selection does not contain any statement")
++    top.sort(key=source.start)
++    parent = source.parent(top[0])
++    for field in ("body", "orelse", "finalbody"):
++        body = getattr(parent, field, None)
++        if isinstance(body, list) and any(s is top[0] for s in body):
++            index = next(i for i, s in enumerate(body) if s is top[0])
++            if body[index:index + len(top)] == top:
++                break
++    else:
++        bodies = [handler.body for handler in getattr(parent, "handlers", [])]
++        bodies += [case.body for case in getattr(parent, "cases", [])]
++        for body in bodies:
++            if any(s is top[0] for s in body):
++                index = next(i for i, s in enumerate(body) if s is top[0])
++                if body[index:index + len(top)] == top:
++                    break
++        else:
++            raise SithError("selection does not span complete statements")
++    # Text between the statements must be whitespace, comments or `;`.
++    for previous, current in zip(top, top[1:]):
++        between = source.text[source.end(previous):source.start(current)]
++        if any(line.strip() and not line.strip().startswith("#") and line.strip() != ";"
++               for line in between.split("\n")):
++            raise SithError("selection does not span complete statements")
++    text = source.text[begin:source.start(top[0])] + source.text[source.end(top[-1]):end]
++    if any(line.strip() and not line.strip().startswith("#") and line.strip() != ";"
++           for line in text.split("\n")):
++        raise SithError("selection does not span complete statements")
++    return top
++
++
++def _enclosing_scope(source, node):
++    for ancestor in _ancestors(source, node):
++        if isinstance(ancestor, (ast.Module,) + _SCOPES):
++            return ancestor
++    return source.tree
++
++
++class _Analysis:
++    """Which names the selected statements read from and hand back to their scope."""
++
++    def __init__(self, source, scope, statements, begin, end):
++        self.source = source
++        self.begin, self.end = begin, end
++        self.awaits = False
++        _check_control_flow(source, statements, self)
++        self.ends_with_return = isinstance(statements[-1], ast.Return)
++
++        scope_events = _Scanner(source).scan_scope(scope)
++        declared = _declared_names(scope)
++        local = set()
++        outside = set()
++        if isinstance(scope, _FUNCTIONS):
++            outside |= {a.arg for a in _arguments(scope.args)}
++            local |= outside
++        for event in scope_events:
++            if event.store and event.name not in declared:
++                local.add(event.name)
++                if not begin <= event.offset < end:
++                    outside.add(event.name)
++        for ancestor in _ancestors(source, scope):
++            if isinstance(ancestor, _FUNCTIONS):
++                closure = {a.arg for a in _arguments(ancestor.args)}
++                closure |= {e.name for e in _Scanner(source).scan_scope(ancestor) if e.store}
++                outside |= closure - local
++                local |= closure
++
++        events = []
++        scanner = _Scanner(source)
++        for statement in statements:
++            scanner.statement(statement, 0, events)
++        definite = set()
++        parameters = {}
++        stored = {}
++        for event in events:
++            if event.store:
++                stored.setdefault(event.name, event.offset)
++                if event.depth == 0:
++                    definite.add(event.name)
++            elif event.name not in definite and event.name in outside and \
++                    event.name not in declared:
++                parameters.setdefault(event.name, event.offset)
++        self.parameters = sorted(parameters, key=lambda n: (parameters[n], n))
++
++        # Reads after the selection (or anywhere in a loop around it) need the new values.
++        loop_ranges = [(source.start(a), source.end(a)) for a in _ancestors(source, statements[0])
++                       if isinstance(a, (ast.For, ast.AsyncFor, ast.While)) and
++                       _inside_scope(source, a, scope)]
++        used = set()
++        for event in scope_events:
++            if event.store or begin <= event.offset < end:
++                continue
++            if event.offset >= end or any(s <= event.offset < e for s, e in loop_ranges):
++                used.add(event.name)
++        self.returns = sorted((n for n in stored if n in used and n not in declared),
++                              key=lambda n: (stored[n], n))
++
++
++def _inside_scope(source, node, scope):
++    for ancestor in _ancestors(source, node):
++        if isinstance(ancestor, (ast.Module,) + _SCOPES):
++            return ancestor is scope
++    return scope is source.tree
++
++
++def _declared_names(scope):
++    """Names declared `global` or `nonlocal` in a function scope."""
++    if not isinstance(scope, _FUNCTIONS):
++        return set()
++    names = set()
++    stack = list(scope.body)
++    while stack:
++        node = stack.pop()
++        if isinstance(node, (ast.Global, ast.Nonlocal)):
++            names.update(node.names)
++        if not isinstance(node, _SCOPES):
++            stack.extend(ast.iter_child_nodes(node))
++    return names
++
++
++def _check_control_flow(source, statements, analysis):
++    """Refuse statements whose control flow cannot move into a function."""
++    last = statements[-1]
++    stack = [(statement, False) for statement in statements]
++    while stack:
++        node, in_loop = stack.pop()
++        if isinstance(node, (ast.Yield, ast.YieldFrom)):
++            raise SithError("cannot extract code containing `yield`")
++        if isinstance(node, (ast.Await, ast.AsyncFor, ast.AsyncWith)):
++            analysis.awaits = True
++        if isinstance(node, ast.Return) and node is not last:
++            raise SithError("cannot extract a `return` that does not end the selection")
++        if isinstance(node, (ast.Break, ast.Continue)) and not in_loop:
++            raise SithError(f"cannot extract `{type(node).__name__.lower()}` "
++                            "outside of its loop")
++        if isinstance(node, (ast.Global, ast.Nonlocal)):
++            raise SithError(f"cannot extract a `{type(node).__name__.lower()}` statement")
++        if isinstance(node, _SCOPES):
++            continue
++        for child in ast.iter_child_nodes(node):
++            loop = in_loop or isinstance(node, (ast.For, ast.AsyncFor, ast.While)) and \
++                any(child is s for s in node.body)
++            stack.append((child, loop))
++
++
++class _Event:
++    __slots__ = ("name", "store", "offset", "depth")
++
++    def __init__(self, name, store, offset, depth):
++        self.name = name
++        self.store = store
++        self.offset = offset
++        self.depth = depth
++
++
++class _Scanner:
++    """Name reads and writes of statements, in evaluation order.
++
++    Nested scopes contribute a read of each of their free names (at their
++    position) and nothing else; `depth` counts the enclosing blocks that may
++    not run, so stores at depth 0 always happen.
++    """
++
++    def __init__(self, source):
++        self.source = source
++
++    def scan_scope(self, scope):
++        events = []
++        for statement in scope.body:
++            self.statement(statement, 0, events)
++        return events
++
++    def _event(self, events, name, store, node, depth):
++        events.append(_Event(name, store, self.source.start(node), depth))
++
++    def _store(self, target, depth, events):
++        """Events of an assignment target: reads inside it, then the names it binds."""
++        names = []
++        for node in ast.walk(target):
++            if isinstance(node, ast.Name):
++                if isinstance(node.ctx, ast.Load):
++                    self._event(events, node.id, False, node, depth)
++                else:
++                    names.append(node)
++            elif isinstance(node, (ast.Attribute, ast.Subscript)):
++                for child in ast.iter_child_nodes(node):
++                    if not isinstance(child, ast.expr_context):
++                        self.expression(child, depth, events)
++        for node in names:
++            self._event(events, node.id, True, node, depth)
++
++    def statement(self, node, depth, events):
++        nested = depth + 1
++        if isinstance(node, _FUNCTIONS):
++            for expression in node.decorator_list + node.args.defaults + \
++                    [d for d in node.args.kw_defaults if d is not None]:
++                self.expression(expression, depth, events)
++            for argument in _arguments(node.args):
++                self.expression(argument.annotation, depth, events)
++            self.expression(node.returns, depth, events)
++            bound = {a.arg for a in _arguments(node.args)}
++            self._free(node, node.body, bound, depth, events)
++            self._event(events, node.name, True, node, depth)
++        elif isinstance(node, ast.ClassDef):
++            for expression in node.decorator_list + node.bases + [k.value for k in node.keywords]:
++                self.expression(expression, depth, events)
++            self._free(node, node.body, set(), depth, events)
++            self._event(events, node.name, True, node, depth)
++        elif isinstance(node, ast.Assign):
++            self.expression(node.value, depth, events)
++            for target in node.targets:
++                self._store(target, depth, events)
++        elif isinstance(node, ast.AugAssign):
++            if isinstance(node.target, ast.Name):
++                self._event(events, node.target.id, False, node.target, depth)
++            self.expression(node.value, depth, events)
++            self._store(node.target, depth, events)
++        elif isinstance(node, ast.AnnAssign):
++            self.expression(node.annotation, depth, events)
++            self.expression(node.value, depth, events)
++            if node.value is not None or not isinstance(node.target, ast.Name):
++                self._store(node.target, depth, events)
++        elif isinstance(node, (ast.For, ast.AsyncFor)):
++            self.expression(node.iter, depth, events)
++            self._store(node.target, nested, events)
++            for child in node.body + node.orelse:
++                self.statement(child, nested, events)
++        elif isinstance(node, (ast.While, ast.If)):
++            self.expression(node.test, depth, events)
++            for child in node.body + node.orelse:
++                self.statement(child, nested, events)
++        elif isinstance(node, (ast.With, ast.AsyncWith)):
++            for item in node.items:
++                self.expression(item.context_expr, depth, events)
++                if item.optional_vars is not None:
++                    self._store(item.optional_vars, depth, events)
++            for child in node.body:
++                self.statement(child, depth, events)
++        elif isinstance(node, (ast.Try, getattr(ast, "TryStar", ast.Try))):
++            for child in node.body:
++                self.statement(child, nested, events)
++            for handler in node.handlers:
++                self.expression(handler.type, nested, events)
++                if handler.name:
++                    self._event(events, handler.name, True, handler, nested)
++                for child in handler.body:
++                    self.statement(child, nested, events)
++            for child in node.orelse + node.finalbody:
++                self.statement(child, nested, events)
++        elif isinstance(node, ast.Match):
++            self.expression(node.subject, depth, events)
++            for case in node.cases:
++                for pattern in ast.walk(case.pattern):
++                    if isinstance(pattern, ast.MatchValue):
++                        self.expression(pattern.value, nested, events)
++                    elif isinstance(pattern, ast.MatchClass):
++                        self.expression(pattern.cls, nested, events)
++                    for attribute in ("name", "rest"):
++                        bound = getattr(pattern, attribute, None)
++                        if isinstance(bound, str):
++                            self._event(events, bound, True, pattern, nested)
++                self.expression(case.guard, nested, events)
++                for child in case.body:
++                    self.statement(child, nested, events)
++        elif isinstance(node, (ast.Import, ast.ImportFrom)):
++            for alias in node.names:
++                if alias.name != "*":
++                    bound = alias.asname or alias.name.split(".")[0]
++                    self._event(events, bound, True, alias, depth)
++        elif isinstance(node, ast.Delete):
++            for target in node.targets:
++                self._store(target, depth, events)
++        elif isinstance(node, (ast.Global, ast.Nonlocal)):
++            pass
++        else:
++            for child in ast.iter_child_nodes(node):
++                if isinstance(child, ast.stmt):
++                    self.statement(child, depth, events)
++                else:
++                    self.expression(child, depth, events)
++
++    def expression(self, node, depth, events):
++        if node is None:
++            return
++        if isinstance(node, ast.Name):
++            self._event(events, node.id, not isinstance(node.ctx, ast.Load), node, depth)
++        elif isinstance(node, ast.NamedExpr):
++            self.expression(node.value, depth, events)
++            self._event(events, node.target.id, True, node.target, depth)
++        elif isinstance(node, ast.Lambda):
++            for default in node.args.defaults + [d for d in node.args.kw_defaults if d]:
++                self.expression(default, depth, events)
++            bound = {a.arg for a in _arguments(node.args)}
++            inner = []
++            self.expression(node.body, depth, inner)
++            self._report_free(node, inner, bound, set(), depth, events)
++        elif isinstance(node, _COMPREHENSIONS):
++            generators = node.generators
++            self.expression(generators[0].iter, depth, events)
++            inner = []
++            bound = set()
++            for index, generator in enumerate(generators):
++                if index:
++                    self.expression(generator.iter, depth, inner)
++                self._store(generator.target, depth, inner)
++                bound |= {n.id for n in ast.walk(generator.target) if isinstance(n, ast.Name)}
++                for condition in generator.ifs:
++                    self.expression(condition, depth, inner)
++            if isinstance(node, ast.DictComp):
++                self.expression(node.key, depth, inner)
++                self.expression(node.value, depth, inner)
++            else:
++                self.expression(node.elt, depth, inner)
++            for event in inner:
++                if event.name in bound:
++                    continue
++                events.append(event)  # free reads, and walrus targets binding outside
++        elif isinstance(node, ast.AST):
++            for child in ast.iter_child_nodes(node):
++                if isinstance(child, ast.AST) and not isinstance(child, ast.expr_context):
++                    self.expression(child, depth, events)
++
++    def _free(self, node, body, bound, depth, events):
++        inner = []
++        for statement in body:
++            self.statement(statement, 0, inner)
++        self._report_free(node, inner, bound, _declared_names(node), depth, events)
++
++    def _report_free(self, node, inner, bound, declared, depth, events):
++        local = set(bound) | {e.name for e in inner if e.store and e.name not in declared}
++        reported = set()
++        for event in inner:
++            if not event.store and event.name not in local and event.name not in reported:
++                reported.add(event.name)
++                self._event(events, event.name, False, node, depth)
+
+### sithlib/inline.py (created)
+--- sithlib/inline.py
++++ sithlib/inline.py
+@@ -0,0 +1,209 @@
++"""The `inline` command: replace every use of a variable by its value."""
++import ast
++
++from .errors import SithError
++from .references import PROJECT, search_references
++from .refactoring import (Refactoring, Source, apply_edits, dump, replaced_tree, same_tree)
++from .scopes import Binding
++from .values import LocalModule
++
++
++def inline(path, line, col, project=None):
++    search = search_references(path, line, col, scope=PROJECT, project=project)
++    occurrence = search.occurrence
++    if occurrence.kind in ("constant", "text"):
++        raise SithError(f"no name at line {line}, column {col}")
++    name = occurrence.name
++    binding = _definition(search)
++    sources = {}
++
++    def source_for(file_path):
++        if file_path not in sources:
++            sources[file_path] = Source(file_path)
++        return sources[file_path]
++
++    definition_source = source_for(binding.scope.module.path)
++    statement = _strict_node(definition_source, binding.node)
++    if statement is None:
++        raise SithError(f"cannot find the definition of {name!r}")
++    value = statement.value
++    target = statement.target if isinstance(statement, ast.AnnAssign) else statement.targets[0]
++    value_text = definition_source.segment(value)
++    free_names = any(isinstance(node, ast.Name) for node in ast.walk(value))
++
++    references = []  # (source, node to replace)
++    imports = []  # (source, alias node) of `from ... import name` in other modules
++    for match in search.matches:
++        found = match.occurrence
++        current = source_for(match.path)
++        node = _strict_occurrence(current, match.line, found)
++        if node is target:
++            continue
++        if node is None:
++            raise SithError(f"cannot inline {name!r}: unsupported use at "
++                            f"{match.module_path}:{match.line}:{found.start}")
++        if isinstance(node, ast.alias):
++            statement_node = current.parent(node)
++            if node.asname or not isinstance(statement_node, ast.ImportFrom) \
++                    or current is definition_source:
++                raise SithError(f"cannot inline {name!r}: it is imported at "
++                                f"{match.module_path}:{match.line}")
++            imports.append((current, node))
++            continue
++        context = getattr(node, "ctx", None)
++        if not isinstance(context, ast.Load):
++            raise SithError(f"cannot inline {name!r}: it is assigned or deleted more than once "
++                            f"({match.module_path}:{match.line})")
++        if current is not definition_source and free_names:
++            raise SithError(f"cannot inline {name!r} into another module: "
++                            "its value depends on other names")
++        references.append((current, node))
++    if not references:
++        raise SithError("name has no references to inline")
++
++    edits = {}
++    for current, node in references:
++        start, end = current.start(node), current.end(node)
++        edits.setdefault(current.path, []).append(
++            (start, end, _replacement(current, node, value, value_text, start, end)))
++    edits.setdefault(definition_source.path, []).append(
++        _removal(definition_source, statement))
++    for current, alias in imports:
++        edits.setdefault(current.path, []).append(_import_removal(current, alias))
++    refactoring = Refactoring(search.root)
++    for file_path, file_edits in edits.items():
++        current = sources[file_path]
++        refactoring.change(file_path, current.text, apply_edits(current.text, file_edits))
++    return refactoring
++
++
++def _definition(search):
++    """The single simple-assignment binding of the name at the cursor."""
++    navigator = search.navigator
++    name = search.occurrence.name
++    try:
++        sources = navigator.goto(search.occurrence)
++    except Exception:
++        sources = []
++    definitions = []
++    for source in sources:
++        if isinstance(source, Binding) and source.kind in ("import", "importfrom"):
++            followed = navigator._follow(source, set())
++            if not followed:
++                raise SithError(f"cannot inline {name!r}: it is imported from outside the project")
++            definitions += followed
++        else:
++            definitions.append(source)
++    if any(isinstance(d, LocalModule) for d in definitions):
++        raise SithError("cannot inline a module")
++    if not definitions or any(not isinstance(d, Binding) for d in definitions):
++        raise SithError(f"cannot inline {name!r}: it is not defined in the project")
++    unique = []
++    for definition in definitions:
++        if all(definition is not other for other in unique):
++            unique.append(definition)
++    if any(d.kind in ("def", "class") for d in unique):
++        raise SithError("cannot inline a function/class definition")
++    if len(unique) > 1:
++        raise SithError(f"cannot inline {name!r}: it has more than one definition")
++    binding = unique[0]
++    if binding.kind == "param":
++        raise SithError("cannot inline a parameter")
++    node = binding.node
++    simple = (
++        binding.kind == "assign"
++        and (isinstance(node, ast.Assign) and len(node.targets) == 1
++             and isinstance(node.targets[0], ast.Name)
++             or isinstance(node, ast.AnnAssign) and node.value is not None
++             and isinstance(node.target, ast.Name))
++    )
++    if not simple or not binding.scope.module.path:
++        raise SithError(f"cannot inline {name!r}: it is not defined by a simple assignment "
++                        f"(`{name} = <expression>`)")
++    return binding
++
++
++def _strict_node(source, node):
++    """The node of `source.tree` at the position of `node` (from another parse)."""
++    for candidate in ast.walk(source.tree):
++        if type(candidate) is type(node) and \
++                (candidate.lineno, candidate.col_offset, candidate.end_lineno,
++                 candidate.end_col_offset) == \
++                (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset):
++            return candidate
++    return None
++
++
++def _strict_occurrence(source, line, occurrence):
++    """The Name, Attribute or alias node of `source.tree` that `occurrence` spells."""
++    name = occurrence.name
++    start = occurrence.start
++    for node in ast.walk(source.tree):
++        if isinstance(node, ast.Name):
++            if node.id == name and node.lineno == line and \
++                    source.char_col(line, node.col_offset) == start:
++                return node
++        elif isinstance(node, ast.Attribute):
++            if node.attr == name and node.end_lineno == line and \
++                    source.char_col(line, node.end_col_offset) == start + len(name):
++                return node
++        elif isinstance(node, ast.alias):
++            if node.lineno == line and source.char_col(line, node.col_offset) == start and \
++                    (node.asname or node.name) == name:
++                return node
++    return None
++
++
++def _replacement(source, node, value, value_text, start, end):
++    """`value_text`, parenthesized when the code around `node` would otherwise change meaning."""
++    expected = dump(replaced_tree(source.tree, {id(node): value}))
++    for candidate in (value_text, f"({value_text})"):
++        if same_tree(source.text[:start] + candidate + source.text[end:], expected):
++            return candidate
++    return f"({value_text})"
++
++
++def _removal(source, statement):
++    """An edit deleting `statement` (replaced by `pass` when it is a block's only statement)."""
++    start, end = source.start(statement), source.end(statement)
++    text = source.text
++    parent = source.parent(statement)
++    siblings = None
++    for field in ("body", "orelse", "finalbody", "handlers"):
++        body = getattr(parent, field, None)
++        if isinstance(body, list) and any(s is statement for s in body):
++            siblings = body
++    if siblings is not None and len(siblings) == 1 and not isinstance(parent, ast.Module):
++        return start, end, "pass"
++    line_start = text.rfind("\n", 0, start) + 1
++    line_end = text.find("\n", end)
++    line_end = len(text) if line_end < 0 else line_end
++    before = text[line_start:start]
++    after = text[end:line_end]
++    stripped_after = after.lstrip(" \t")
++    if stripped_after.startswith(";"):
++        following = end + (len(after) - len(stripped_after)) + 1
++        while following < line_end and text[following] in " \t":
++            following += 1
++        if before.strip() or following < line_end and text[following] != "#":
++            return start, following, ""
++        stripped_after = text[following:line_end]
++    if before.strip():
++        semicolon = text.rfind(";", line_start, start)
++        if semicolon >= 0 and not text[semicolon + 1:start].strip():
++            return semicolon, end, ""
++        return start, end, "pass"
++    if stripped_after and not stripped_after.startswith("#"):
++        return start, end, "pass"
++    return line_start, min(line_end + 1, len(text)), ""
++
++
++def _import_removal(source, alias):
++    """An edit removing `alias` from its `from ... import` statement."""
++    statement = source.parent(alias)
++    remaining = [a for a in statement.names if a is not alias]
++    if not remaining:
++        return _removal(source, statement)
++    names = ", ".join(a.name + (f" as {a.asname}" if a.asname else "") for a in remaining)
++    module = "." * statement.level + (statement.module or "")
++    return source.start(statement), source.end(statement), f"from {module} import {names}"
+
+### sithlib/refactoring.py (created)
+--- sithlib/refactoring.py
++++ sithlib/refactoring.py
+@@ -0,0 +1,191 @@
++"""Shared machinery of the refactoring commands: edits, validation and output.
++
++A refactoring never touches the disk: it computes the new contents of the
++files it changes (and the paths it renames) and reports them, either as JSON
++or as a unified diff.
++"""
++import ast
++import copy
++import difflib
++import keyword
++import os
++import warnings
++
++from .definitions import posix_path
++from .errors import SithError
++from .source import load_document
++
++
++class Refactoring:
++    """The outcome of a refactoring: new file contents and renamed paths."""
++
++    def __init__(self, root):
++        self.root = os.path.abspath(root)
++        self.old_texts = {}  # absolute path -> original text
++        self.new_texts = {}  # absolute path -> new text
++        self.renames = []  # (old absolute path, new absolute path)
++
++    def change(self, path, old_text, new_text):
++        path = os.path.abspath(path)
++        self.old_texts.setdefault(path, old_text)
++        self.new_texts[path] = new_text
++
++    def rename(self, old_path, new_path):
++        self.renames.append((os.path.abspath(old_path), os.path.abspath(new_path)))
++
++    def relative(self, path):
++        relative = os.path.relpath(path, self.root)
++        if relative == os.pardir or relative.startswith(os.pardir + os.sep):
++            return posix_path(path)
++        return posix_path(relative)
++
++    def moved(self, path):
++        """Where the file at `path` ends up once the renames are applied."""
++        for old, new in self.renames:
++            if path == old:
++                return new
++            if path.startswith(old + os.sep):
++                return new + path[len(old):]
++        return path
++
++    def changed(self):
++        """(old path, new path, old text, new text) of every file whose content changed."""
++        for path in sorted(self.new_texts):
++            old_text, new_text = self.old_texts[path], self.new_texts[path]
++            if old_text != new_text:
++                yield path, self.moved(path), old_text, new_text
++
++    def to_dict(self):
++        return {
++            "changed_files": {self.relative(new): text for _, new, _, text in self.changed()},
++            "renames": {self.relative(old): self.relative(new) for old, new in self.renames},
++        }
++
++    def to_diff(self):
++        parts = []
++        for old, new in self.renames:
++            parts.append(f"rename from {self.relative(old)}\nrename to {self.relative(new)}\n")
++        for old_path, new_path, old_text, new_text in self.changed():
++            old_lines = _diff_lines(old_text)
++            new_lines = _diff_lines(new_text)
++            parts.append("".join(difflib.unified_diff(
++                old_lines, new_lines, fromfile=self.relative(old_path),
++                tofile=self.relative(new_path))))
++        return "".join(parts)
++
++
++def _diff_lines(text):
++    lines = text.splitlines(keepends=True)
++    if lines and not lines[-1].endswith("\n"):
++        lines[-1] += "\n\\ No newline at end of file\n"
++    return lines
++
++
++# -- validation ----------------------------------------------------------------------
++
++def check_identifier(name, option="--new-name"):
++    if not name.isidentifier() or keyword.iskeyword(name):
++        raise SithError(f"{option} {name!r} is not a valid Python identifier")
++
++
++def parse_strict(text, path):
++    """The syntax tree of `text`; refactoring a file with syntax errors is refused."""
++    try:
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore")
++            return ast.parse(text)
++    except (SyntaxError, ValueError) as error:
++        raise SithError(f"cannot refactor {path}: it has syntax errors ({error})") from error
++
++
++class Source:
++    """A file being refactored: its text, lines, strict syntax tree and parent links."""
++
++    def __init__(self, path):
++        document = load_document(path)
++        self.path = os.path.abspath(path)
++        self.text = document.text
++        self.lines = document.lines
++        self.document = document
++        self.tree = parse_strict(self.text, path)
++        self.parents = {}
++        for parent in ast.walk(self.tree):
++            for child in ast.iter_child_nodes(parent):
++                self.parents[id(child)] = parent
++        offsets = [0]
++        for line in self.lines:
++            offsets.append(offsets[-1] + len(line) + 1)
++        self._offsets = offsets
++
++    # positions: (1-based line, 0-based character column) <-> absolute offsets
++
++    def offset(self, line, col):
++        return self._offsets[line - 1] + col
++
++    def position(self, offset):
++        line = 1
++        while line < len(self._offsets) - 1 and self._offsets[line] <= offset:
++            line += 1
++        return line, offset - self._offsets[line - 1]
++
++    def char_col(self, line, byte_col):
++        encoded = self.lines[line - 1].encode("utf-8")
++        return len(encoded[:byte_col].decode("utf-8", errors="ignore"))
++
++    def start(self, node):
++        """Absolute offset of the start of `node`."""
++        return self.offset(node.lineno, self.char_col(node.lineno, node.col_offset))
++
++    def end(self, node):
++        return self.offset(node.end_lineno, self.char_col(node.end_lineno, node.end_col_offset))
++
++    def segment(self, node):
++        return self.text[self.start(node):self.end(node)]
++
++    def parent(self, node):
++        return self.parents.get(id(node))
++
++    def indent_of(self, line):
++        text = self.lines[line - 1]
++        return text[:len(text) - len(text.lstrip())]
++
++
++def apply_edits(text, edits):
++    """Apply non-overlapping (start, end, replacement) edits to `text`."""
++    for start, end, replacement in sorted(edits, key=lambda e: (e[0], e[1]), reverse=True):
++        text = text[:start] + replacement + text[end:]
++    return text
++
++
++# -- comparing syntax trees ----------------------------------------------------------
++
++def dump(tree):
++    return ast.dump(tree, include_attributes=False)
++
++
++def replaced_tree(tree, targets):
++    """A copy of `tree` with nodes replaced: `targets` maps id(old node) -> new node."""
++    nodes = list(ast.walk(tree))
++    indexes = {id(node): index for index, node in enumerate(nodes)}
++    duplicate = copy.deepcopy(tree)
++    copies = list(ast.walk(duplicate))
++    replacements = {id(copies[indexes[old]]): new for old, new in targets.items()}
++    for parent in copies:
++        for field, value in ast.iter_fields(parent):
++            if isinstance(value, list):
++                for index, item in enumerate(value):
++                    if id(item) in replacements:
++                        value[index] = copy.deepcopy(replacements[id(item)])
++            elif id(value) in replacements:
++                setattr(parent, field, copy.deepcopy(replacements[id(value)]))
++    return duplicate
++
++
++def same_tree(text, expected_dump):
++    """True when `text` parses to the tree dumped as `expected_dump`."""
++    try:
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore")
++            return dump(ast.parse(text)) == expected_dump
++    except (SyntaxError, ValueError):
++        return False
+
+### sithlib/references.py (modified)
+--- sithlib/references.py
++++ sithlib/references.py
+@@ -37,6 +37,46 @@
+ 
+ def find_references(path, line, col, scope=FILE, project=None):
+     """References to the name at the cursor, in `path` or (`scope` "project") the whole project."""
++    search = search_references(path, line, col, scope=scope, project=project)
++    found = {}
++    for match in search.matches:
++        key = (match.module_path, match.line, match.occurrence.start)
++        found[key] = found.get(key, False) or match.is_definition
++    return [Reference(path_, number, column, defining)
++            for (path_, number, column), defining in sorted(found.items())]
++
++
++@dataclass
++class Match:
++    """One occurrence of the searched symbol."""
++
++    navigator: Navigator
++    module_path: str
++    line: int
++    occurrence: object
++    is_definition: bool
++
++    @property
++    def path(self):
++        return self.navigator.context.path
++
++
++@dataclass
++class ReferenceSearch:
++    """The symbol under the cursor and every occurrence of it that was found."""
++
++    root: str
++    importer: Importer
++    inferrer: Inferrer
++    factory: DefinitionFactory
++    navigator: Navigator
++    occurrence: object
++    target: set
++    matches: list
++
++
++def search_references(path, line, col, scope=FILE, project=None):
++    """A ReferenceSearch for the name at the cursor (see `find_references`)."""
+     document = load_document(path)
+     document.check_position(line, col)
+     root = os.path.abspath(project or document.directory)
+@@ -67,24 +107,28 @@
+             other = importer.context_for_file(file_path)
+             if other is not None:
+                 navigators.append(Navigator(other, inferrer, factory))
+-    found = {}
++    matches = []
++    seen = set()
+     for current in navigators:
+         module_path = factory.relative_path(current.context.path)
+         for number, occurrence_found in _named_occurrences(current, name):
+             if target:
+-                matches = bool(finder.symbols(current, number, occurrence_found) & target)
++                matches_target = bool(finder.symbols(current, number, occurrence_found) & target)
+             else:
+                 # Unresolved name: match the other unresolved uses in the same file.
+-                matches = current is navigator and not finder.symbols(current, number,
+-                                                                       occurrence_found)
+-            if matches:
+-                key = (module_path, number, occurrence_found.start)
+-                defining = _is_definition(occurrence_found)
+-                found[key] = found.get(key, False) or defining
++                matches_target = current is navigator and not finder.symbols(
++                    current, number, occurrence_found)
++            if matches_target:
++                seen.add((module_path, number, occurrence_found.start))
++                matches.append(Match(current, module_path, number, occurrence_found,
++                                     _is_definition(occurrence_found)))
+     if occurrence.kind == "text":  # an identifier missing from the (repaired) syntax tree
+-        found.setdefault((factory.relative_path(context.path), line, occurrence.start), False)
+-    return [Reference(path_, number, column, defining)
+-            for (path_, number, column), defining in sorted(found.items())]
++        module_path = factory.relative_path(context.path)
++        if (module_path, line, occurrence.start) not in seen:
++            matches.append(Match(navigator, module_path, line, occurrence, False))
++    navigator.at(line, col)
++    return ReferenceSearch(root, importer, inferrer, factory, navigator, occurrence, target,
++                           matches)
+ 
+ 
+ def _word(name):
+
+### sithlib/rename.py (created)
+--- sithlib/rename.py
++++ sithlib/rename.py
+@@ -0,0 +1,127 @@
++"""The `rename` command: rename a symbol (or a module) and every reference to it."""
++import os
++
++from .errors import SithError
++from .references import PROJECT, search_references
++from .refactoring import Refactoring, apply_edits, check_identifier
++from .scopes import CLASS, Binding
++from .values import LocalClass
++
++# Occurrence kinds that bind the name they spell.
++_BINDING_KINDS = ("def", "param", "bound")
++
++
++def rename(path, line, col, new_name, project=None):
++    check_identifier(new_name)
++    search = search_references(path, line, col, scope=PROJECT, project=project)
++    occurrence = search.occurrence
++    if occurrence.kind == "constant":
++        raise SithError(f"no name at line {line}, column {col}")
++    old_name = occurrence.name
++    refactoring = Refactoring(search.root)
++    kinds = {symbol[0] for symbol in search.target}
++    if kinds & {"builtin", "runtime"}:
++        raise SithError(f"cannot rename {old_name!r}: it is defined outside the project")
++    modules = [symbol[1] for symbol in search.target if symbol[0] == "module"]
++    if modules:
++        _rename_module(search, modules[0], old_name, new_name, refactoring)
++    elif new_name != old_name:
++        _check_collisions(search, new_name)
++    if new_name == old_name:
++        return refactoring
++    edits = {}
++    for match in search.matches:
++        context = match.navigator.context
++        start = match.occurrence.start
++        if context.lines[match.line - 1][start:start + len(old_name)] != old_name:
++            continue
++        files = edits.setdefault(match.path, (context.text, set()))
++        files[1].add(_offset(context.lines, match.line, start))
++    for file_path, (old_text, starts) in edits.items():
++        new_text = apply_edits(old_text, [(s, s + len(old_name), new_name) for s in starts])
++        refactoring.change(file_path, old_text, new_text)
++    return refactoring
++
++
++def _offset(lines, line, col):
++    return sum(len(text) + 1 for text in lines[:line - 1]) + col
++
++
++def _rename_module(search, location, old_name, new_name, refactoring):
++    """Rename the file or directory of a project module."""
++    importer = search.importer
++    location = os.path.abspath(location)
++    if not importer.within_project(os.path.dirname(location)) or \
++            importer.within_project(location) and location.startswith(importer.stub_dir + os.sep):
++        raise SithError(f"cannot rename module {old_name!r}: it is outside the project")
++    if os.path.isdir(location):
++        old_path = location
++    elif os.path.basename(location) in ("__init__.py", "__init__.pyi"):
++        old_path = os.path.dirname(location)
++    else:
++        old_path = location
++    base = os.path.basename(old_path)
++    stem, extension = (base, "") if os.path.isdir(old_path) else os.path.splitext(base)
++    if stem != old_name:
++        raise SithError(f"cannot rename module {stem!r} through the name {old_name!r}")
++    if new_name == old_name:
++        return
++    directory = os.path.dirname(old_path)
++    new_path = os.path.join(directory, new_name + extension)
++    for candidate in (os.path.join(directory, new_name), os.path.join(directory, new_name + ".py"),
++                      os.path.join(directory, new_name + ".pyi")):
++        if os.path.exists(candidate):
++            raise SithError(f"cannot rename module {old_name!r} to {new_name!r}: "
++                            f"{os.path.relpath(candidate, search.root)} already exists")
++    refactoring.rename(old_path, new_path)
++
++
++def _check_collisions(search, new_name):
++    """Refuse renames that would clash with a name already bound where the symbol is used."""
++    navigator = search.navigator
++    try:
++        sources = navigator.goto(search.occurrence)
++    except Exception:
++        sources = []
++    for source in sources:
++        owner = source.extra.get("owner") if isinstance(source, Binding) else None
++        if owner is not None and _class_binds(search, owner, new_name):
++            _collision(search, new_name, owner)
++    for match in search.matches:
++        current = match.navigator
++        occurrence = match.occurrence
++        if occurrence.kind in ("attr", "kwarg", "module", "imported"):
++            continue
++        current.at(match.line, occurrence.start)
++        binding = current.context.binding_of(occurrence.node) \
++            if occurrence.kind in _BINDING_KINDS and occurrence.node is not None else None
++        if binding is not None:
++            if new_name in binding.scope.bindings or \
++                    binding.scope.kind == CLASS and _class_binds(search, binding.scope, new_name):
++                _collision(search, new_name, binding.scope)
++            continue
++        scope = current.scope()
++        for candidate in scope.chain():
++            if candidate.kind == CLASS and candidate is not scope:
++                continue
++            if new_name in candidate.bindings:
++                _collision(search, new_name, candidate)
++
++
++def _class_binds(search, scope, name):
++    if name in scope.bindings:
++        return True
++    members = search.inferrer.members
++    try:
++        return name in members.instance_attribute_bindings(LocalClass(scope))
++    except Exception:
++        return False
++
++
++def _collision(search, new_name, scope):
++    node = scope.node
++    where = f"{node.name!r}" if hasattr(node, "name") else "the module"
++    if scope.kind == "module":
++        where = search.factory.relative_path(scope.module.path) or "the module"
++    raise SithError(f"cannot rename to {new_name!r}: the name {new_name!r} already exists "
++                    f"in the scope of {where}")
+
+### sithlib/syntax_errors.py (created)
+--- sithlib/syntax_errors.py
++++ sithlib/syntax_errors.py
+@@ -0,0 +1,84 @@
++"""The `errors` command: the syntax errors of a file.
++
++The first error is the one the parser reports. Further errors are found by
++repairing the offending lines the way the tolerant parser does and parsing
++again; errors reported on lines that were already repaired are artifacts of
++the repair and are left out.
++"""
++import warnings
++from dataclasses import asdict, dataclass
++
++from .parsing import _Repairer
++from .source import read_text
++
++
++@dataclass
++class SyntaxErrorReport:
++    line: int
++    column: int
++    until_line: int
++    until_column: int
++    message: str
++
++    def to_dict(self):
++        return asdict(self)
++
++
++def syntax_errors(path):
++    text = read_text(path)
++    lines = text.replace("\0", " ").split("\n")
++    collector = _Collector(lines, text.split("\n"))
++    with warnings.catch_warnings():
++        warnings.simplefilter("ignore")
++        collector.run()
++    if "\0" in text and not collector.errors:
++        line = text[:text.index("\0")].count("\n") + 1
++        column = len(text[:text.index("\0")].split("\n")[-1])
++        collector.errors.append(SyntaxErrorReport(
++            line, column, line, column + 1, "source code cannot contain null bytes"))
++    return sorted(collector.errors, key=lambda e: (e.line, e.column))
++
++
++class _Collector(_Repairer):
++    def __init__(self, lines, original_lines):
++        super().__init__(lines, None)
++        self.original_lines = original_lines
++        self.errors = []
++        self.touched = set()
++
++    def _repair(self, error):
++        self._record(error)
++        before = list(self.state)
++        repaired = super()._repair(error)
++        self.touched.update(index + 1 for index, (old, new) in enumerate(zip(before, self.state))
++                            if old != new)
++        return repaired
++
++    def _record(self, error):
++        lines = self.original_lines
++        count = len(lines)
++        line = getattr(error, "lineno", None) or count
++        offset = getattr(error, "offset", None) or 1
++        if line > count:
++            line = count
++            offset = len(lines[-1]) + 1
++        line = max(1, line)
++        if line in self.touched or any(e.line == line for e in self.errors):
++            return
++        if self.touched and line - 1 in self.touched and \
++                "expected an indented block" in str(getattr(error, "msg", "")):
++            return
++        length = len(lines[line - 1])
++        column = max(0, min(offset - 1, length))
++        until_line = getattr(error, "end_lineno", None) or line
++        end_offset = getattr(error, "end_offset", None)
++        if until_line < line or until_line > count:
++            until_line = line
++        if end_offset is None or end_offset <= 0:
++            until_column = column
++        else:
++            until_column = min(end_offset - 1, len(lines[until_line - 1]))
++        if (until_line, until_column) <= (line, column):
++            until_line, until_column = line, min(column + 1, length) if length > column else column
++        message = str(getattr(error, "msg", None) or error)
++        self.errors.append(SyntaxErrorReport(line, column, until_line, until_column, message))
+
+### tests/test_sith.py (modified)
+--- tests/test_sith.py
++++ tests/test_sith.py
+@@ -933,5 +933,181 @@
+             "os", "CALC", "Calculator", "rate", "recalculate", "self", "calc_local", "calc"])
+ 
+ 
++class RefactoringTestCase(CommandTestCase):
++    def refactor(self, command, *args):
++        result = subprocess.run([sys.executable, SITH, command, *map(str, args)],
++                                capture_output=True, text=True, cwd=self.dir)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        return json.loads(result.stdout)
++
++    def fails(self, command, *args):
++        result = subprocess.run([sys.executable, SITH, command, *map(str, args)],
++                                capture_output=True, text=True, cwd=self.dir)
++        self.assertEqual(result.returncode, 1)
++        self.assertEqual(result.stdout, "")
++        return result.stderr
++
++
++class RenameTests(RefactoringTestCase):
++    def setUp(self):
++        super().setUp()
++        self.write("shapes/__init__.py", "from .circle import Circle\n")
++        self.write("shapes/circle.py", """\
++            class Circle:
++                def __init__(self, radius):
++                    self.radius = radius
++
++                def area(self, scale=1):
++                    return 3.14 * self.radius ** 2 * scale
++            """)
++        self.app = self.write("app.py", """\
++            import shapes.circle
++            from shapes import Circle
++
++            def run(scale):
++                c = Circle(radius=2)
++                total = c.area(scale=scale)
++                return total + shapes.circle.Circle(1).radius
++            """)
++
++    def test_rename_class_across_files(self):
++        result = self.refactor("rename", self.app, 5, 9, "--new-name", "Ring")
++        self.assertEqual(result["renames"], {})
++        self.assertEqual(sorted(result["changed_files"]),
++                         ["app.py", "shapes/__init__.py", "shapes/circle.py"])
++        self.assertIn("c = Ring(radius=2)", result["changed_files"]["app.py"])
++        self.assertIn("shapes.circle.Ring(1)", result["changed_files"]["app.py"])
++        self.assertEqual(result["changed_files"]["shapes/__init__.py"], "from .circle import Ring\n")
++        self.assertTrue(result["changed_files"]["shapes/circle.py"].startswith("class Ring:"))
++
++    def test_rename_parameter_and_keyword_arguments(self):
++        result = self.refactor("rename", os.path.join(self.dir, "shapes/circle.py"), 2, 24,
++                               "--new-name", "size", "--project", self.dir)
++        self.assertIn("c = Circle(size=2)", result["changed_files"]["app.py"])
++        self.assertIn("def __init__(self, size):\n        self.radius = size",
++                      result["changed_files"]["shapes/circle.py"])
++
++    def test_rename_module_and_package(self):
++        result = self.refactor("rename", self.app, 1, 16, "--new-name", "round")
++        self.assertEqual(result["renames"], {"shapes/circle.py": "shapes/round.py"})
++        self.assertIn("import shapes.round\n", result["changed_files"]["app.py"])
++        self.assertEqual(result["changed_files"]["shapes/__init__.py"], "from .round import Circle\n")
++        result = self.refactor("rename", self.app, 1, 8, "--new-name", "geometry")
++        self.assertEqual(result["renames"], {"shapes": "geometry"})
++        self.assertIn("from geometry import Circle", result["changed_files"]["app.py"])
++        self.assertTrue(os.path.exists(os.path.join(self.dir, "shapes")))  # nothing is written
++
++    def test_diff(self):
++        result = subprocess.run([sys.executable, SITH, "rename", self.app, "4", "8",
++                                 "--new-name", "factor", "--diff"], capture_output=True, text=True)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertIn("--- app.py\n+++ app.py\n", result.stdout)
++        self.assertIn("-def run(scale):\n+def run(factor):\n", result.stdout)
++        self.assertIn("+    total = c.area(scale=factor)\n", result.stdout)
++
++    def test_validation(self):
++        self.fails("rename", self.app, 4, 4, "--new-name", "1x")
++        self.fails("rename", self.app, 4, 4, "--new-name", "class")
++        self.fails("rename", self.app, 4, 0, "--new-name", "fine")
++        self.assertIn("total", self.fails("rename", self.app, 5, 4, "--new-name", "total"))
++
++
++class InlineTests(RefactoringTestCase):
++    def test_parentheses(self):
++        path = self.write("main.py", """\
++            def f(a, b):
++                x = a + b
++                y = x * 2
++                print(x, -x, x.real, x ** 2)
++                return y
++            """)
++        result = self.refactor("inline", path, 2, 4)
++        self.assertEqual(result["changed_files"]["main.py"], dedent("""\
++            def f(a, b):
++                y = (a + b) * 2
++                print(a + b, -(a + b), (a + b).real, (a + b) ** 2)
++                return y
++            """))
++
++    def test_across_modules(self):
++        self.write("conf.py", "LIMIT = 10\nNAME = 'n'\n")
++        path = self.write("use.py", "from conf import LIMIT, NAME\nprint(LIMIT + 1, NAME)\n")
++        result = self.refactor("inline", path, 2, 6)
++        self.assertEqual(result["changed_files"], {
++            "conf.py": "NAME = 'n'\n",
++            "use.py": "from conf import NAME\nprint(10 + 1, NAME)\n"})
++
++    def test_errors(self):
++        path = self.write("main.py", "def f():\n    pass\nunused = 1\nf()\n")
++        self.assertIn("cannot inline a function/class definition", self.fails("inline", path, 1, 4))
++        self.assertIn("name has no references to inline", self.fails("inline", path, 3, 0))
++
++
++class ExtractTests(RefactoringTestCase):
++    def test_extract_variable(self):
++        path = self.write("main.py", "def f(a, b):\n    return (a + b) * 2\n")
++        result = self.refactor("extract-variable", path, 2, 12, "--until", "2:17", "--name", "s")
++        self.assertEqual(result["changed_files"]["main.py"],
++                         "def f(a, b):\n    s = a + b\n    return s * 2\n")
++        self.assertIn("selection is not a complete expression",
++                      self.fails("extract-variable", path, 2, 12, "--until", "2:21", "--name", "s"))
++        self.fails("extract-variable", path, 2, 12, "--until", "2:17", "--name", "not valid")
++
++    def test_extract_function(self):
++        path = self.write("main.py", """\
++            def compute(a, b):
++                total = a + b
++                doubled = total * 2
++                scaled = doubled + a
++                return scaled, total
++            """)
++        result = self.refactor("extract-function", path, 2, 0, "--until", "3:23", "--name", "part")
++        self.assertEqual(result["changed_files"]["main.py"], dedent("""\
++            def part(a, b):
++                total = a + b
++                doubled = total * 2
++                return total, doubled
++
++
++            def compute(a, b):
++                total, doubled = part(a, b)
++                scaled = doubled + a
++                return scaled, total
++            """))
++        self.fails("extract-function", path, 2, 4, "--until", "3:10", "--name", "part")
++
++    def test_extract_function_module_level_and_method(self):
++        path = self.write("main.py", """\
++            data = [1, 2]
++            total = sum(data)
++            print(total)
++
++            class A:
++                def m(self, r):
++                    base = r * self.k
++                    return base
++            """)
++        result = self.refactor("extract-function", path, 2, 0, "--until", "2:17", "--name", "g")
++        self.assertIn("data = [1, 2]\ndef g(data):\n    total = sum(data)\n    return total\n",
++                      result["changed_files"]["main.py"])
++        self.assertIn("\ntotal = g(data)\nprint(total)", result["changed_files"]["main.py"])
++        result = self.refactor("extract-function", path, 7, 0, "--until", "7:25", "--name", "g")
++        self.assertIn("    def g(self, r):\n        base = r * self.k\n        return base\n",
++                      result["changed_files"]["main.py"])
++        self.assertIn("        base = self.g(r)\n", result["changed_files"]["main.py"])
++
++
++class SyntaxErrorTests(CommandTestCase):
++    def test_errors(self):
++        path = self.write("bad.py", "def f(:\n    pass\nx = (1 +\n")
++        errors = self.run_json("errors", path)
++        self.assertEqual([(e["line"], e["column"]) for e in errors], [(1, 6), (3, 4)])
++        self.assertTrue(all(e["message"] for e in errors))
++        self.assertEqual(self.run_json("errors", self.write("ok.py", "x = 1\n")), [])
++        missing = subprocess.run([sys.executable, SITH, "errors", "missing.py"],
++                                 capture_output=True, text=True, cwd=self.dir)
++        self.assertEqual(missing.returncode, 1)
++
++
+ if __name__ == "__main__":
+     unittest.main()
+

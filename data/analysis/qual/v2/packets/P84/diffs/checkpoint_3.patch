@@ -1,0 +1,1161 @@
+### appctl_cli/app.py (modified)
+--- appctl_cli/app.py
++++ appctl_cli/app.py
+@@ -2,13 +2,15 @@
+ 
+ import os
+ import sys
++import time
+ 
+ from . import config_loader
+ from .arguments import END_OF_OPTIONS, is_assoc_token, parse_argv
+ from .commands import build_command_tree
+ from .context import Context
+-from .errors import AppctlError, UsageError
++from .errors import AppctlError, MultiLineError, UsageError
+ from .help import render_root_help, render_usage
++from .logger import FileLogger, log_path
+ from .output import Output
+ from .remote import run_remote
+ from .resolver import resolve
+@@ -56,9 +58,17 @@
+     except UsageError as exc:
+         output.line(exc.usage)
+         return exc.exit_code
++    except MultiLineError as exc:
++        output.error_multi_line(exc.lines, sensitive=exc.sensitive)
++        return exc.exit_code
+     except AppctlError as exc:
+-        output.error(exc.message)
++        output.error(exc.message, sensitive=exc.sensitive)
+         return exc.exit_code
++
++
++def is_completion_request(positional):
++    """Tab completion runs ``cli completions``; it is never logged."""
++    return list(positional[:2]) == ["cli", "completions"]
+ 
+ 
+ class Runner:
+@@ -122,6 +132,7 @@
+ 
+     def run(self, alias=None, alias_params=None):
+         runtime = build_runtime_config(self.parsed.runtime, self.loaded.merged, alias_params)
++        self.output.set_color(runtime.get("color"))
+         if runtime.get("ssh"):
+             return run_remote(runtime["ssh"], self.argv, self.environ, self.output,
+                               alias=alias, alias_params=alias_params,
+@@ -137,7 +148,8 @@
+             return 0
+         self.output.debug(f"Running command: {command.full_name}")
+         args, assoc = ArgumentValidator(command).validate(
+-            remaining, self.parsed.assoc, warn=self.output.warning
++            remaining, self.parsed.assoc, warn=self.output.warning,
++            read_stdin=self.output.read_stdin,
+         )
+         context = Context(root=self.root, command=command, output=self.output,
+                           runtime=runtime, strict=self.strict, config=self.loaded,
+@@ -145,20 +157,32 @@
+         return command.handler(context, args, assoc)
+ 
+ 
+-def main(argv=None, environ=None, stdout=None, stderr=None, cwd=None):
++def main(argv=None, environ=None, stdout=None, stderr=None, cwd=None, stdin=None):
++    started = time.monotonic()
+     argv = sys.argv[1:] if argv is None else list(argv)
+     environ = os.environ if environ is None else environ
+     strict = is_strict_mode(environ)
+ 
++    invocation = list(argv)
+     alias, argv = extract_alias(argv)
+     parsed = parse_argv(apply_rewrites(argv), strict=strict)
+-    output = Output(quiet=bool(parsed.runtime.get("quiet")), debug=bool(parsed.runtime.get("debug")),
+-                    stdout=stdout, stderr=stderr)
++    logger = FileLogger(log_path(config_loader.root_dir(environ)),
++                        enabled=not is_completion_request(parsed.positional))
++    logger.start_invocation(invocation)
++    output = Output(quiet=bool(parsed.runtime.get("quiet")), debug=parsed.runtime.get("debug", False),
++                    stdout=stdout, stderr=stderr, stdin=stdin,
++                    color=parsed.runtime.get("color", "auto"), logger=logger, start_time=started)
+     for warning in deprecation_warnings(parsed.runtime):
+         print(warning, file=output.stderr)
+ 
+     def start():
+         loaded = config_loader.load(environ, cwd)
++        output.set_color(build_runtime_config(parsed.runtime, loaded.merged)["color"])
++        output.debug(f"Using global config: {loaded.global_path}", group="bootstrap")
++        if loaded.project_path:
++            output.debug(f"Using project config: {loaded.project_path}", group="bootstrap")
++        else:
++            output.debug("No project config found.", group="bootstrap")
+         runner = Runner(argv, parsed, environ, output, strict, loaded)
+         if alias:
+             return runner.run_alias(alias)
+
+### appctl_cli/commands/_listing.py (modified)
+--- appctl_cli/commands/_listing.py
++++ appctl_cli/commands/_listing.py
+@@ -1,7 +1,7 @@
+ """Shared helpers for commands that list or display records."""
+ 
+ from ..errors import AppctlError
+-from ..formatter import format_item, format_items, format_value, select_fields
++from ..formatter import format_item, format_items, format_value, resolve_field, select_fields
+ 
+ RESERVED_KEYS = ("field", "fields", "format")
+ 
+@@ -12,23 +12,29 @@
+ }
+ 
+ 
+-def filter_items(items, assoc, available):
++def filter_items(items, assoc, available, prefix=None):
+     """Keep items matching every generic ``--<field>=<value>`` filter."""
+-    filters = {k: v for k, v in assoc.items() if k not in RESERVED_KEYS and k in available}
++    filters = {}
++    for key, value in assoc.items():
++        if key in RESERVED_KEYS:
++            continue
++        try:
++            filters[resolve_field(key, available, prefix)] = value
++        except AppctlError:
++            continue
+     return [
+         item for item in items
+         if all(str(item.get(k)) == str(v) for k, v in filters.items())
+     ]
+ 
+ 
+-def render_list(ctx, items, assoc, default_fields, available=None, id_field="id"):
++def render_list(ctx, items, assoc, default_fields, available=None, id_field="id", prefix=None):
+     available = list(available or default_fields)
+-    items = filter_items(items, assoc, available)
++    items = filter_items(items, assoc, available, prefix)
+     fmt = assoc.get("format", "table")
+     field = assoc.get("field")
+     if field and field is not True:
+-        if field not in available:
+-            raise AppctlError(f"Invalid field: {field}.")
++        field = resolve_field(str(field).strip(), available, prefix)
+         values = [item.get(field) for item in items]
+         if fmt == "json":
+             ctx.output.line(format_value(values, "json"))
+@@ -36,22 +42,21 @@
+             for value in values:
+                 ctx.output.line(format_value(value))
+         return
+-    fields = select_fields(assoc.get("fields"), default_fields, available)
++    fields = select_fields(assoc.get("fields"), default_fields, available, prefix)
+     ctx.output.line(format_items(items, fields, fmt, id_field=id_field))
+ 
+ 
+-def render_record(ctx, item, assoc, available):
++def render_record(ctx, item, assoc, available, prefix=None):
+     field = assoc.get("field")
+     if field and field is not True:
+-        if field not in available:
+-            raise AppctlError(f"Invalid field: {field}.")
++        field = resolve_field(str(field).strip(), available, prefix)
+         fmt = "json" if assoc.get("format") == "json" else "plaintext"
+         ctx.output.line(format_value(item.get(field), fmt))
+         return
+-    fields = select_fields(assoc.get("fields"), available, available)
++    fields = select_fields(assoc.get("fields"), available, available, prefix)
+     ctx.output.line(format_item(item, fields, assoc.get("format", "table")))
+ 
+ 
+-def require_confirmation(assoc, question):
+-    if not assoc.get("yes"):
+-        raise AppctlError(f"{question} Re-run with --yes to confirm.")
++def confirm(ctx, assoc, question):
++    """Prompt with ``[y/n]`` unless ``--yes``; False means the user cancelled."""
++    return ctx.output.confirm(question, assoc)
+
+### appctl_cli/commands/cli.py (modified)
+--- appctl_cli/commands/cli.py
++++ appctl_cli/commands/cli.py
+@@ -1,13 +1,15 @@
+ """``appctl cli``: information about appctl itself."""
+ 
+-import json
++import os
+ import platform
+ 
+ from .. import PROGRAM_NAME, __version__
++from ..arguments import is_assoc_token, parse_assoc_token
+ from ..formatter import format_value
+ from ..errors import AppctlError
+ from ..resolver import try_resolve
+ from ..runtime_config import GLOBAL_PARAMETERS, visible_parameters
++from ..synopsis import ASSOC, FLAG
+ 
+ 
+ def version(ctx, args, assoc):
+@@ -27,7 +29,7 @@
+                            if v != GLOBAL_PARAMETERS[k].default},
+     }
+     if assoc["format"] == "json":
+-        ctx.output.line(json.dumps(data))
++        ctx.output.line(format_value(data, "json"))
+         return
+     if assoc["format"] != "list":
+         raise AppctlError(f"Invalid format: {assoc['format']}. Supported formats: list, json.")
+@@ -60,6 +62,55 @@
+     return 0 if found else 1
+ 
+ 
++def _completion_words(line):
++    """Split the line into completed words and the word being typed."""
++    words = line.split()
++    current = words.pop() if words and not line[-1].isspace() else ""
++    if words and os.path.basename(words[0]) in (PROGRAM_NAME, f"{PROGRAM_NAME}.py"):
++        words = words[1:]
++    elif not words and os.path.basename(current) in (PROGRAM_NAME, f"{PROGRAM_NAME}.py"):
++        current = ""
++    return words, current
++
++
++def completion_candidates(root, line):
++    words, current = _completion_words(line)
++    used = {parse_assoc_token(w)[0] for w in words if is_assoc_token(w)}
++    command = root
++    consumed = True
++    for word in (w for w in words if not is_assoc_token(w)):
++        child = command.find_subcommand(word) if consumed else None
++        if child is None:
++            if not command.is_runnable or command.is_root:
++                return []
++            consumed = False
++            continue
++        command = child
++    candidates = []
++    if consumed:
++        candidates += [f"{sub.name} " for sub in command.sorted_subcommands()]
++    if command.is_runnable and not command.is_root:
++        for token in command.tokens_of_type(ASSOC, FLAG):
++            if token.name not in used:
++                candidates.append(f"--{token.name}=" if token.type == ASSOC else f"--{token.name} ")
++        for name, param in visible_parameters().items():
++            if param.runtime and name not in used:
++                candidates.append(f"--{name}=" if "=" in param.synopsis else f"--{name} ")
++    return [c for c in candidates if c.startswith(current)]
++
++
++def completions(ctx, args, assoc):
++    line = str(assoc["line"])
++    point = assoc.get("point")
++    if point is not None and point is not True:
++        try:
++            line = line[:int(point)]
++        except ValueError:
++            pass
++    for candidate in completion_candidates(ctx.root, line):
++        ctx.output.line(candidate)
++
++
+ def register(registry):
+     registry.add("cli", description="Reviews current appctl info.")
+     registry.add("cli version", version, description="Prints the appctl version.")
+@@ -78,6 +129,14 @@
+         options={"with-values": "Display current values also."},
+     )
+     registry.add(
++        "cli completions", completions,
++        synopsis="--line=<line> [--point=<point>]",
++        description="Generates tab completion strings.",
++        options={"line": "The current command line to be executed.",
++                 "point": "The index to the current cursor position relative to the beginning "
++                          "of the command."},
++    )
++    registry.add(
+         "cli has-command", has_command,
+         synopsis="<command-name>...",
+         description="Detects if a command exists.",
+
+### appctl_cli/commands/db.py (modified)
+--- appctl_cli/commands/db.py
++++ appctl_cli/commands/db.py
+@@ -1,6 +1,6 @@
+ """``appctl db``: basic database operations (simulated)."""
+ 
+-from ._listing import require_confirmation
++from ._listing import confirm
+ 
+ DATABASE = "appctl"
+ TABLES = ["app_comments", "app_options", "app_posts", "app_sites", "app_users"]
+@@ -11,12 +11,14 @@
+ 
+ 
+ def drop(ctx, args, assoc):
+-    require_confirmation(assoc, f"Are you sure you want to drop the '{DATABASE}' database?")
++    if not confirm(ctx, assoc, f"Are you sure you want to drop the '{DATABASE}' database?"):
++        return
+     ctx.output.success(f"Database '{DATABASE}' dropped.")
+ 
+ 
+ def reset(ctx, args, assoc):
+-    require_confirmation(assoc, f"Are you sure you want to reset the '{DATABASE}' database?")
++    if not confirm(ctx, assoc, f"Are you sure you want to reset the '{DATABASE}' database?"):
++        return
+     ctx.output.success(f"Database '{DATABASE}' reset.")
+ 
+ 
+
+### appctl_cli/commands/option.py (modified)
+--- appctl_cli/commands/option.py
++++ appctl_cli/commands/option.py
+@@ -52,7 +52,8 @@
+         wanted = "yes" if autoload in ("on", "yes") else "no"
+         items = [o for o in items if o["autoload"] == wanted]
+     filters = {k: v for k, v in assoc.items() if k not in ("search", "autoload")}
+-    render_list(ctx, items, filters, ["option_name", "option_value"], FIELDS, id_field="option_name")
++    render_list(ctx, items, filters, ["option_name", "option_value"], FIELDS,
++                id_field="option_name", prefix="option")
+ 
+ 
+ def update(ctx, args, assoc):
+
+### appctl_cli/commands/post.py (modified)
+--- appctl_cli/commands/post.py
++++ appctl_cli/commands/post.py
+@@ -13,6 +13,7 @@
+ ]
+ FIELDS = ["ID", "post_title", "post_name", "post_type", "post_status", "post_author"]
+ LIST_FIELDS = ["ID", "post_title", "post_name", "post_status"]
++PREFIX = "post"
+ 
+ 
+ def _find(post_id):
+@@ -46,11 +47,11 @@
+     post = _find(args[0])
+     if post is None:
+         raise AppctlError(f"Could not find the post with ID {args[0]}.")
+-    render_record(ctx, post, assoc, FIELDS)
++    render_record(ctx, post, assoc, FIELDS, prefix=PREFIX)
+ 
+ 
+ def list_(ctx, args, assoc):
+-    render_list(ctx, POSTS, assoc, LIST_FIELDS, FIELDS, id_field="ID")
++    render_list(ctx, POSTS, assoc, LIST_FIELDS, FIELDS, id_field="ID", prefix=PREFIX)
+ 
+ 
+ def update(ctx, args, assoc):
+
+### appctl_cli/commands/site.py (modified)
+--- appctl_cli/commands/site.py
++++ appctl_cli/commands/site.py
+@@ -3,7 +3,7 @@
+ import re
+ 
+ from ..errors import AppctlError
+-from ._listing import LIST_OPTIONS, render_list, require_confirmation
++from ._listing import LIST_OPTIONS, confirm, render_list
+ 
+ SITES = [
+     {"name": "blog", "type": "blog", "url": "https://blog.example.test", "status": "active"},
+@@ -41,7 +41,8 @@
+     name = args[0]
+     if _find(name) is None:
+         raise AppctlError(f"Site '{name}' does not exist.")
+-    require_confirmation(assoc, f"Are you sure you want to delete the '{name}' site?")
++    if not confirm(ctx, assoc, f"Are you sure you want to delete the '{name}' site?"):
++        return
+     suffix = " Database tables were kept." if assoc.get("keep-tables") else ""
+     ctx.output.success(f"The site '{name}' was deleted.{suffix}")
+ 
+@@ -67,7 +68,8 @@
+ 
+ 
+ def empty(ctx, args, assoc):
+-    require_confirmation(assoc, "Are you sure you want to empty the site of all content?")
++    if not confirm(ctx, assoc, "Are you sure you want to empty the site of all content?"):
++        return
+     extra = " Uploaded files were removed." if assoc.get("uploads") else ""
+     ctx.output.success(f"The site was emptied.{extra}")
+ 
+
+### appctl_cli/commands/user.py (modified)
+--- appctl_cli/commands/user.py
++++ appctl_cli/commands/user.py
+@@ -13,6 +13,7 @@
+      "display_name": "Arthur Author", "roles": "author"},
+ ]
+ FIELDS = ["ID", "user_login", "user_email", "display_name", "roles"]
++PREFIX = "user"
+ META = {1: {"nickname": "admin", "locale": "en_US"}, 2: {"nickname": "editor"}, 3: {}}
+ ROLES = ("administrator", "editor", "author", "contributor", "subscriber")
+ 
+@@ -63,7 +64,7 @@
+ 
+ 
+ def get(ctx, args, assoc):
+-    render_record(ctx, require_user(args[0]), assoc, FIELDS)
++    render_record(ctx, require_user(args[0]), assoc, FIELDS, prefix=PREFIX)
+ 
+ 
+ def list_(ctx, args, assoc):
+@@ -71,7 +72,7 @@
+     role = filters.pop("role", None)
+     if role:
+         filters["roles"] = role
+-    render_list(ctx, USERS, filters, FIELDS, id_field="ID")
++    render_list(ctx, USERS, filters, FIELDS, id_field="ID", prefix=PREFIX)
+ 
+ 
+ def update(ctx, args, assoc):
+
+### appctl_cli/errors.py (modified)
+--- appctl_cli/errors.py
++++ appctl_cli/errors.py
+@@ -2,12 +2,25 @@
+ 
+ 
+ class AppctlError(Exception):
+-    """A fatal error reported as ``Error: <message>`` on STDERR."""
++    """A fatal error reported as ``Error: <message>`` on STDERR.
+ 
+-    def __init__(self, message, exit_code=1):
++    A ``sensitive`` error carries user-supplied material and is never
++    persisted to the log file.
++    """
++
++    def __init__(self, message, exit_code=1, sensitive=False):
+         super().__init__(message)
+         self.message = message
+         self.exit_code = exit_code
++        self.sensitive = sensitive
++
++
++class MultiLineError(AppctlError):
++    """A fatal error whose lines are shown in a highlighted box."""
++
++    def __init__(self, lines, exit_code=1, sensitive=False):
++        self.lines = [str(line) for line in lines]
++        super().__init__("\n".join(self.lines), exit_code, sensitive)
+ 
+ 
+ class CommandNotFoundError(AppctlError):
+
+### appctl_cli/formatter.py (modified)
+--- appctl_cli/formatter.py
++++ appctl_cli/formatter.py
+@@ -4,18 +4,34 @@
+ import io
+ import json
+ 
++import yaml
++
+ from .errors import AppctlError
+ 
+ LIST_FORMATS = ("table", "csv", "json", "yaml", "count", "ids")
+ ITEM_FORMATS = ("table", "csv", "json", "yaml")
++JSON_INDENT = 4
+ 
+ 
+ def _text(value):
++    """Cell text; arrays and objects are serialized as JSON."""
+     if value is None:
+         return ""
+     if isinstance(value, bool):
+         return "true" if value else "false"
++    if isinstance(value, (list, tuple, dict)):
++        return json.dumps(value)
+     return str(value)
++
++
++def to_json(value):
++    return json.dumps(value, indent=JSON_INDENT)
++
++
++def to_yaml(value):
++    text = yaml.safe_dump(value, default_flow_style=False, sort_keys=False,
++                          allow_unicode=True, explicit_start=True)
++    return text.rstrip("\n")
+ 
+ 
+ def _check_format(fmt, allowed):
+@@ -23,15 +39,31 @@
+         raise AppctlError(f"Invalid format: {fmt}. Supported formats: {', '.join(allowed)}.")
+ 
+ 
+-def select_fields(requested, default_fields, available):
++def resolve_field(name, available, prefix=None):
++    """Return the canonical field for ``name``.
++
++    Exact matches win, then ``<prefix>_<name>``; both are also tried
++    case-insensitively.
++    """
++    candidates = [name] + ([f"{prefix}_{name}"] if prefix else [])
++    for candidate in candidates:
++        if candidate in available:
++            return candidate
++    lowered = {}
++    for field in available:
++        lowered.setdefault(field.lower(), field)
++    for candidate in candidates:
++        if candidate.lower() in lowered:
++            return lowered[candidate.lower()]
++    raise AppctlError(f"Invalid field: {name}.")
++
++
++def select_fields(requested, default_fields, available, prefix=None):
+     """Resolve ``--fields`` (comma separated) against the known fields."""
+     if not requested or requested is True:
+         return list(default_fields)
+     fields = [f.strip() for f in str(requested).split(",") if f.strip()]
+-    for name in fields:
+-        if name not in available:
+-            raise AppctlError(f"Invalid field: {name}.")
+-    return fields
++    return [resolve_field(name, available, prefix) for name in fields]
+ 
+ 
+ def _table(headers, rows):
+@@ -57,42 +89,32 @@
+     return buffer.getvalue().rstrip("\n")
+ 
+ 
+-def _yaml_scalar(value):
+-    text = _text(value)
+-    if text == "" or any(ch in text for ch in ":#'\"{}[],&*!|>%@`") or text.strip() != text:
+-        return json.dumps(text)
+-    return text
+-
+-
+ def format_items(items, fields, fmt="table", id_field="id"):
+     _check_format(fmt, LIST_FORMATS)
+     if fmt == "count":
+         return str(len(items))
+     if fmt == "ids":
+         return " ".join(_text(item.get(id_field)) for item in items)
++    records = [{f: item.get(f) for f in fields} for item in items]
+     if fmt == "json":
+-        return json.dumps([{f: item.get(f) for f in fields} for item in items])
++        return to_json(records)
+     if fmt == "yaml":
+-        if not items:
+-            return "--- []"
+-        lines = ["---"]
+-        for item in items:
+-            for index, name in enumerate(fields):
+-                prefix = "- " if index == 0 else "  "
+-                lines.append(f"{prefix}{name}: {_yaml_scalar(item.get(name))}")
+-        return "\n".join(lines)
+-    rows = [[_text(item.get(f)) for f in fields] for item in items]
++        return to_yaml(records)
++    if fmt == "table" and len(items) == 1:
++        return format_item(items[0], fields, "table")
++    rows = [[_text(record[f]) for f in fields] for record in records]
+     if fmt == "csv":
+         return _csv(fields, rows)
+     return _table(fields, rows)
+ 
+ 
+ def format_item(item, fields, fmt="table"):
++    """A single record, laid out vertically as field/value pairs."""
+     _check_format(fmt, ITEM_FORMATS)
+     if fmt == "json":
+-        return json.dumps({f: item.get(f) for f in fields})
++        return to_json({f: item.get(f) for f in fields})
+     if fmt == "yaml":
+-        return "\n".join(["---"] + [f"{f}: {_yaml_scalar(item.get(f))}" for f in fields])
++        return to_yaml({f: item.get(f) for f in fields})
+     rows = [[f, _text(item.get(f))] for f in fields]
+     if fmt == "csv":
+         return _csv(["Field", "Value"], rows)
+@@ -101,7 +123,7 @@
+ 
+ def format_value(value, fmt="plaintext"):
+     if fmt == "json":
+-        return json.dumps(value)
++        return to_json(value)
+     if fmt == "plaintext":
+         return _text(value)
+     raise AppctlError(f"Invalid format: {fmt}. Supported formats: plaintext, json.")
+
+### appctl_cli/logger.py (created)
+--- appctl_cli/logger.py
++++ appctl_cli/logger.py
+@@ -0,0 +1,72 @@
++"""Append-only file log of every invocation at ``<root>/logs/appctl.log``."""
++
++import os
++import re
++import shlex
++from datetime import datetime, timezone
++
++from . import PROGRAM_NAME
++
++LOG_DIR = "logs"
++LOG_FILE = f"{PROGRAM_NAME}.log"
++DELIMITER = "-" * 72
++REDACTED = "[REDACTED]"
++
++# ``--key=value`` arguments whose value must never reach the disk.
++SENSITIVE_KEY_RE = re.compile(r"pass|pwd|secret|token|api[-_]?key|private[-_]?key|auth|credential",
++                              re.IGNORECASE)
++
++
++def log_path(root_dir):
++    return os.path.join(root_dir, LOG_DIR, LOG_FILE)
++
++
++def utc_timestamp(now=None):
++    """ISO 8601 UTC timestamp with second precision, e.g. ``2024-01-31T12:00:00Z``."""
++    now = now or datetime.now(timezone.utc)
++    return now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
++
++
++def redact_argv(argv):
++    """Replace the values of sensitive ``--key=value`` arguments."""
++    redacted = []
++    for index, token in enumerate(argv):
++        if token == "--":
++            redacted.extend(argv[index:])
++            break
++        if token.startswith("--") and "=" in token:
++            key = token[2:].split("=", 1)[0]
++            if SENSITIVE_KEY_RE.search(key):
++                token = f"--{key}={REDACTED}"
++        redacted.append(token)
++    return redacted
++
++
++class FileLogger:
++    """Writes timestamped entries; write failures silently disable logging."""
++
++    def __init__(self, path, enabled=True):
++        self.path = path
++        self.enabled = bool(enabled and path)
++
++    def start_invocation(self, argv):
++        """Write the delimiter line and the (redacted) command line."""
++        command = shlex.join([PROGRAM_NAME] + redact_argv(list(argv)))
++        self._append(f"{DELIMITER}\n[{utc_timestamp()}] Command: {command}\n")
++
++    def write(self, text):
++        """Append one entry; every line of it carries the timestamp."""
++        stamp = utc_timestamp()
++        self._append("".join(f"[{stamp}] {line}\n" for line in str(text).split("\n")))
++
++    def _append(self, data):
++        if not self.enabled:
++            return
++        try:
++            directory = os.path.dirname(self.path)
++            if directory:
++                os.makedirs(directory, exist_ok=True)
++            with open(self.path, "a", encoding="utf-8") as handle:
++                handle.write(data)
++        except OSError:
++            self.enabled = False
+
+### appctl_cli/output.py (modified)
+--- appctl_cli/output.py
++++ appctl_cli/output.py
+@@ -1,16 +1,82 @@
+ """Writers for the different kinds of user-facing output."""
+ 
++import os
++import platform
++import select
++import stat
+ import sys
++import time
++
++RESET = "\033[0m"
++COLORS = {
++    "Error": "\033[1;31m",    # red
++    "Warning": "\033[1;33m",  # yellow
++    "Success": "\033[1;32m",  # green
++    "Debug": "\033[1;34m",    # blue
++}
++BOX_COLOR = "\033[1;37;41m"   # white on red
++
++# How long to wait for piped STDIN data that has not arrived yet.
++STDIN_WAIT = 1.0
++
++_TRUE = ("1", "true", "yes", "on", "always")
++_FALSE = ("0", "false", "no", "off", "never")
++
++
++def parse_color(value):
++    """Normalise a ``color`` setting to ``True``, ``False`` or ``"auto"``."""
++    if isinstance(value, bool):
++        return value
++    text = "" if value is None else str(value).strip().lower()
++    if text in _TRUE:
++        return True
++    if text in _FALSE:
++        return False
++    return "auto"
++
++
++def _isatty(stream):
++    try:
++        return bool(stream.isatty())
++    except (AttributeError, ValueError, OSError):
++        return False
++
++
++def _stdin_ready(stream, timeout):
++    """True when reading ``stream`` will not block indefinitely."""
++    try:
++        fd = stream.fileno()
++        mode = os.fstat(fd).st_mode
++    except (AttributeError, ValueError, OSError):
++        return True  # in-memory stream
++    if stat.S_ISREG(mode) or stat.S_ISCHR(mode):
++        return True
++    try:
++        ready, _, _ = select.select([fd], [], [], timeout)
++    except (OSError, ValueError):
++        return True
++    return bool(ready)
+ 
+ 
+ class Output:
+-    """Routes messages to STDOUT/STDERR, honouring --quiet and --debug."""
++    """Routes messages to STDOUT/STDERR and the log file.
+ 
+-    def __init__(self, quiet=False, debug=False, stdout=None, stderr=None):
++    Honours ``--quiet``, ``--debug[=<group>]`` and ``--[no-]color``.
++    """
++
++    def __init__(self, quiet=False, debug=False, stdout=None, stderr=None, stdin=None,
++                 color="auto", logger=None, start_time=None):
+         self.quiet = quiet
+-        self.debug_enabled = debug
++        if debug == "":
++            debug = True
++        self.debug_enabled = bool(debug)
++        self.debug_group = debug if isinstance(debug, str) else None
+         self._stdout = stdout
+         self._stderr = stderr
++        self._stdin = stdin
++        self._color = parse_color(color)
++        self.logger = logger
++        self.start_time = time.monotonic() if start_time is None else start_time
+ 
+     @property
+     def stdout(self):
+@@ -20,26 +86,114 @@
+     def stderr(self):
+         return self._stderr or sys.stderr
+ 
++    @property
++    def stdin(self):
++        return self._stdin or sys.stdin
++
++    # -- colors -----------------------------------------------------------
++
++    def set_color(self, value):
++        self._color = parse_color(value)
++
++    @property
++    def color(self):
++        """Whether output is colorized (auto: STDOUT is a TTY, not Windows)."""
++        if self._color == "auto":
++            return _isatty(self.stdout) and platform.system() != "Windows"
++        return self._color
++
++    def _label(self, kind, label=None):
++        label = label or f"{kind}:"
++        return f"{COLORS[kind]}{label}{RESET}" if self.color else label
++
++    # -- log file -----------------------------------------------------------
++
++    def _log_file(self, text):
++        if self.logger is not None:
++            self.logger.write(text)
++
++    def elapsed(self):
++        return time.monotonic() - self.start_time
++
++    # -- message categories ---------------------------------------------------
++
+     def line(self, text=""):
+         """Print a line on STDOUT unconditionally."""
+         print(text, file=self.stdout)
+ 
+-    def log(self, text):
+-        """Print an informational line on STDOUT unless --quiet."""
++    def log(self, text, sensitive=False):
++        """Informational line on STDOUT unless --quiet; logged unless sensitive."""
+         if not self.quiet:
+             print(text, file=self.stdout)
++        if not sensitive:
++            self._log_file(text)
+ 
+     def success(self, text):
+         if not self.quiet:
+-            print(f"Success: {text}", file=self.stdout)
++            print(f"{self._label('Success')} {text}", file=self.stdout)
+ 
+     def warning(self, text):
+         if not self.quiet:
+-            print(f"Warning: {text}", file=self.stderr)
++            print(f"{self._label('Warning')} {text}", file=self.stderr)
++        self._log_file(f"Warning: {text}")
+ 
+-    def error(self, text):
+-        print(f"Error: {text}", file=self.stderr)
++    def error(self, text, sensitive=False):
++        print(f"{self._label('Error')} {text}", file=self.stderr)
++        if not sensitive:
++            self._log_file(f"Error: {text}")
+ 
+-    def debug(self, text):
+-        if self.debug_enabled:
+-            print(f"Debug: {text}", file=self.stderr)
++    def error_multi_line(self, lines, sensitive=False):
++        """Show an error in a highlighted box on STDERR."""
++        lines = [str(line).replace("\t", "    ") for line in lines] or [""]
++        lines = ["Error: " + lines[0]] + ["       " + line for line in lines[1:]]
++        width = max(len(line) for line in lines)
++        border = "+" + "-" * (width + 2) + "+"
++        box = [border] + [f"| {line.ljust(width)} |" for line in lines] + [border]
++        if self.color:
++            box = [f"{BOX_COLOR}{row}{RESET}" for row in box]
++        print("\n".join(box), file=self.stderr)
++        if not sensitive:
++            self._log_file("\n".join(lines))
++
++    def debug(self, text, group=None):
++        """Debug line with elapsed time; ``--debug=<group>`` filters by group."""
++        if not self.debug_enabled:
++            return
++        if self.debug_group is not None and group != self.debug_group:
++            return
++        label = f"Debug ({group}):" if group else "Debug:"
++        message = f"{text} ({self.elapsed():.3f}s)"
++        print(f"{self._label('Debug', label)} {message}", file=self.stderr)
++        self._log_file(f"{label} {message}")
++
++    # -- user input -------------------------------------------------------------
++
++    def prompt(self, question):
++        """Show ``question``, read one line and return it trimmed and lowercased."""
++        self.stdout.write(question)
++        self.stdout.flush()
++        try:
++            answer = self.stdin.readline()
++        except (AttributeError, OSError, ValueError):
++            answer = ""
++        return (answer or "").strip().lower()
++
++    def confirm(self, question, assoc=None):
++        """Ask ``question [y/n]``; ``--yes`` auto-confirms. Return True to proceed."""
++        if assoc and assoc.get("yes"):
++            return True
++        if self.prompt(f"{question} [y/n] ") != "y":
++            self.warning("Operation cancelled.")
++            return False
++        return True
++
++    def read_stdin(self, timeout=STDIN_WAIT):
++        """Return all piped STDIN content, or ``None`` if there is none."""
++        stream = self.stdin
++        if stream is None or _isatty(stream) or not _stdin_ready(stream, timeout):
++            return None
++        try:
++            data = stream.read()
++        except (OSError, ValueError):
++            return None
++        return data or None
+
+### appctl_cli/validator.py (modified)
+--- appctl_cli/validator.py
++++ appctl_cli/validator.py
+@@ -1,4 +1,6 @@
+ """Validation of supplied arguments against a command's synopsis."""
++
++import json
+ 
+ from .errors import AppctlError, UsageError
+ from .help import render_usage
+@@ -25,6 +27,28 @@
+         if any(t.repeating for t in self.positionals):
+             return []
+         return list(args[len(self.positionals):])
++
++    def fill_from_stdin(self, args, assoc, read_stdin):
++        """Read the first missing positional value from STDIN, if piped.
++
++        With ``--format=json`` the value is decoded as JSON.
++        """
++        if read_stdin is None or len(args) >= len(self.positionals):
++            return
++        raw = read_stdin()
++        if raw is None:
++            return
++        if raw.endswith("\r\n"):
++            raw = raw[:-2]
++        elif raw.endswith("\n"):
++            raw = raw[:-1]
++        value = raw
++        if assoc.get("format", self.command.defaults.get("format")) == "json":
++            try:
++                value = json.loads(raw)
++            except ValueError:
++                raise AppctlError(f"Invalid JSON: {raw}", sensitive=True) from None
++        args.append(value)
+ 
+     # -- associative ----------------------------------------------------
+ 
+@@ -73,10 +97,15 @@
+ 
+     # -- entry point ----------------------------------------------------
+ 
+-    def validate(self, args, assoc, warn=lambda message: None):
+-        """Validate and return ``(args, assoc)`` with defaults applied."""
++    def validate(self, args, assoc, warn=lambda message: None, read_stdin=None):
++        """Validate and return ``(args, assoc)`` with defaults applied.
++
++        ``read_stdin`` returns piped STDIN content (or ``None``) and is used
++        for a positional argument missing from the command line.
++        """
+         args = list(args)
+         assoc = dict(assoc)
++        self.fill_from_stdin(args, assoc, read_stdin)
+         if not self.enough_positionals(args):
+             raise UsageError(render_usage(self.command))
+         extra = self.unknown_positionals(args)
+
+### tests/test_output.py (created)
+--- tests/test_output.py
++++ tests/test_output.py
+@@ -0,0 +1,232 @@
++"""Output formats, message categories, logging and user interaction."""
++
++import io
++import json
++import os
++import re
++import subprocess
++import sys
++import tempfile
++import unittest
++
++import yaml
++
++from appctl_cli.errors import AppctlError
++from appctl_cli.formatter import format_items, resolve_field, select_fields
++from appctl_cli.logger import FileLogger, redact_argv
++from appctl_cli.output import Output
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++SCRIPT = os.path.join(ROOT, "appctl.py")
++TIMESTAMP = r"\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\]"
++
++
++class CliTestCase(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.env = {k: v for k, v in os.environ.items() if not k.startswith("APPCTL_")}
++        self.env["APPCTL_ROOT_DIR"] = self.tmp.name
++        self.log_path = os.path.join(self.tmp.name, "logs", "appctl.log")
++
++    def tearDown(self):
++        self.tmp.cleanup()
++
++    def run_cli(self, *args, input=""):
++        return subprocess.run([sys.executable, SCRIPT, *args], capture_output=True, text=True,
++                              input=input, env=self.env, cwd=self.tmp.name)
++
++    def read_log(self):
++        with open(self.log_path, encoding="utf-8") as handle:
++            return handle.read()
++
++
++class FormatTest(CliTestCase):
++    def test_json_is_pretty_and_ordered(self):
++        result = self.run_cli("site", "list", "--format=json", "--fields=url,name")
++        self.assertIn('\n    {\n        "url": ', result.stdout)
++        self.assertEqual(list(json.loads(result.stdout)[0]), ["url", "name"])
++
++    def test_yaml_block_style(self):
++        result = self.run_cli("site", "list", "--format=yaml")
++        self.assertIn("- name: blog\n  type: blog\n", result.stdout)
++        self.assertEqual(yaml.safe_load(result.stdout)[2]["status"], "archived")
++
++    def test_count_and_ids(self):
++        self.assertEqual(self.run_cli("post", "list", "--format=count").stdout, "3\n")
++        self.assertEqual(self.run_cli("post", "list", "--format=ids").stdout, "1 2 3\n")
++
++    def test_csv_follows_fields_order(self):
++        result = self.run_cli("site", "list", "--format=csv", "--fields=status,name")
++        self.assertEqual(result.stdout.splitlines()[:2], ["status,name", "active,blog"])
++
++    def test_table_widths_and_order(self):
++        lines = self.run_cli("site", "list", "--fields=url,name").stdout.splitlines()
++        self.assertEqual(lines[1], "| url                       | name |")
++
++    def test_single_item_is_vertical(self):
++        result = self.run_cli("site", "list", "--status=archived")
++        self.assertIn("| Field  | Value                     |", result.stdout)
++        self.assertIn("| status | archived                  |", result.stdout)
++
++    def test_field_prefix_and_case_insensitive_fields(self):
++        self.assertEqual(self.run_cli("post", "get", "1", "--field=title").stdout, "Hello world!\n")
++        result = self.run_cli("post", "list", "--format=csv", "--fields=TITLE,id")
++        self.assertEqual(result.stdout.splitlines()[0], "post_title,ID")
++
++    def test_invalid_field(self):
++        result = self.run_cli("site", "list", "--fields=name,bogus")
++        self.assertEqual((result.returncode, result.stdout, result.stderr),
++                         (1, "", "Error: Invalid field: bogus.\n"))
++        self.assertEqual(self.run_cli("site", "list", "--field=nope").stderr,
++                         "Error: Invalid field: nope.\n")
++
++    def test_complex_values_serialized_as_json(self):
++        items = [{"id": 1, "tags": ["a", "b"], "meta": {"k": "v"}}, {"id": 2, "tags": [], "meta": {}}]
++        table = format_items(items, ["id", "tags", "meta"])
++        self.assertIn('| 1  | ["a", "b"] | {"k": "v"} |', table)
++        csv_text = format_items(items, ["tags"], "csv")
++        self.assertEqual(csv_text, 'tags\n"[""a"", ""b""]"\n[]')
++
++    def test_resolve_field(self):
++        self.assertEqual(resolve_field("id", ["ID", "post_title"]), "ID")
++        self.assertEqual(resolve_field("Title", ["ID", "post_title"], prefix="post"), "post_title")
++        self.assertEqual(select_fields("b, a", ["a"], ["a", "b"]), ["b", "a"])
++        with self.assertRaises(AppctlError):
++            resolve_field("x", ["a"])
++
++
++class ColorTest(CliTestCase):
++    def test_piped_output_is_plain(self):
++        result = self.run_cli("site", "create", "Bad")
++        self.assertTrue(result.stderr.startswith("Error: Invalid site name"))
++
++    def test_forced_color(self):
++        result = self.run_cli("--color", "site", "create", "Bad")
++        self.assertTrue(result.stderr.startswith("\033[1;31mError:\033[0m Invalid site name"))
++        result = self.run_cli("--color", "db", "drop", "--yes")
++        self.assertEqual(result.stdout, "\033[1;32mSuccess:\033[0m Database 'appctl' dropped.\n")
++
++    def test_no_color_and_config(self):
++        os.makedirs(os.path.join(self.tmp.name, "config"))
++        with open(os.path.join(self.tmp.name, "config", "config.yml"), "w") as handle:
++            handle.write("color: true\n")
++        self.assertIn("\033[", self.run_cli("site", "create", "Bad").stderr)
++        self.assertEqual(self.run_cli("--no-color", "site", "create", "Bad").stderr[:6], "Error:")
++
++    def test_distinct_prefix_colors(self):
++        out = io.StringIO()
++        output = Output(stdout=out, stderr=out, color=True, debug=True)
++        output.error("e")
++        output.warning("w")
++        output.success("s")
++        output.debug("d")
++        codes = re.findall(r"(\033\[[0-9;]+m)(Error|Warning|Success|Debug):", out.getvalue())
++        self.assertEqual([c[1] for c in codes], ["Error", "Warning", "Success", "Debug"])
++        self.assertEqual(len({c[0] for c in codes}), 4)
++
++    def test_multi_line_error_box(self):
++        err = io.StringIO()
++        Output(stderr=err, color=False).error_multi_line(["one", "two three"])
++        self.assertEqual(err.getvalue(), (
++            "+------------------+\n"
++            "| Error: one       |\n"
++            "|        two three |\n"
++            "+------------------+\n"))
++
++
++class MessageTest(CliTestCase):
++    def test_debug_output(self):
++        result = self.run_cli("--debug", "site", "list", "--format=count")
++        self.assertRegex(result.stderr, r"Debug: Running command: site list \(\d+\.\d{3}s\)\n")
++        self.assertIn("Debug (bootstrap):", result.stderr)
++        self.assertEqual(result.stdout, "3\n")
++        self.assertIn("Debug: Running command: site list", self.read_log())
++
++    def test_debug_group(self):
++        result = self.run_cli("--debug=bootstrap", "site", "list", "--format=count")
++        lines = result.stderr.splitlines()
++        self.assertTrue(lines)
++        self.assertTrue(all(line.startswith("Debug (bootstrap): ") for line in lines))
++        self.assertEqual(self.run_cli("--debug=nothing", "site", "list").stderr, "")
++
++    def test_quiet(self):
++        result = self.run_cli("--quiet", "plugin", "activate", "akismet")
++        self.assertEqual((result.returncode, result.stdout), (0, ""))
++
++    def test_log_file(self):
++        self.run_cli("plugin", "activate", "akismet", "nope")
++        self.run_cli("db", "drop", "--yes")
++        log = self.read_log()
++        delimiters = [line for line in log.splitlines() if re.fullmatch(r"-{20,}", line)]
++        self.assertEqual(len(delimiters), 2)
++        for line in log.splitlines():
++            if line not in delimiters:
++                self.assertRegex(line, "^" + TIMESTAMP + " ")
++        self.assertIn("Command: appctl plugin activate akismet nope", log)
++        self.assertIn("] Plugin 'akismet' activated.\n", log)
++        self.assertIn("] Warning: The 'nope' plugin could not be found.\n", log)
++        self.assertIn("] Error: Only activated 1 of 2 plugins.\n", log)
++        self.assertNotIn("Success", log)
++
++    def test_completion_is_not_logged(self):
++        result = self.run_cli("cli", "completions", "--line=appctl site cr", "--point=100")
++        self.assertEqual(result.stdout, "create \n")
++        self.assertFalse(os.path.exists(self.log_path))
++
++    def test_sensitive_material_not_logged(self):
++        result = self.run_cli("option", "add", "k", "--format=json", input="{secret-token\n")
++        self.assertEqual((result.returncode, result.stderr),
++                         (1, "Error: Invalid JSON: {secret-token\n"))
++        self.run_cli("user", "create", "bob", "bob@example.test", "--user_pass=hunter2")
++        log = self.read_log()
++        self.assertNotIn("secret-token", log)
++        self.assertNotIn("hunter2", log)
++
++    def test_sensitive_info(self):
++        out = io.StringIO()
++        logger = FileLogger(self.log_path)
++        Output(stdout=out, logger=logger).log("Password: hunter2", sensitive=True)
++        Output(stdout=out, logger=logger, quiet=True).log("quiet hunter2", sensitive=True)
++        Output(stderr=out, logger=logger).error("bad hunter2", sensitive=True)
++        self.assertEqual(out.getvalue(), "Password: hunter2\nError: bad hunter2\n")
++        self.assertFalse(os.path.exists(self.log_path))
++
++    def test_redact_argv(self):
++        self.assertEqual(redact_argv(["x", "--dbpass=s", "--name=n", "--", "--token=t"]),
++                         ["x", "--dbpass=[REDACTED]", "--name=n", "--", "--token=t"])
++
++
++class InteractionTest(CliTestCase):
++    def test_confirmation_cancelled(self):
++        for answer in ("n\n", "yes\n", "\n", ""):
++            result = self.run_cli("db", "drop", input=answer)
++            self.assertEqual(result.stdout, "Are you sure you want to drop the 'appctl' database? [y/n] ")
++            self.assertEqual(result.stderr, "Warning: Operation cancelled.\n")
++
++    def test_confirmation_accepted(self):
++        result = self.run_cli("site", "delete", "main", input="  Y \n")
++        self.assertTrue(result.stdout.endswith("Success: The site 'main' was deleted.\n"))
++        result = self.run_cli("db", "reset", "--yes", input="n\n")
++        self.assertEqual(result.stdout, "Success: Database 'appctl' reset.\n")
++
++    def test_prompt_normalizes(self):
++        out = io.StringIO()
++        output = Output(stdout=out, stdin=io.StringIO("  MiXeD Case \nnext\n"))
++        self.assertEqual(output.prompt("Q? "), "mixed case")
++        self.assertEqual(out.getvalue(), "Q? ")
++
++    def test_positional_from_stdin(self):
++        result = self.run_cli("site", "create", input="fresh\n")
++        self.assertIn("Site 'fresh' created", result.stdout)
++        result = self.run_cli("option", "add", "k", "--format=json", input='{"a": 1}')
++        self.assertEqual((result.returncode, result.stdout),
++                         (0, "Success: Added 'k' option (autoload: yes).\n"))
++
++    def test_missing_positional_without_stdin(self):
++        result = self.run_cli("site", "create")
++        self.assertEqual(result.returncode, 1)
++        self.assertTrue(result.stdout.startswith("usage: appctl site create"))
++
++
++if __name__ == "__main__":
++    unittest.main()
+

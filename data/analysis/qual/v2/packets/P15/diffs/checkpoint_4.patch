@@ -1,0 +1,1707 @@
+### mtl.py (modified)
+--- mtl.py
++++ mtl.py
+@@ -3,6 +3,7 @@
+ 
+     python mtl.py --input <path-or-glob> [--input <path-or-glob> ...]
+                   --dsl <path-or-> [--out <path-or-stdout>]
++    python mtl.py --dsl <path-or-> --ingest-config <path> [--out <path-or-stdout>]
+                   [--tz <IANA>] [--timestamp-format <str>] [--strict]
+                   [--param key=value ...] [--recursive]
+                   [--format <csv|tsv|parquet|auto>] [--nulls "<markers>"]
+@@ -15,9 +16,9 @@
+ 
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ 
+-from mtl_core import declarations, engine, inputs, output, sources  # noqa: E402
++from mtl_core import declarations, engine, ingest, inputs, joins, output, sources  # noqa: E402
+ from mtl_core.dsl_parser import parse_program  # noqa: E402
+-from mtl_core.errors import DslError, InputError, MtlError, report  # noqa: E402
++from mtl_core.errors import ConfigError, DslError, InputError, MtlError, report  # noqa: E402
+ from mtl_core.quality import BadRecordLog  # noqa: E402
+ from mtl_core.timestamps import TimestampParser  # noqa: E402
+ 
+@@ -44,6 +45,7 @@
+     parser.add_argument("--format", dest="format", default=inputs.AUTO)
+     parser.add_argument("--nulls", default=None)
+     parser.add_argument("--bad-records-out", dest="bad_records_out", default=None)
++    parser.add_argument("--ingest-config", dest="ingest_config", default=None)
+     args = parser.parse_args(argv)
+     args.format = args.format.strip().lower()
+     if args.format not in inputs.FORMATS:
+@@ -51,8 +53,6 @@
+                          % ", ".join(inputs.FORMATS))
+     args.specs = ([(p, None) for group in args.inputs for p in group]
+                   + [(p, inputs.CSV) for group in args.csv_inputs for p in group])
+-    if not args.specs:
+-        raise InputError("invalid arguments: --input is required")
+     pairs = [pair for group in args.params for pair in group]
+     args.params = declarations.parse_cli_params(pairs)
+     if args.params is None:
+@@ -91,16 +91,49 @@
+ def run(argv):
+     args = _parse_args(argv)
+     dsl_text = _read_dsl(args.dsl)
++    if args.ingest_config is not None:
++        return _run_ingest(args, dsl_text)
++    if not args.specs:
++        if _binds_sources(dsl_text):
++            raise ConfigError("--ingest-config is required for a pipeline with sources { }")
++        raise InputError("invalid arguments: --input is required")
+     tables = sources.load(inputs.resolve(args.specs, args.recursive, args.format))
+     ts_parser = TimestampParser(args.tz, args.timestamp_format)
+     nulls = sources.parse_null_markers(args.nulls)
+     program = parse_program(dsl_text)
++    if program.sources is not None:
++        raise ConfigError("--ingest-config is required for a pipeline with sources { }")
+     schema = declarations.resolve_schema(program)
+     params = declarations.bind_params(program, args.params, ts_parser)
+     dataset = sources.build_dataset(tables, ts_parser, nulls,
+                                     schema.physical if schema is not None else None)
+     bad_records = BadRecordLog(args.strict)
+     try:
++        result = engine.execute(program, dataset, schema, params, ts_parser, bad_records)
++    finally:
++        bad_records.write(args.bad_records_out)
++    _write(args.out, output.render(result))
++
++
++def _binds_sources(dsl_text):
++    try:
++        return parse_program(dsl_text).sources is not None
++    except MtlError:
++        return False
++
++
++def _run_ingest(args, dsl_text):
++    """Multi-source run: sources and their files come from the ingest config."""
++    program = parse_program(dsl_text)
++    ts_parser = TimestampParser(args.tz, args.timestamp_format)
++    nulls = sources.parse_null_markers(args.nulls)
++    defaults = ingest.Defaults(args.tz, args.timestamp_format, nulls, args.format, args.recursive)
++    specs = ingest.load_config(args.ingest_config, defaults)
++    declarations.resolve_schema(program)
++    params = declarations.bind_params(program, args.params, ts_parser)
++    bad_records = BadRecordLog(args.strict)
++    try:
++        dataset, schema = joins.prepare(program, specs, params, ts_parser, bad_records)
+         result = engine.execute(program, dataset, schema, params, ts_parser, bad_records)
+     finally:
+         bad_records.write(args.bad_records_out)
+
+### mtl_core/declarations.py (modified)
+--- mtl_core/declarations.py
++++ mtl_core/declarations.py
+@@ -30,10 +30,14 @@
+     """Resolve the schema named by the pipeline's `using`; None for bare programs."""
+     if program.schema_name is None:
+         return None
+-    schemas = program.schemas
++    return resolve_named_schema(program.schemas, program.schema_name)
++
++
++def resolve_named_schema(schemas, schema_name):
++    """Resolve schema `schema_name` (with its inheritance chain) from `schemas`."""
+     chain = []
+     seen = set()
+-    name = program.schema_name
++    name = schema_name
+     while name is not None:
+         if name in seen:
+             raise DslError("circular schema inheritance involving %r" % name)
+@@ -63,7 +67,7 @@
+             fields[field.name] = field
+ 
+     physical = OrderedDict((f.name, f.type) for f in fields.values() if f.expression is None)
+-    return ResolvedSchema(program.schema_name, fields, physical, _calc_order(fields))
++    return ResolvedSchema(schema_name, fields, physical, _calc_order(fields))
+ 
+ 
+ def _check_all_cycles(schemas):
+
+### mtl_core/dsl_parser.py (modified)
+--- mtl_core/dsl_parser.py
++++ mtl_core/dsl_parser.py
+@@ -10,7 +10,7 @@
+ import re
+ 
+ from . import program as P
+-from .errors import DslError
++from .errors import DslError, TypeCheckError
+ 
+ _TRANSFORM_ARITY = {
+     "len": (1, 1), "day": (1, 1), "month": (1, 1), "year": (1, 1), "round": (1, 2),
+@@ -22,6 +22,10 @@
+ AGGREGATE_FUNCTIONS = ("average", "median", "sum", "count", "std", "var", "min", "max")
+ _RESERVED_OUTPUT = ("window_start", "window_end")
+ _STAGES = (P.STAGE_PRE, P.STAGE_POST)
++JOIN_TYPES = ("inner", "left", "right", "full")
++_JOIN_CLAUSES = ("on", "within", "type", "project")
++_DURATION_UNITS = ("s", "m", "h", "d")
++WORKING_RELATION = "_"
+ 
+ _TOKEN_RE = re.compile(r"""
+     (?P<ws>\s+)
+@@ -29,7 +33,7 @@
+   | (?P<int>\d+)
+   | (?P<string>'[^'\n]*'|"[^"\n]*")
+   | (?P<ident>[A-Za-z_][A-Za-z0-9_]*)
+-  | (?P<op><=|>=|==|!=|[<>!&|()\[\],*+\-/%=:@])
++  | (?P<op><=|>=|==|!=|[<>!&|()\[\],*+\-/%=:@.])
+ """, re.VERBOSE)
+ 
+ 
+@@ -225,10 +229,119 @@
+     def pipeline_header(self):
+         self.expect_word("pipeline")
+         name = self.expect_ident("a pipeline name")
+-        self.expect_word("using")
+-        schema = self.expect_ident("a schema name")
++        schema = None
++        if not self.is_op("{") and self.peek().kind != "eof":
++            self.expect_word("using")
++            schema = self.expect_ident("a schema name")
+         self.expect_end()
+         return name, schema
++
++    # -- multi-source constructs ---------------------------------------
++    def source_bindings(self):
++        """name [as alias] {, name [as alias]}  (a trailing comma is allowed)"""
++        bindings = []
++        while self.peek().kind != "eof":
++            name = self.expect_ident("a source name")
++            alias = name
++            if self.is_word("as"):
++                self.advance()
++                alias = self.expect_ident("a source alias")
++            if alias == WORKING_RELATION:
++                self.fail("%r is reserved for the working relation" % WORKING_RELATION)
++            bindings.append(P.SourceBinding(name, alias))
++            if not self.is_op(","):
++                break
++            self.advance()
++        self.expect_end()
++        return bindings
++
++    def with_header(self):
++        self.expect_word("with")
++        alias = self.expect_ident("a source alias")
++        self.expect_end()
++        return alias
++
++    def join_header(self):
++        """join <left> with <right> on (<expr>) [within <duration>] [type <kind>] project"""
++        self.expect_word("join")
++        left = self.join_operand()
++        self.expect_word("with")
++        right = self.join_operand()
++        on = within = kind = None
++        while not self.is_word("project"):
++            tok = self.peek()
++            if tok.kind == "eof":
++                raise DslError("line %d: join requires a project { ... } clause" % self.line)
++            if self.is_word("on") and on is None:
++                self.advance()
++                on = self.expression()
++            elif self.is_word("within") and within is None:
++                self.advance()
++                within = self.duration()
++            elif self.is_word("type") and kind is None:
++                self.advance()
++                tok = self.peek()
++                kind = self.expect_ident("a join type")
++                if kind not in JOIN_TYPES:
++                    self.fail("unknown join type %r (expected inner, left, right or full)"
++                              % kind, tok)
++            else:
++                self.fail("expected on, within, type or project in join")
++        self.advance()
++        self.expect_end()
++        if on is None:
++            raise DslError("line %d: join requires an on (...) predicate" % self.line)
++        return left, right, on, within, kind or "inner"
++
++    def join_operand(self):
++        return self.expect_ident("a source alias, join alias or _")
++
++    def duration(self):
++        if self.is_word("param") and self.peek(1).kind == "op" and self.peek(1).text == "(":
++            self.advance()
++            return P.Duration(None, None, self.param_ref().name)
++        tok = self.peek()
++        if tok.kind != "int":
++            self.fail("expected a duration such as 10m")
++        self.advance()
++        amount = int(tok.text)
++        unit_tok = self.peek()
++        unit = self.expect_ident("a duration unit (s, m, h or d)")
++        if unit not in _DURATION_UNITS:
++            self.fail("unknown duration unit %r" % unit, unit_tok)
++        if unit_tok.pos != tok.pos + len(tok.text):
++            self.fail("expected a duration such as 10m", unit_tok)
++        return P.Duration(amount, unit, None)
++
++    def project_items(self):
++        """<expr> [as <name>] {, ...}; a bare column reference keeps its column name."""
++        items = []
++        while self.peek().kind != "eof":
++            start = self.peek()
++            expr = self.expression()
++            if self.is_word("as"):
++                self.advance()
++                tok = self.peek()
++                if tok.kind == "string" and len(tok.text) > 2:
++                    name = self.advance().text[1:-1]
++                else:
++                    name = self.expect_ident("a projected column name")
++            elif isinstance(expr, P.ColumnRef):
++                name = expr.name.rsplit(".", 1)[-1]
++            else:
++                self.fail("project entries need 'as <name>'", start)
++            items.append(P.ProjectItem(expr, name))
++            if not self.is_op(","):
++                break
++            self.advance()
++        self.expect_end()
++        return items
++
++    def join_alias(self):
++        self.expect_word("as")
++        alias = self.expect_ident("a join alias")
++        self.expect_end()
++        return alias
+ 
+     def field_list(self):
+         """name: type [= expr] {, name: type [= expr]}"""
+@@ -516,6 +629,9 @@
+             if tok.text in ("in", "as"):
+                 self.fail("unexpected keyword")
+             self.advance()
++            if self.is_op(".") and self.peek(1).kind == "ident":
++                self.advance()
++                return P.ColumnRef("%s.%s" % (tok.text, self.advance().text))
+             if self.is_op("("):
+                 if tok.text == "param":
+                     return self.param_ref()
+@@ -670,18 +786,55 @@
+             raise DslError("line %d: expected a schema or pipeline block" % line)
+     if pipeline is None:
+         raise DslError("DSL has no pipeline block")
+-    line, name, schema_name, body, params = pipeline
+-    if schema_name not in schemas:
++    line, name, schema_name, body, params, sources, scoped, joins = pipeline
++    if schema_name is None:
++        if sources is None:
++            raise DslError("line %d: pipeline requires 'using <schema>'" % line)
++    elif schema_name not in schemas:
+         raise DslError("line %d: pipeline uses unknown schema %r" % (line, schema_name))
++    _check_sources(sources, scoped, joins)
+     return _build_program(body, params=params, schemas=schemas,
+-                          schema_name=schema_name, name=name)
++                          schema_name=schema_name, name=name, sources=sources,
++                          scoped=scoped, joins=joins)
+ 
+ 
+ def _pipeline_body(cursor):
+     body = []
+     params = None
+-    for line, stmt in cursor.block("pipeline"):
+-        if _first_word(stmt) == "params" and stmt.strip() == "params":
++    sources = None
++    scoped = []
++    joins = []
++    started = False
++    while True:
++        line, stmt = cursor.next("'}' closing pipeline block")
++        if stmt == "}":
++            break
++        if stmt == "{":
++            raise DslError("line %d: unexpected '{' in pipeline block" % line)
++        word = _first_word(stmt)
++        if word == "sources" and stmt.strip() == "sources":
++            if sources is not None:
++                raise DslError("line %d: sources block may appear at most once" % line)
++            if started:
++                raise DslError("line %d: sources block must precede all other statements"
++                               % line)
++            cursor.expect_open("sources")
++            sources = []
++            for bline, bstmt in cursor.block("sources"):
++                sources.extend(_StatementParser(bstmt, bline).source_bindings())
++            if not sources:
++                raise DslError("line %d: sources block binds no source" % line)
++            started = True
++            continue
++        if word == "with":
++            scoped.append(_scoped_block(cursor, line, stmt))
++            started = True
++            continue
++        if word == "join":
++            joins.append(_join(cursor, line, stmt))
++            started = True
++            continue
++        if word == "params" and stmt.strip() == "params":
+             if params is not None:
+                 raise DslError("line %d: params block may appear at most once" % line)
+             cursor.expect_open("params")
+@@ -696,7 +849,91 @@
+                     params.append(decl)
+         else:
+             body.append((line, stmt))
+-    return body, tuple(params or ())
++            started = True
++    return body, tuple(params or ()), sources, scoped, joins
++
++
++def _scoped_block(cursor, line, stmt):
++    alias = _StatementParser(stmt, line).with_header()
++    cursor.expect_open("with")
++    steps = []
++    for sline, sstmt in cursor.block("with"):
++        node = _StatementParser(sstmt, sline).statement()
++        if isinstance(node, (P.GroupBy, P.Window, P.Aggregate)):
++            raise DslError("line %d: with %s { } accepts only pre-stage calcs and filters"
++                           % (sline, alias))
++        if isinstance(node, P.Calc) and node.stage != P.STAGE_PRE:
++            raise TypeCheckError("line %d: calc %r: @stage(%s) is not allowed inside with %s { }"
++                                 % (sline, node.name, node.stage, alias))
++        steps.append(node)
++    return P.ScopedBlock(alias, tuple(steps), line)
++
++
++def _join(cursor, line, stmt):
++    parts = [stmt]
++    while not re.search(r"\bproject\s*$", parts[-1]) and not cursor.done():
++        nstmt = cursor.statements[cursor.i][1]
++        if _first_word(nstmt) not in _JOIN_CLAUSES:
++            break
++        cursor.i += 1
++        parts.append(nstmt)
++    header = " ".join(parts)
++    left, right, on, within, kind = _StatementParser(header, line).join_header()
++    if cursor.done() or cursor.statements[cursor.i][1] != "{":
++        raise DslError("line %d: expected '{' after project" % line)
++    cursor.i += 1
++    items = []
++    for pline, pstmt in cursor.block("project"):
++        items.extend(_StatementParser(pstmt, pline).project_items())
++    if not items:
++        raise DslError("line %d: project { } must define at least one column" % line)
++    names = [item.name for item in items]
++    for name in names:
++        if names.count(name) > 1:
++            raise DslError("line %d: column %r appears more than once in project; "
++                           "disambiguate it with 'as'" % (line, name))
++    alias = None
++    if not cursor.done() and _first_word(cursor.statements[cursor.i][1]) == "as":
++        aline, astmt = cursor.next("a join alias")
++        alias = _StatementParser(astmt, aline).join_alias()
++    return P.Join(left, right, on, within, kind, tuple(items), alias, line)
++
++
++def _check_sources(sources, scoped, joins):
++    if sources is None:
++        if joins:
++            raise DslError("line %d: join requires a sources { } block" % joins[0].line)
++        if scoped:
++            raise DslError("line %d: with blocks require a sources { } block" % scoped[0].line)
++        return
++    aliases = set()
++    for binding in sources:
++        if binding.alias in aliases:
++            raise DslError("source alias %r is bound more than once" % binding.alias)
++        aliases.add(binding.alias)
++    if not joins:
++        raise DslError("pipeline declares sources but no join combines them")
++    for block in scoped:
++        if block.alias not in aliases:
++            raise DslError("line %d: with refers to unknown source alias %r"
++                           % (block.line, block.alias))
++    known = set(aliases)
++    for index, join in enumerate(joins):
++        for operand in (join.left, join.right):
++            if operand == WORKING_RELATION:
++                if index == 0:
++                    raise DslError("line %d: '_' refers to the previous join, but this is the "
++                                   "first join" % join.line)
++            elif operand not in known:
++                raise DslError("line %d: join refers to unknown alias %r" % (join.line, operand))
++        if join.left == join.right:
++            raise DslError("line %d: cannot join %r with itself; bind the source twice under "
++                           "different aliases" % (join.line, join.left))
++        if join.alias is not None:
++            if join.alias in known or join.alias == WORKING_RELATION:
++                raise DslError("line %d: join alias %r is already in use"
++                               % (join.line, join.alias))
++            known.add(join.alias)
+ 
+ 
+ def _check_calc_names(calcs):
+
+### mtl_core/errors.py (modified)
+--- mtl_core/errors.py
++++ mtl_core/errors.py
+@@ -40,6 +40,13 @@
+     _code = 4
+ 
+ 
++class ConfigError(MtlError):
++    """The ingest configuration is malformed or inconsistent with the DSL."""
++
++    _label = "config_error"
++    _code = 5
++
++
+ def report(error, stream):
+     """Write the one-line diagnostic for `error` and return its exit code."""
+     message = " ".join(str(error).split()) or error.__class__.__name__
+
+### mtl_core/expressions.py (modified)
+--- mtl_core/expressions.py
++++ mtl_core/expressions.py
+@@ -105,6 +105,17 @@
+     if declared == T.FLOAT and compiled.type == T.INT:
+         return _null_safe(ev, float)
+     return ev
++
++
++def cast_value(value, source, target, ts_parser=None):
++    """Convert a non-null `source`-typed value to `target` the way cast() does.
++
++    Raises TypeCheckError if the cast is not allowed and ExecutionError (or
++    ValueError) if this value cannot be converted.
++    """
++    if target not in _CASTS.get(source, ()):
++        raise TypeCheckError("cannot cast %s to %s" % (T.type_name(source), T.type_name(target)))
++    return _caster(source, target, ts_parser)(value)
+ 
+ 
+ def _finite(value):
+
+### mtl_core/ingest.py (created)
+--- mtl_core/ingest.py
++++ mtl_core/ingest.py
+@@ -0,0 +1,645 @@
++"""Declarative multi-source ingestion.
++
++Secret: the ingest-config document (YAML or JSON) and its validation, how
++source patterns are expanded and files assigned to sources by precedence,
++and how each source's mapping (drop, rename, cast, defaults), schema
++conversion, required-field checks and schema calcs turn raw file rows into
++typed rows.
++"""
++
++import glob
++import json
++import math
++import os
++import re
++from collections import OrderedDict, namedtuple
++from datetime import date, datetime
++
++from . import inputs
++from . import quality as Q
++from . import sources as S
++from . import valuetypes as T
++from .declarations import resolve_named_schema
++from .dsl_parser import TYPE_NAMES
++from .errors import ConfigError, ExecutionError, InputError, MtlError, TypeCheckError
++from .expressions import cast_value, coerce, compile_expression, is_assignable
++from .timestamps import TimestampParser
++
++_SOURCE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
++_MAPPING_KEYS = ("drop", "rename", "cast", "defaults")
++
++Defaults = namedtuple("Defaults", "tz timestamp_format nulls format recursive")
++
++SourceSpec = namedtuple("SourceSpec", "name patterns recursive format schema precedence "
++                                      "ts_parser nulls drop rename cast defaults required "
++                                      "base_dir")
++# patterns: path-or-glob strings; drop: tuple; rename/cast/defaults: OrderedDict;
++# defaults values are typed raw values (see _typed); required: tuple
++
++
++# ---------------------------------------------------------------------------
++# The configuration document
++
++
++def load_config(path, defaults):
++    """Read and validate the ingest config; returns SourceSpecs in config order."""
++    try:
++        with open(path, "rb") as handle:
++            data = handle.read()
++    except OSError as exc:
++        raise InputError("cannot read ingest config %r: %s" % (path, exc.strerror or exc))
++    try:
++        text = data.decode("utf-8-sig")
++    except UnicodeDecodeError:
++        raise ConfigError("ingest config %r is not valid UTF-8" % path)
++    document = _parse_document(text, path)
++    if isinstance(document, dict):
++        if "sources" not in document:
++            raise ConfigError("ingest config has no 'sources' list")
++        entries = document["sources"]
++    else:
++        entries = document
++    if not isinstance(entries, list) or not entries:
++        raise ConfigError("ingest config 'sources' must be a non-empty list")
++    base_dir = os.path.dirname(os.path.abspath(path))
++    specs = []
++    names = set()
++    for index, entry in enumerate(entries):
++        spec = _parse_source(index, entry, defaults, base_dir)
++        if spec.name in names:
++            raise ConfigError("source name %r is defined more than once" % spec.name)
++        names.add(spec.name)
++        specs.append(spec)
++    return specs
++
++
++def _parse_document(text, path):
++    if path.lower().endswith(".json"):
++        try:
++            return json.loads(text)
++        except ValueError as exc:
++            raise ConfigError("malformed JSON ingest config: %s" % exc)
++    try:
++        import yaml
++    except ImportError:  # pragma: no cover - PyYAML is a declared dependency
++        try:
++            return json.loads(text)
++        except ValueError as exc:
++            raise ConfigError("malformed ingest config (PyYAML unavailable): %s" % exc)
++    try:
++        return yaml.safe_load(text)
++    except yaml.YAMLError as exc:
++        raise ConfigError("malformed YAML ingest config: %s" % " ".join(str(exc).split()))
++
++
++def _parse_source(index, entry, defaults, base_dir):
++    if not isinstance(entry, dict):
++        raise ConfigError("sources[%d] must be a mapping" % index)
++    name = entry.get("name")
++    if not isinstance(name, str) or not _SOURCE_NAME.match(name):
++        raise ConfigError("sources[%d].name must be an identifier" % index)
++    where = "source %r" % name
++
++    patterns = entry.get("inputs")
++    if isinstance(patterns, str):
++        patterns = [patterns]
++    if (not isinstance(patterns, list) or not patterns
++            or not all(isinstance(p, str) and p.strip() for p in patterns)):
++        raise ConfigError("%s: 'inputs' must be a non-empty list of paths or globs" % where)
++
++    recursive = entry.get("recursive", defaults.recursive)
++    if recursive is None:
++        recursive = defaults.recursive
++    if not isinstance(recursive, bool):
++        raise ConfigError("%s: 'recursive' must be true or false" % where)
++
++    fmt = entry.get("format")
++    if fmt is None:
++        fmt = defaults.format
++    if not isinstance(fmt, str) or fmt.strip().lower() not in inputs.FORMATS:
++        raise ConfigError("%s: 'format' must be one of %s" % (where, ", ".join(inputs.FORMATS)))
++    fmt = fmt.strip().lower()
++
++    schema = entry.get("schema")
++    if schema is not None and (not isinstance(schema, str) or not _SOURCE_NAME.match(schema)):
++        raise ConfigError("%s: 'schema' must be a schema name" % where)
++
++    precedence = entry.get("precedence", 0)
++    if precedence is None:
++        precedence = 0
++    if isinstance(precedence, float) and precedence.is_integer():
++        precedence = int(precedence)
++    if isinstance(precedence, bool) or not isinstance(precedence, int):
++        raise ConfigError("%s: 'precedence' must be an integer" % where)
++
++    tz = entry.get("tz")
++    if tz is None:
++        tz = defaults.tz
++    ts_format = entry.get("timestamp_format", entry.get("timestamp-format"))
++    if ts_format is None:
++        ts_format = defaults.timestamp_format
++    if not isinstance(tz, str) or not tz.strip():
++        raise ConfigError("%s: 'tz' must be an IANA zone name" % where)
++    if not isinstance(ts_format, (str, type(None))):
++        raise ConfigError("%s: 'timestamp_format' must be a string" % where)
++    try:
++        ts_parser = TimestampParser(tz.strip(), ts_format)
++    except MtlError as exc:
++        raise ConfigError("%s: %s" % (where, exc))
++
++    nulls = _nulls(entry.get("nulls"), defaults.nulls, where)
++
++    mapping = entry.get("mapping")
++    if mapping is None:
++        mapping = {}
++    if not isinstance(mapping, dict):
++        raise ConfigError("%s: 'mapping' must be a mapping" % where)
++    unknown = [k for k in mapping if k not in _MAPPING_KEYS]
++    if unknown:
++        raise ConfigError("%s: unknown mapping directive %r" % (where, unknown[0]))
++    drop = tuple(_names(mapping.get("drop"), where, "mapping.drop"))
++    rename = _str_map(mapping.get("rename"), where, "mapping.rename")
++    targets = list(rename.values())
++    for target in targets:
++        if targets.count(target) > 1:
++            raise ConfigError("%s: mapping.rename maps several columns to %r" % (where, target))
++    cast = OrderedDict()
++    for column, target in _str_map(mapping.get("cast"), where, "mapping.cast").items():
++        lowered = target.strip().lower()
++        if lowered not in TYPE_NAMES:
++            raise ConfigError("%s: mapping.cast of %r to unknown type %r" % (where, column, target))
++        cast[column] = lowered
++    defaults_map = OrderedDict()
++    raw_defaults = mapping.get("defaults")
++    if raw_defaults is None:
++        raw_defaults = {}
++    if not isinstance(raw_defaults, dict):
++        raise ConfigError("%s: mapping.defaults must be a mapping" % where)
++    for column, value in raw_defaults.items():
++        if not isinstance(column, str) or not column:
++            raise ConfigError("%s: mapping.defaults keys must be column names" % where)
++        typed = _typed(value, ts_parser)
++        if typed is _INVALID:
++            raise ConfigError("%s: mapping.defaults value for %r must be a scalar"
++                              % (where, column))
++        if typed is not None:
++            defaults_map[column] = typed
++    required = tuple(_names(entry.get("required"), where, "required"))
++
++    return SourceSpec(name, tuple(p.strip() for p in patterns), recursive, fmt, schema,
++                      precedence, ts_parser, nulls, drop, rename, cast, defaults_map, required,
++                      base_dir)
++
++
++def _nulls(value, fallback, where):
++    if value is None:
++        return fallback
++    if isinstance(value, str):
++        return frozenset(m.strip() for m in value.split(",") if m.strip() != "")
++    if not isinstance(value, list):
++        raise ConfigError("%s: 'nulls' must be a list of strings" % where)
++    markers = set()
++    for marker in value:
++        if marker is None:  # an unquoted YAML null / ~
++            markers.update(("null", "NULL", "Null", "~"))
++        elif isinstance(marker, bool):
++            markers.add("true" if marker else "false")
++        elif isinstance(marker, (str, int, float)):
++            markers.add(str(marker).strip())
++        else:
++            raise ConfigError("%s: 'nulls' must be a list of strings" % where)
++    # "" is always null, as for --nulls; keep it out of the stripped marker set.
++    return frozenset(m for m in markers if m != "")
++
++
++def _names(value, where, what):
++    if value is None:
++        return []
++    if isinstance(value, str):
++        value = [value]
++    if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
++        raise ConfigError("%s: %s must be a list of column names" % (where, what))
++    return value
++
++
++def _str_map(value, where, what):
++    if value is None:
++        return OrderedDict()
++    if not isinstance(value, dict):
++        raise ConfigError("%s: %s must be a mapping" % (where, what))
++    result = OrderedDict()
++    for key, target in value.items():
++        if not isinstance(key, str) or not key or not isinstance(target, str) or not target:
++            raise ConfigError("%s: %s must map column names to names" % (where, what))
++        result[key] = target
++    return result
++
++
++_INVALID = object()
++
++
++def _typed(value, ts_parser):
++    """A config scalar as a raw value (see _Raw), None for null, _INVALID otherwise."""
++    if value is None:
++        return None
++    if isinstance(value, bool):
++        return ("v", T.BOOL, value)
++    if isinstance(value, int):
++        return ("v", T.INT, value)
++    if isinstance(value, float):
++        if not math.isfinite(value):
++            return _INVALID
++        return ("v", T.FLOAT, value)
++    if isinstance(value, str):
++        return ("t", value)
++    if isinstance(value, datetime):
++        return ("v", T.TIMESTAMP, ts_parser.localize(value))
++    if isinstance(value, date):
++        return ("v", T.TIMESTAMP, ts_parser.localize(datetime(value.year, value.month,
++                                                              value.day)))
++    return _INVALID
++
++
++# ---------------------------------------------------------------------------
++# File assignment
++
++
++def assign_files(specs):
++    """name -> files of that source (sorted by absolute path).
++
++    A file matched by several sources goes to the one with the lowest
++    precedence; equal lowest precedence is a configuration error.
++    """
++    matches = OrderedDict()   # realpath -> {source name: InputFile}
++    for spec in specs:
++        for pattern in spec.patterns:
++            for key, entry in _expand(spec, pattern).items():
++                matches.setdefault(key, OrderedDict()).setdefault(spec.name, entry)
++    by_name = {spec.name: spec for spec in specs}
++    assigned = OrderedDict((spec.name, []) for spec in specs)
++    for key, claims in matches.items():
++        best = min(by_name[n].precedence for n in claims)
++        winners = [n for n in claims if by_name[n].precedence == best]
++        if len(winners) > 1:
++            raise ConfigError("file %r matches sources %s with equal precedence %d"
++                              % (claims[winners[0]].path, ", ".join(repr(w) for w in winners),
++                                 best))
++        assigned[winners[0]].append(claims[winners[0]])
++    for name in assigned:
++        assigned[name].sort(key=lambda f: os.path.abspath(f.path))
++    return assigned
++
++
++def _expand(spec, pattern):
++    """Files of one pattern; relative patterns are tried against the working
++    directory first, then against the directory of the config file."""
++    pattern = os.path.expanduser(pattern)
++    candidates = [pattern]
++    if not os.path.isabs(pattern):
++        anchored = os.path.join(spec.base_dir, pattern)
++        if os.path.abspath(pattern) != os.path.normpath(anchored):
++            candidates.append(anchored)
++    for candidate in candidates:
++        if os.path.exists(candidate) or glob.has_magic(candidate):
++            found = inputs.expand(candidate, spec.format, spec.recursive)
++            if found:
++                return found
++    if not glob.has_magic(pattern) and not any(os.path.exists(c) for c in candidates):
++        raise InputError("source %r: input %r does not exist" % (spec.name, pattern))
++    return {}
++
++
++# ---------------------------------------------------------------------------
++# Typed rows of one source
++#
++# Raw values flowing through the mapping are tuples:
++#   ("t", text)            a CSV/TSV cell
++#   ("p", kind, value)     a Parquet value of logical `kind`
++#   ("v", type, value)     an already typed value (after cast or from a default)
++
++
++class SourceReader:
++    """Static column types and (lazily) the typed rows of one configured source."""
++
++    def __init__(self, spec, schemas, fallback_schema, files):
++        self.spec = spec
++        self.files = files
++        self._rows = None
++        self._mapped = None
++        self.defaults = spec.defaults
++        schema_name = spec.schema or fallback_schema
++        if spec.schema is not None and spec.schema not in schemas:
++            raise ConfigError("source %r uses schema %r, which the DSL does not define"
++                              % (spec.name, spec.schema))
++        self.schema = None if schema_name is None else resolve_named_schema(schemas,
++                                                                            schema_name)
++        if self.schema is not None:
++            self.physical = OrderedDict(self.schema.physical)
++            self._check_defaults()
++            fields = self.schema.fields
++            for name in spec.required:
++                if name not in fields:
++                    raise ConfigError("source %r: required field %r is not in schema %r"
++                                      % (spec.name, name, self.schema.name))
++            self.columns = OrderedDict((n, f.type) for n, f in fields.items())
++            self._calcs = self._compile_calcs()
++        else:
++            self.physical = None      # inferred from the data on first use
++            self.columns = None
++            self._calcs = []
++
++    # -- static -----------------------------------------------------------
++    def _check_defaults(self):
++        """Convert defaults of schema fields to the field types up front."""
++        self.defaults = OrderedDict()
++        for column, raw in self.spec.defaults.items():
++            col_type = self.physical.get(column)
++            if col_type is not None:
++                if col_type == T.STRING and raw[0] == "v" and raw[1] != T.TIMESTAMP:
++                    raw = ("t", _text_of(raw))
++                try:
++                    raw = ("v", col_type, _convert(raw, col_type, self._converter(column)))
++                except S._CellError:
++                    raise ConfigError("source %r: default for %r is not a valid %s"
++                                      % (self.spec.name, column, col_type))
++            self.defaults[column] = raw
++
++    def _compile_calcs(self):
++        names = _Types(self.physical)
++        compiled = []
++        for field in self.schema.calcs:
++            result = compile_expression(field.expression, names, ts_parser=self.spec.ts_parser)
++            if not is_assignable(field.type, result.type):
++                raise TypeCheckError("schema field %r is declared %s but its expression is %s"
++                                     % (field.name, field.type, result.type))
++            names.define(field.name, field.type)
++            compiled.append((field.name, coerce(field.type, result)))
++        return compiled
++
++    def _converter(self, column):
++        return S._Converter(self.physical[column], self.spec.nulls, self.spec.ts_parser)
++
++    def ensure_columns(self):
++        """Column types; schema-less sources infer them from their files."""
++        if self.columns is None:
++            self._load()
++        return self.columns
++
++    # -- rows -------------------------------------------------------------
++    def rows(self, log):
++        """List of (provenance, values) of the rows that survived validation."""
++        if self._rows is None:
++            mapped = self._load()
++            self._rows = self._convert_rows(mapped, log)
++        return self._rows
++
++    def _load(self):
++        if self._mapped is None:
++            mapped = []
++            for entry in self.files:
++                mapped.extend(self._read(entry))
++            self._mapped = mapped
++            if self.physical is None:
++                self._infer(mapped)
++        return self._mapped
++
++    def _read(self, entry):
++        table = S.read_file(entry)
++        if table.kind == "parquet":
++            table.load(set(table.columns), self.spec.ts_parser)
++            columns = [(n,) + table.data[n] for n in table.columns if n in table.data]
++            for index in range(table.nrows):
++                prov = Q.Provenance(table.path, None, index + 1)
++                raw = OrderedDict((n, ("p", kind, values[index])) for n, kind, values in columns)
++                yield self._map(prov, raw)
++            return
++        header = table.columns
++        width = len(header)
++        for ordinal, (line, cells) in enumerate(table.rows, start=1):
++            prov = Q.Provenance(table.path, line, ordinal)
++            if len(cells) != width:
++                if len(cells) < width:
++                    classification = Q.MISSING_REQUIRED_FIELD
++                    message = "record has %d fields, expected %d (missing: %s)" % (
++                        len(cells), width, ", ".join(header[len(cells):]))
++                else:
++                    classification = Q.PARSE_TYPE_MISMATCH
++                    message = "record has %d fields, expected %d" % (len(cells), width)
++                yield ("bad", Q.BadRecord(prov, classification, message,
++                                          {"fields": list(cells), "header": list(header)},
++                                          error=InputError))
++                continue
++            yield self._map(prov, OrderedDict((h, ("t", c)) for h, c in zip(header, cells)))
++
++    def _map(self, prov, raw):
++        """Apply drop, rename, cast and defaults, in that order."""
++        spec = self.spec
++        for column in spec.drop:
++            raw.pop(column, None)
++        if spec.rename:
++            renamed = OrderedDict()
++            targets = {spec.rename[c] for c in raw if c in spec.rename}
++            for column, value in raw.items():
++                if column not in spec.rename and column not in targets:
++                    renamed[column] = value
++            for column, value in raw.items():
++                if column in spec.rename:
++                    renamed[spec.rename[column]] = value
++            raw = renamed
++        for column, target in spec.cast.items():
++            if column not in raw:
++                continue
++            try:
++                raw[column] = ("v", target, self._cast(raw[column], target))
++            except S._CellError as err:
++                return ("bad", Q.BadRecord(prov, err.classification,
++                                           "column %r: cast to %s failed: %s"
++                                           % (column, target, err.message),
++                                           {"column": column, "value": _show(raw[column]),
++                                            "cast": target}))
++        for column, value in self.defaults.items():
++            if column not in raw or self._is_null(raw[column]):
++                raw[column] = value
++        return ("row", prov, raw)
++
++    def _is_null(self, raw):
++        if raw[0] == "t":
++            return raw[1] == "" or raw[1].strip() in self.spec.nulls
++        value = raw[2]
++        return value is None or (isinstance(value, float) and math.isnan(value))
++
++    def _cast(self, raw, target):
++        if self._is_null(raw):
++            return None
++        converter = S._Converter(target, self.spec.nulls, self.spec.ts_parser)
++        if raw[0] == "t":
++            return converter.text(raw[1])
++        if raw[0] == "p":
++            kind, value = raw[1], raw[2]
++            if kind == "string":
++                return converter.text(value)
++            if kind == "binary":
++                return converter.text(bytes(value).decode("utf-8", "replace"))
++            if kind == "date":
++                source = T.TIMESTAMP
++                value = self.spec.ts_parser.localize(datetime(value.year, value.month,
++                                                              value.day))
++            elif kind == "decimal":
++                source, value = T.FLOAT, float(value)
++            elif kind in ("int", "float", "bool") or (kind == "timestamp"
++                                                      and isinstance(value, datetime)):
++                source = S._KIND_TYPES[kind]
++            else:
++                raise S._CellError(Q.PARQUET_TYPE_MISMATCH, "Parquet %s value %s cannot be "
++                                   "cast to %s" % (kind, _show(raw), target))
++        else:
++            source, value = raw[1], raw[2]
++        try:
++            return cast_value(value, source, target, self.spec.ts_parser)
++        except (TypeCheckError, ExecutionError, ValueError, OverflowError) as exc:
++            raise S._CellError(Q.PARSE_TYPE_MISMATCH, "%s value %s cannot be cast to %s (%s)"
++                               % (source, _show(raw), target, exc))
++
++    def _infer(self, mapped):
++        """Column types of a schema-less source (fixed event columns + inferred extras)."""
++        seen = OrderedDict()
++        for item in mapped:
++            if item[0] == "row":
++                for column, raw in item[2].items():
++                    seen.setdefault(column, []).append(raw)
++        types = OrderedDict(S.KNOWN)
++        for column, raws in seen.items():
++            if column in types:
++                continue
++            typed = {r[1] for r in raws if r[0] == "v" and r[2] is not None}
++            kinds = {r[1] for r in raws if r[0] == "p" and r[2] is not None
++                     and r[1] != "null"}
++            cells = [r[1] for r in raws if r[0] == "t"]
++            mapped_types = typed | {S._KIND_TYPES[k] for k in kinds}
++            if not cells and mapped_types:
++                if len(mapped_types) == 1:
++                    types[column] = mapped_types.pop()
++                    continue
++                if mapped_types == {T.INT, T.FLOAT}:
++                    types[column] = T.FLOAT
++                    continue
++            cells.extend(_text_of(r) for r in raws if r[0] != "t" and r[-1] is not None)
++            types[column] = S._infer_text(cells, self.spec.nulls, self.spec.ts_parser)
++        for column, target in self.spec.cast.items():
++            if column in types:
++                types[column] = target
++        self.physical = types
++        self.columns = OrderedDict(types)
++
++    def _convert_rows(self, mapped, log):
++        rows = []
++        physical = self.physical
++        converters = {n: self._converter(n) for n in physical}
++        required = self.spec.required
++        for item in mapped:
++            if item[0] == "bad":
++                log.add(item[1])
++                continue
++            prov, raw = item[1], item[2]
++            values = OrderedDict()
++            failure = None
++            for name, col_type in physical.items():
++                value = raw.get(name)
++                try:
++                    values[name] = None if value is None else _convert(value, col_type,
++                                                                      converters[name])
++                except S._CellError as err:
++                    failure = Q.BadRecord(prov, err.classification,
++                                          "column %r: %s" % (name, err.message),
++                                          {"column": name, "value": _show(value),
++                                           "expected_type": col_type})
++                    break
++            if failure is None:
++                failure = self._missing(prov, values, required, physical)
++            if failure is None:
++                try:
++                    for name, evaluate in self._calcs:
++                        values[name] = evaluate(_Record(values))
++                except (ExecutionError, TypeCheckError, ArithmeticError, ValueError) as exc:
++                    failure = Q.BadRecord(prov, Q.RUNTIME_ERROR, str(exc), {"values": values})
++            if failure is None:
++                failure = self._missing(prov, values, required, None)
++            if failure is not None:
++                log.add(failure)
++                continue
++            rows.append((prov, values))
++        return rows
++
++    def _missing(self, prov, values, required, among):
++        for name in required:
++            if (among is None or name in among) and values.get(name) is None:
++                return Q.BadRecord(prov, Q.MISSING_REQUIRED_FIELD,
++                                   "required field %r is null" % name,
++                                   {"column": name, "source": self.spec.name,
++                                    "values": dict(values)})
++        return None
++
++
++def _convert(raw, col_type, converter):
++    """Schema conversion of one mapped raw value; raises sources._CellError."""
++    tag = raw[0]
++    if tag == "t":
++        return converter.text(raw[1])
++    if tag == "p":
++        return converter.parquet(raw[1], raw[2])
++    value_type, value = raw[1], raw[2]
++    if value is None:
++        return None
++    if value_type == col_type:
++        return value
++    if value_type == T.INT and col_type == T.FLOAT:
++        return float(value)
++    if value_type == T.STRING and col_type != T.STRING:
++        return converter.text(value)
++    raise S._CellError(Q.PARSE_TYPE_MISMATCH, "%s value %s does not conform to schema type %s"
++                       % (value_type, _show(raw), col_type))
++
++
++def _text_of(raw):
++    if raw[0] == "p":
++        return S._canonical_text(raw[1], raw[2])
++    value = raw[2]
++    if isinstance(value, bool):
++        return "true" if value else "false"
++    if isinstance(value, datetime):
++        from .timestamps import format_utc
++        return format_utc(value)
++    return repr(value) if isinstance(value, float) else str(value)
++
++
++def _show(raw):
++    if raw is None:
++        return None
++    value = raw[-1]
++    if isinstance(value, (datetime, date)):
++        return str(value)
++    return value
++
++
++class _Types:
++    def __init__(self, types):
++        self._types = OrderedDict(types)
++
++    def has(self, name):
++        return name in self._types
++
++    def type_of(self, name):
++        return self._types[name]
++
++    def define(self, name, value_type):
++        self._types[name] = value_type
++
++
++class _Record:
++    __slots__ = ("data",)
++
++    def __init__(self, data):
++        self.data = data
++
++    def get(self, name):
++        return self.data.get(name)
+
+### mtl_core/inputs.py (modified)
+--- mtl_core/inputs.py
++++ mtl_core/inputs.py
+@@ -59,19 +59,21 @@
+     return [p for p in found if os.path.isfile(p)]
+ 
+ 
+-def resolve(specs, recursive=False, forced=AUTO):
+-    """Expand (path-or-glob, forced_format) pairs into a sorted list of InputFile.
++def expand(spec, forced=AUTO, recursive=False):
++    """Files named by one path-or-glob, as a dict realpath -> InputFile.
+ 
+-    Explicitly named files must have a recognisable format; files reached
+-    through a directory or a glob are skipped when they do not.
++    An explicitly named file must have a recognisable format and a path
++    that is neither a file, a directory nor a glob is an error; files
++    reached through a directory or a glob are skipped when their format
++    cannot be decided.
+     """
+     chosen = {}
+ 
+-    def add(path, fmt_override, explicit):
++    def add(path, explicit):
+         name = os.path.basename(path)
+         if not explicit and name.startswith("_") and detect(name, AUTO) is None:
+             return  # marker files such as _SUCCESS
+-        detected = detect(name, fmt_override)
++        detected = detect(name, forced)
+         if detected is None:
+             if explicit:
+                 raise InputError("cannot determine the format of %r (use --format)" % path)
+@@ -82,22 +84,31 @@
+         if current is None or display < current.path:
+             chosen[key] = InputFile(display, detected[0], detected[1])
+ 
++    if os.path.isdir(spec):
++        for path in _walk(spec, recursive):
++            add(path, False)
++    elif os.path.isfile(spec):
++        add(spec, True)
++    elif glob.has_magic(spec):
++        for match in sorted(glob.glob(spec, recursive=True)):
++            if os.path.isdir(match):
++                for path in _walk(match, recursive):
++                    add(path, False)
++            elif os.path.isfile(match):
++                add(match, False)
++    else:
++        raise InputError("input %r does not exist" % spec)
++    return chosen
++
++
++def resolve(specs, recursive=False, forced=AUTO):
++    """Expand (path-or-glob, forced_format) pairs into a sorted list of InputFile."""
++    chosen = {}
+     for spec, override in specs:
+-        fmt = override or forced
+-        if os.path.isdir(spec):
+-            for path in _walk(spec, recursive):
+-                add(path, fmt, False)
+-        elif os.path.isfile(spec):
+-            add(spec, fmt, True)
+-        elif glob.has_magic(spec):
+-            for match in sorted(glob.glob(spec, recursive=True)):
+-                if os.path.isdir(match):
+-                    for path in _walk(match, recursive):
+-                        add(path, fmt, False)
+-                elif os.path.isfile(match):
+-                    add(match, fmt, False)
+-        else:
+-            raise InputError("input %r does not exist" % spec)
++        for key, entry in expand(spec, override or forced, recursive).items():
++            current = chosen.get(key)
++            if current is None or entry.path < current.path:
++                chosen[key] = entry
+     if not chosen:
+         raise InputError("no input files found")
+     return sorted(chosen.values(), key=lambda f: f.path)
+
+### mtl_core/joins.py (created)
+--- mtl_core/joins.py
++++ mtl_core/joins.py
+@@ -0,0 +1,445 @@
++"""Multi-source pipelines.
++
++Secret: how configured sources are bound to DSL aliases, how alias-scoped
++pre steps run, the static typing of join predicates and projections
++(qualified and unqualified column resolution, the working-timestamp rule),
++and the join algorithm (hash join on equality conjuncts, temporal bands,
++outer-join null padding, deterministic output order).  Callers get a
++Dataset of the working relation that the ordinary pipeline consumes.
++"""
++
++import re
++from collections import OrderedDict
++from datetime import timedelta
++
++from . import program as P
++from . import quality as Q
++from . import valuetypes as T
++from .dataset import Dataset
++from .declarations import resolve_schema
++from .dsl_parser import WORKING_RELATION
++from .errors import ConfigError, DslError, ExecutionError, TypeCheckError
++from .expressions import coerce, column_references, compile_expression, is_assignable
++from .ingest import SourceReader, assign_files
++
++_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
++_ROW_FAILURES = (ExecutionError, TypeCheckError, ArithmeticError, ValueError)
++
++
++def prepare(program, specs, params, ts_parser, log):
++    """(dataset, schema_def) of the working relation for engine.execute.
++
++    Everything static (config/DSL consistency, typing of scoped steps, join
++    predicates and projections) is checked here; files are only read when
++    the dataset is iterated.
++    """
++    by_name = OrderedDict((spec.name, spec) for spec in specs)
++    if program.sources is not None:
++        for binding in program.sources:
++            if binding.name not in by_name:
++                raise ConfigError("pipeline binds source %r, which the ingest config does "
++                                  "not define" % binding.name)
++    readers = OrderedDict((spec.name, SourceReader(spec, program.schemas, program.schema_name,
++                                                   None)) for spec in specs)
++    for name, files in assign_files(specs).items():
++        readers[name].files = files
++    if program.sources is None:
++        return _union(program, readers, log)
++    return _joined(program, readers, params, ts_parser, log), None
++
++
++# ---------------------------------------------------------------------------
++# Single-relation pipelines over every configured source
++
++
++def _union(program, readers, log):
++    schema = resolve_schema(program)
++    if schema is not None:
++        types = OrderedDict(schema.physical)
++    else:
++        types = OrderedDict()
++        for reader in readers.values():
++            for name, value_type in reader.ensure_columns().items():
++                current = types.get(name)
++                if current is None or current == value_type:
++                    types[name] = value_type
++                elif {current, value_type} == {T.INT, T.FLOAT}:
++                    types[name] = T.FLOAT
++                else:
++                    raise TypeCheckError("column %r is %s in one source and %s in another"
++                                         % (name, current, value_type))
++    plans = []
++    for reader in readers.values():
++        columns = reader.ensure_columns() if schema is None else reader.columns
++        widen = []
++        for name, value_type in types.items():
++            source_type = columns.get(name)
++            if source_type is None or source_type == value_type:
++                continue
++            if source_type == T.INT and value_type == T.FLOAT:
++                widen.append(name)
++                continue
++            raise TypeCheckError("source %r column %r is %s but the pipeline schema declares %s"
++                                 % (reader.spec.name, name, source_type, value_type))
++        plans.append((reader, widen))
++    names = list(types)
++
++    def entries():
++        for reader, widen in plans:
++            for prov, values in reader.rows(log):
++                row = {n: values.get(n) for n in names}
++                for n in widen:
++                    if row[n] is not None:
++                        row[n] = float(row[n])
++                yield ("row", prov, row)
++
++    return Dataset(names, [types[n] for n in names], entries), schema
++
++
++# ---------------------------------------------------------------------------
++# Joined pipelines
++
++
++class _Relation:
++    """Static column types plus a memoised producer of (provenance, values) rows."""
++
++    def __init__(self, columns, produce):
++        self.columns = columns
++        self._produce = produce
++        self._rows = None
++
++    def rows(self):
++        if self._rows is None:
++            self._rows = self._produce()
++        return self._rows
++
++
++def _joined(program, readers, params, ts_parser, log):
++    relations = {}
++    for binding in program.sources:
++        reader = readers[binding.name]
++        blocks = [b for b in program.scoped if b.alias == binding.alias]
++        relations[binding.alias] = _scoped_relation(binding.alias, reader, blocks, params, log)
++    current = None
++    for join in program.joins:
++        left = current if join.left == WORKING_RELATION else relations[join.left]
++        right = current if join.right == WORKING_RELATION else relations[join.right]
++        current = _join_relation(join, left, right, params, ts_parser, log)
++        if join.alias is not None:
++            relations[join.alias] = current
++    final = current
++    names = list(final.columns)
++
++    def entries():
++        for prov, values in final.rows():
++            yield ("row", prov, dict(values))
++
++    return Dataset(names, [final.columns[n] for n in names], entries)
++
++
++class _Scope:
++    """Name resolution for expressions over one aliased relation."""
++
++    def __init__(self, alias, columns):
++        self.alias = alias
++        self.columns = columns
++        self.prefix = alias + "."
++
++    def _column(self, name):
++        return name[len(self.prefix):] if name.startswith(self.prefix) else name
++
++    def has(self, name):
++        return self._column(name) in self.columns
++
++    def type_of(self, name):
++        return self.columns[self._column(name)]
++
++
++class _ScopedRecord:
++    __slots__ = ("data", "prefix")
++
++    def __init__(self, data, prefix):
++        self.data = data
++        self.prefix = prefix
++
++    def get(self, name):
++        if name.startswith(self.prefix):
++            name = name[len(self.prefix):]
++        return self.data.get(name)
++
++
++def _scoped_relation(alias, reader, blocks, params, log):
++    columns = OrderedDict(reader.ensure_columns())
++    scope = _Scope(alias, columns)
++    ts_parser = reader.spec.ts_parser
++    ops = []
++
++    def unknown(name):
++        return TypeCheckError("unknown column %r in with %s { }" % (name, alias))
++
++    for block in blocks:
++        for step in block.steps:
++            if isinstance(step, P.Calc):
++                if step.name in columns:
++                    raise DslError("calculated field %r collides with an existing field of %s"
++                                   % (step.name, alias))
++                compiled = compile_expression(step.expression, scope, params, unknown=unknown,
++                                              ts_parser=ts_parser)
++                if not is_assignable(step.type, compiled.type):
++                    raise TypeCheckError("calc %r is declared %s but its expression is %s"
++                                         % (step.name, step.type, compiled.type))
++                columns[step.name] = step.type
++                ops.append(("derive", step.name, coerce(step.type, compiled)))
++            elif isinstance(step, P.Filter):
++                compiled = compile_expression(step.predicate, scope, params, unknown=unknown,
++                                              ts_parser=ts_parser)
++                if not T.is_bool(compiled.type):
++                    raise TypeCheckError("filter expression must be boolean, got %s"
++                                         % compiled.type)
++                ops.append(("filter", None, compiled.evaluate))
++            else:
++                compiled = compile_expression(step.expression, scope, params, unknown=unknown,
++                                              ts_parser=ts_parser)
++                columns[step.column] = compiled.type
++                ops.append(("derive", step.column, compiled.evaluate))
++
++    def produce():
++        rows = []
++        prefix = alias + "."
++        for prov, values in reader.rows(log):
++            data = OrderedDict(values)
++            record = _ScopedRecord(data, prefix)
++            try:
++                keep = True
++                for kind, name, evaluate in ops:
++                    if kind == "filter":
++                        if evaluate(record) is not True:
++                            keep = False
++                            break
++                    else:
++                        data[name] = evaluate(record)
++            except _ROW_FAILURES as exc:
++                log.add(Q.BadRecord(prov, _classify(exc), str(exc), {"values": data}))
++                continue
++            if keep:
++                rows.append((prov, data))
++        return rows
++
++    return _Relation(columns, produce)
++
++
++def _classify(exc):
++    return Q.TYPE_ERROR if isinstance(exc, TypeCheckError) else Q.RUNTIME_ERROR
++
++
++class _PairScope:
++    """Name resolution over a pair of relations: `L.col`, `R.col` or an unambiguous `col`."""
++
++    def __init__(self, left_name, left, right_name, right):
++        self.sides = (left, right)
++        self.qualifiers = (left_name, right_name)
++        self.resolve = {}
++        for side, (name, columns) in enumerate(((left_name, left), (right_name, right))):
++            for column in columns:
++                self.resolve["%s.%s" % (name, column)] = (side, column)
++        self.ambiguous = set(left).intersection(right)
++        for side, (columns, other) in enumerate(((left, right), (right, left))):
++            for column in columns:
++                if column not in other:
++                    self.resolve[column] = (side, column)
++
++    def has(self, name):
++        return name in self.resolve
++
++    def type_of(self, name):
++        side, column = self.resolve[name]
++        return self.sides[side][column]
++
++    def unknown(self, name):
++        if name in self.ambiguous:
++            return DslError("column %r exists on both sides of the join; qualify it as %s.%s or "
++                            "%s.%s" % (name, self.qualifiers[0], name, self.qualifiers[1], name))
++        if "." in name:
++            qualifier = name.split(".", 1)[0]
++            if qualifier not in self.qualifiers:
++                return DslError("%r does not name a side of this join (expected %s or %s)"
++                                % (qualifier, self.qualifiers[0], self.qualifiers[1]))
++        return TypeCheckError("unknown column %r in join" % name)
++
++    def sides_of(self, expr):
++        return {self.resolve[n][0] for n in column_references(expr) if n in self.resolve}
++
++
++class _PairRecord:
++    __slots__ = ("left", "right", "resolve")
++
++    def __init__(self, left, right, resolve):
++        self.left = left
++        self.right = right
++        self.resolve = resolve
++
++    def get(self, name):
++        side, column = self.resolve[name]
++        data = self.left if side == 0 else self.right
++        return None if data is None else data.get(column)
++
++
++def _conjuncts(expr):
++    if isinstance(expr, P.Binary) and expr.op == "&":
++        return _conjuncts(expr.left) + _conjuncts(expr.right)
++    return [expr]
++
++
++def _band(join, left, right, params):
++    spec = join.within
++    for side, relation in zip((join.left, join.right), (left, right)):
++        if "timestamp" not in relation.columns:
++            raise DslError("line %d: join within %s requires a timestamp on both sides, but %r "
++                           "has none" % (join.line, _describe(spec), side))
++        if not T.is_timestamp(relation.columns["timestamp"]):
++            raise TypeCheckError("join within requires %r.timestamp to be a timestamp, got %s"
++                                 % (side, relation.columns["timestamp"]))
++    if spec.param is None:
++        return timedelta(seconds=spec.amount * _UNIT_SECONDS[spec.unit])
++    if spec.param not in params:
++        raise DslError("unknown parameter %r" % spec.param)
++    value_type, value = params[spec.param]
++    m = re.match(r"^\s*(\d+)\s*([smhd])\s*$", value) if T.is_string(value_type) else None
++    if not m:
++        raise TypeCheckError("within parameter %r must be a duration like '10m', got %r"
++                             % (spec.param, value))
++    return timedelta(seconds=int(m.group(1)) * _UNIT_SECONDS[m.group(2)])
++
++
++def _describe(spec):
++    if spec.param is not None:
++        return "param(%r)" % spec.param
++    return "%d%s" % (spec.amount, spec.unit)
++
++
++def _join_relation(join, left, right, params, ts_parser, log):
++    scope = _PairScope(join.left, left.columns, join.right, right.columns)
++
++    def compile_pair(expr):
++        return compile_expression(expr, scope, params, unknown=scope.unknown,
++                                  ts_parser=ts_parser)
++
++    on = compile_pair(join.on)
++    if not T.is_bool(on.type):
++        raise TypeCheckError("join on predicate must be boolean, got %s" % on.type)
++    band = _band(join, left, right, params) if join.within is not None else None
++
++    keys = []
++    for conjunct in _conjuncts(join.on):
++        if not (isinstance(conjunct, P.Binary) and conjunct.op == "=="):
++            continue
++        a, b = scope.sides_of(conjunct.left), scope.sides_of(conjunct.right)
++        if a == {0} and b == {1}:
++            keys.append((compile_pair(conjunct.left).evaluate,
++                         compile_pair(conjunct.right).evaluate))
++        elif a == {1} and b == {0}:
++            keys.append((compile_pair(conjunct.right).evaluate,
++                         compile_pair(conjunct.left).evaluate))
++
++    columns = OrderedDict()
++    project = []
++    for item in join.project:
++        compiled = compile_pair(item.expression)
++        columns[item.name] = compiled.type
++        project.append((item.name, compiled.evaluate))
++    if "timestamp" in columns:
++        if not T.is_timestamp(columns["timestamp"]):
++            raise TypeCheckError("projected timestamp must be a timestamp, got %s"
++                                 % columns["timestamp"])
++    else:
++        lt, rt = left.columns.get("timestamp"), right.columns.get("timestamp")
++        if lt is not None and rt is not None:
++            raise TypeCheckError("line %d: both %r and %r have a timestamp; project must say "
++                                 "which one is the working timestamp" % (join.line, join.left,
++                                                                         join.right))
++        if lt is None:
++            raise TypeCheckError("line %d: project defines no timestamp and %r has none to "
++                                 "default to" % (join.line, join.left))
++        if not T.is_timestamp(lt):
++            raise TypeCheckError("%r.timestamp is %s, not a timestamp" % (join.left, lt))
++        columns["timestamp"] = lt
++        project.append(("timestamp", compile_pair(
++            P.ColumnRef("%s.timestamp" % join.left)).evaluate))
++
++    resolve = scope.resolve
++    kind = join.kind
++
++    def produce():
++        lrows, rrows = left.rows(), right.rows()
++        out = []
++
++        def emit(prov, l, r):
++            record = _PairRecord(l, r, resolve)
++            values = OrderedDict()
++            try:
++                for name, evaluate in project:
++                    values[name] = evaluate(record)
++            except _ROW_FAILURES as exc:
++                log.add(Q.BadRecord(prov, _classify(exc), "join projection: %s" % exc,
++                                    {"left": l, "right": r}))
++                return
++            out.append((prov, values))
++
++        index = None
++        if keys:
++            index = {}
++            for j, (_, r) in enumerate(rrows):
++                key = _key(keys, 1, _PairRecord(None, r, resolve))
++                if key is not None:
++                    index.setdefault(key, []).append(j)
++        matched = [False] * len(rrows)
++        for prov, l in lrows:
++            if index is not None:
++                key = _key(keys, 0, _PairRecord(l, None, resolve))
++                candidates = index.get(key, ()) if key is not None else ()
++            else:
++                candidates = range(len(rrows))
++            found = False
++            for j in candidates:
++                rprov, r = rrows[j]
++                if band is not None and not _within(l, r, band):
++                    continue
++                try:
++                    hit = on.evaluate(_PairRecord(l, r, resolve)) is True
++                except _ROW_FAILURES as exc:
++                    log.add(Q.BadRecord(prov, _classify(exc), "join predicate: %s" % exc,
++                                        {"left": l, "right": r}))
++                    continue
++                if hit:
++                    found = True
++                    matched[j] = True
++                    emit(prov, l, r)
++            if not found and kind in ("left", "full"):
++                emit(prov, l, None)
++        if kind in ("right", "full"):
++            for j, (rprov, r) in enumerate(rrows):
++                if not matched[j]:
++                    emit(rprov, None, r)
++        return out
++
++    return _Relation(columns, produce)
++
++
++def _key(keys, side, record):
++    values = []
++    for pair in keys:
++        try:
++            value = pair[side](record)
++        except _ROW_FAILURES:
++            return None
++        if value is None:
++            return None
++        values.append(value)
++    return tuple(values)
++
++
++def _within(l, r, band):
++    a, b = l.get("timestamp"), r.get("timestamp")
++    if a is None or b is None:
++        return False
++    return abs(a - b) <= band
+
+### mtl_core/program.py (modified)
+--- mtl_core/program.py
++++ mtl_core/program.py
+@@ -25,6 +25,15 @@
+ Aggregate = namedtuple("Aggregate", "items")
+ Calc = namedtuple("Calc", "name expression type stage")               # stage: pre|post_agg
+ 
++# Multi-source pipelines
++SourceBinding = namedtuple("SourceBinding", "name alias")     # config source name, DSL alias
++ScopedBlock = namedtuple("ScopedBlock", "alias steps line")   # with <alias> { Calc/Filter/Apply }
++Duration = namedtuple("Duration", "amount unit param")        # unit: s|m|h|d; param name or None
++ProjectItem = namedtuple("ProjectItem", "expression name")
++Join = namedtuple("Join", "left right on within kind project alias line")
++# left/right: alias of a source, of an earlier join, or "_" (the previous join's result)
++# kind: inner|left|right|full; within: Duration or None; alias: name or None
++
+ # Declarations
+ FieldDef = namedtuple("FieldDef", "name type expression")   # expression None => physical
+ SchemaDef = namedtuple("SchemaDef", "name base fields")     # base: schema name or None
+@@ -38,7 +47,8 @@
+     """A validated pipeline: row steps in order plus the rollup clauses."""
+ 
+     def __init__(self, steps, group_by, window, aggregate, calcs=(), params=(),
+-                 schemas=None, schema_name=None, name=None):
++                 schemas=None, schema_name=None, name=None, sources=None, scoped=(),
++                 joins=()):
+         self.steps = tuple(steps)        # Filter / Apply, in execution order
+         self.group_by = group_by         # GroupBy or None
+         self.window = window             # Window or None
+@@ -48,6 +58,9 @@
+         self.schemas = dict(schemas or {})  # name -> SchemaDef
+         self.schema_name = schema_name   # schema named by `using`, or None
+         self.name = name                 # pipeline name, or None (bare program)
++        self.sources = None if sources is None else tuple(sources)  # SourceBinding, or None
++        self.scoped = tuple(scoped)      # ScopedBlock, in declaration order
++        self.joins = tuple(joins)        # Join, in execution order
+ 
+     @property
+     def pre_calcs(self):
+
+### requirements.txt (modified)
+--- requirements.txt
++++ requirements.txt
+@@ -1,2 +1,3 @@
+ tzdata>=2024.1
+ pyarrow>=14
++PyYAML>=6.0
+

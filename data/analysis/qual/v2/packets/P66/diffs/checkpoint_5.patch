@@ -1,0 +1,1497 @@
+### sith.py (modified)
+--- sith.py
++++ sith.py
+@@ -9,6 +9,13 @@
+     python sith.py references <file> <line> <col> [--scope file|project] [--project <dir>]
+     python sith.py search <query> [--project <dir>]
+     python sith.py names <file> [--all-scopes] [--project <dir>]
++    python sith.py rename <file> <line> <col> --new-name <name> [--diff] [--project <dir>]
++    python sith.py inline <file> <line> <col> [--diff] [--project <dir>]
++    python sith.py extract-variable <file> <line> <col> --until <line>:<col> --name <name>
++                   [--diff] [--project <dir>]
++    python sith.py extract-function <file> <line> <col> --until <line>:<col> --name <name>
++                   [--diff] [--project <dir>]
++    python sith.py errors <file>
+ """
+ import ast
+ import builtins
+@@ -5117,7 +5124,22 @@
+     return False
+ 
+ 
+-def references(path, line, col, scope='file', project=None):
++class _RefCtx:
++    """Everything a reference search found, for the refactoring commands."""
++
++    def __init__(self):
++        self.ident = None
++        self.info = None
++        self.tgt = None
++        self.keys = set()
++        self.engine = None
++        self.nav = None
++        self.rf = None
++        self.root = None
++        self.hits = []  # (info, line, col, target)
++
++
++def find_refs(path, line, col, scope='file', project=None):
+     text = read_source(path)
+     lines = text.split('\n')
+     _check_pos(lines, line, col)
+@@ -5127,23 +5149,23 @@
+     offset = sum(len(lines[k]) + 1 for k in range(line - 1)) + s
+     in_str = in_comment_or_string(text, offset)
+ 
+-    root = project_root(path, project)
+-    engine = Engine(root, path)
+-    info = _load_target(engine, path, text)
+-    tgt = locate(info, line, s, e, ident)
++    ctx = _RefCtx()
++    ctx.ident = ident
++    ctx.root = root = project_root(path, project)
++    ctx.engine = engine = Engine(root, path)
++    ctx.info = info = _load_target(engine, path, text)
++    ctx.tgt = tgt = locate(info, line, s, e, ident)
+     if in_str and (tgt is None or tgt[0] not in ('name', 'attr')):
+         raise NotAName('cursor is not on a name')
+     if tgt is None:
+-        return []
+-    nav = Navigator(engine, root)
+-    rf = RefFinder(engine, nav)
+-    keys = rf.keys(info, tgt)
+-    results = {}
++        return ctx
++    ctx.nav = nav = Navigator(engine, root)
++    ctx.rf = rf = RefFinder(engine, nav)
++    ctx.keys = keys = rf.keys(info, tgt)
++    hits = {}
+ 
+     def add(finfo, ln, c, t):
+-        mp = nav.rel(finfo.path)
+-        results[(mp, ln, c)] = {'module_path': mp, 'line': ln, 'column': c,
+-                                'is_definition': _is_def_target(t)}
++        hits[(nav.rel(finfo.path), ln, c)] = (finfo, ln, c, t)
+ 
+     add(info, line, s, tgt)
+     if keys:
+@@ -5172,7 +5194,17 @@
+                     continue
+                 if rf.keys(finfo, t) & keys:
+                     add(finfo, ln, c, t)
+-    return sorted(results.values(), key=lambda r: (r['module_path'], r['line'], r['column']))
++    ctx.hits = [hits[k] for k in sorted(hits)]
++    return ctx
++
++
++def references(path, line, col, scope='file', project=None):
++    ctx = find_refs(path, line, col, scope, project)
++    out = []
++    for finfo, ln, c, t in ctx.hits:
++        out.append({'module_path': ctx.nav.rel(finfo.path), 'line': ln, 'column': c,
++                    'is_definition': _is_def_target(t)})
++    return out
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -5265,6 +5297,1292 @@
+     return out
+ 
+ 
++# ---------------------------------------------------------------------------
++# Refactoring
++# ---------------------------------------------------------------------------
++
++def _check_ident(name, what='name'):
++    if not name or not name.isidentifier() or keyword.iskeyword(name):
++        raise SithError('invalid %s %r: not a valid Python identifier' % (what, name))
++
++
++def _line_starts(text):
++    out = [0]
++    for i, c in enumerate(text):
++        if c == '\n':
++            out.append(i + 1)
++    return out
++
++
++def _apply_edits(text, edits):
++    """Apply (start, end, replacement) character-offset edits to ``text``."""
++    out = []
++    last = len(text)
++    for s, e, r in sorted(set(edits), key=lambda x: (x[0], x[1]), reverse=True):
++        if e > last:
++            raise SithError('overlapping edits')
++        out.append(text[e:last])
++        out.append(r)
++        last = s
++    out.append(text[:last])
++    return ''.join(reversed(out))
++
++
++def _node_span(lines, node):
++    """Character span ((line, col), (end_line, end_col)) of an AST node."""
++    return ((node.lineno, _char_col(lines, node.lineno, node.col_offset)),
++            (node.end_lineno, _char_col(lines, node.end_lineno, node.end_col_offset)))
++
++
++def _strict_parse(text):
++    try:
++        with warnings.catch_warnings():
++            warnings.simplefilter('ignore')
++            return ast.parse(text)
++    except (SyntaxError, ValueError, RecursionError, MemoryError) as e:
++        raise SithError('cannot refactor a file with syntax errors: %s' % e)
++
++
++def _try_strict(text):
++    try:
++        with warnings.catch_warnings():
++            warnings.simplefilter('ignore')
++            return ast.parse(text)
++    except (SyntaxError, ValueError, RecursionError, MemoryError):
++        return None
++
++
++class _Changes:
++    """New file contents (and path renames) produced by a refactoring."""
++
++    def __init__(self, root):
++        self.root = os.path.realpath(root)
++        self.orig = {}  # realpath -> (text, newline, bom)
++        self.new = {}
++        self.renames = []
++
++    def text(self, path):
++        p = os.path.realpath(path)
++        if p not in self.orig:
++            try:
++                with open(p, 'rb') as f:
++                    raw = f.read()
++            except OSError as e:
++                raise SithError('cannot read file: %s' % e)
++            text = raw.decode('utf-8', errors='surrogateescape')
++            bom = text.startswith('﻿')
++            if bom:
++                text = text[1:]
++            nl = '\r\n' if '\r\n' in text else '\n'
++            self.orig[p] = (text.replace('\r\n', '\n').replace('\r', '\n'), nl, bom)
++        return self.orig[p][0]
++
++    def current(self, path):
++        p = os.path.realpath(path)
++        if p in self.new:
++            return self.new[p]
++        return self.text(p)
++
++    def set(self, path, text):
++        p = os.path.realpath(path)
++        self.text(p)
++        self.new[p] = text
++
++    def rel(self, p):
++        try:
++            rp = os.path.relpath(p, self.root)
++        except ValueError:
++            return _posix(p)
++        return _posix(rp)
++
++    def changed(self):
++        return sorted((p, self.orig[p][0], t) for p, t in self.new.items()
++                      if t != self.orig[p][0])
++
++    def final(self, p, text):
++        _, nl, bom = self.orig[p]
++        if nl != '\n':
++            text = text.replace('\n', nl)
++        if bom:
++            text = '﻿' + text
++        return text
++
++    def to_path(self, p):
++        for old, new in self.renames:
++            if p == old or p.startswith(old + os.sep):
++                return new + p[len(old):]
++        return p
++
++    def output(self, diff):
++        if not diff:
++            out = {'changed_files': {self.rel(p): self.final(p, t) for p, _, t in self.changed()},
++                   'renames': {self.rel(o): self.rel(n) for o, n in self.renames}}
++            return json.dumps(out, separators=(',', ':')) + '\n'
++        import difflib
++        text = ''
++        for o, n in self.renames:
++            text += 'rename from %s\nrename to %s\n' % (self.rel(o), self.rel(n))
++        for p, old, new in self.changed():
++            a = old.splitlines(True)
++            b = new.splitlines(True)
++            if a and not a[-1].endswith('\n'):
++                a[-1] += '\n'
++            if b and not b[-1].endswith('\n'):
++                b[-1] += '\n'
++            text += ''.join(difflib.unified_diff(a, b, fromfile=self.rel(p),
++                                                 tofile=self.rel(self.to_path(p))))
++        return text
++
++
++# ----- rename -----
++
++def _module_target(ctx):
++    """Path of the project module/package the cursor name denotes, if any."""
++    for k in ctx.keys:
++        if k[0] != 'm' or not k[1]:
++            continue
++        p = k[1]
++        base = os.path.basename(p)
++        if base in ('__init__.py', '__init__.pyi'):
++            p = os.path.dirname(p)
++            base = os.path.basename(p)
++        elif base.endswith(('.py', '.pyi')):
++            base = base.rsplit('.', 1)[0]
++        if base != ctx.ident:
++            continue
++        if not _inside(p, ctx.root):
++            raise SithError('cannot rename module %r: it is not part of the project' % ctx.ident)
++        return p
++    for k in ctx.keys:
++        if k[0] == 'rtm' and k[1].split('.')[-1] == ctx.ident:
++            raise SithError('cannot rename module %r: it is not part of the project' % ctx.ident)
++    return None
++
++
++def _cursor_binding(ctx):
++    tgt = ctx.tgt
++    if tgt[0] == 'binding':
++        return tgt[1]
++    if tgt[0] == 'name':
++        sc = ctx.nav.scope_of(ctx.info, tgt[1])
++        for s, _ in ctx.engine.chain(sc):
++            bl = s.bindings.get(ctx.ident)
++            if bl:
++                return bl[-1]
++    return None
++
++
++def _is_alias(b):
++    if b is None:
++        return False
++    if b.kind == 'import':
++        return bool(b.extra[1])
++    if b.kind == 'from':
++        return b.name != b.extra[2]
++    return False
++
++
++def _class_has(engine, csc, name):
++    if name in csc.bindings:
++        return True
++    try:
++        return name in engine.self_attr_map(class_value(csc))
++    except Exception:
++        return False
++
++
++def _rename_collision(ctx, hits, new_name):
++    e = ctx.engine
++    for finfo, ln, c, t in hits:
++        kind = t[0]
++        scopes = []
++        if kind == 'binding':
++            b = t[1]
++            if b.attr:
++                if b.scope.parent is not None and b.scope.parent.kind == 'class' and \
++                        _class_has(e, b.scope.parent, new_name):
++                    return True
++                continue
++            if b.scope.kind == 'class':
++                if _class_has(e, b.scope, new_name):
++                    return True
++                continue
++            scopes = [s for s, _ in e.chain(b.scope)]
++        elif kind == 'name':
++            scopes = [s for s, _ in e.chain(ctx.nav.scope_of(finfo, t[1]))]
++        elif kind == 'global':
++            scopes = [finfo.scope]
++        elif kind == 'attr' and isinstance(t[1].ctx, ast.Store):
++            v, b = ctx.nav.self_store_binding(finfo, t[1])
++            if b is not None and b.scope.parent is not None and \
++                    b.scope.parent.kind == 'class' and _class_has(e, b.scope.parent, new_name):
++                return True
++        for s in scopes:
++            if new_name in s.bindings:
++                return True
++    return False
++
++
++def rename(path, line, col, new_name, project=None):
++    _check_ident(new_name, 'new name')
++    ctx = find_refs(path, line, col, 'project', project)
++    if ctx.tgt is None:
++        raise NotAName('cursor is not on a renamable name')
++    ident = ctx.ident
++    changes = _Changes(ctx.root)
++    if new_name == ident:
++        return changes
++    hits = ctx.hits
++    mod = _module_target(ctx)
++    if mod is None and _is_alias(_cursor_binding(ctx)):
++        hits = [h for h in hits if h[0] is ctx.info]
++    if mod is not None:
++        if os.path.isdir(mod):
++            dest = os.path.join(os.path.dirname(mod), new_name)
++        else:
++            dest = os.path.join(os.path.dirname(mod), new_name + os.path.splitext(mod)[1])
++        if os.path.exists(dest) or os.path.exists(os.path.join(os.path.dirname(mod), new_name + '.py')) \
++                or os.path.isdir(os.path.join(os.path.dirname(mod), new_name)):
++            raise SithError('cannot rename module %r to %r: %s already exists'
++                            % (ident, new_name, changes.rel(dest)))
++        changes.renames.append((os.path.realpath(mod), os.path.realpath(dest)))
++    if _rename_collision(ctx, hits, new_name):
++        raise SithError('cannot rename %r to %r: the name %r already exists in scope'
++                        % (ident, new_name, new_name))
++    per_file = {}
++    for finfo, ln, c, t in hits:
++        per_file.setdefault(os.path.realpath(finfo.path), []).append((ln, c))
++    for p, poss in per_file.items():
++        text = changes.text(p)
++        lines = text.split('\n')
++        starts = _line_starts(text)
++        edits = []
++        for ln, c in poss:
++            if ln > len(lines) or lines[ln - 1][c:c + len(ident)] != ident:
++                continue
++            o = starts[ln - 1] + c
++            edits.append((o, o + len(ident), new_name))
++        if edits:
++            changes.set(p, _apply_edits(text, edits))
++    return changes
++
++
++# ----- inline -----
++
++def _expr_text(text, lines, node):
++    """Source text of ``node`` including parentheses that wrap it."""
++    starts = _line_starts(text)
++    (l1, c1), (l2, c2) = _node_span(lines, node)
++    s = starts[l1 - 1] + c1
++    e = starts[l2 - 1] + c2
++    while True:
++        i = s - 1
++        while i >= 0 and text[i] in ' \t\n\\':
++            i -= 1
++        j = e
++        while j < len(text) and text[j] in ' \t\n\\':
++            j += 1
++        if i >= 0 and j < len(text) and text[i] == '(' and text[j] == ')':
++            s, e = i, j + 1
++            continue
++        break
++    return text[s:e]
++
++
++def _replace_node(tree, old, new):
++    for parent in ast.walk(tree):
++        for field, value in ast.iter_fields(parent):
++            if value is old:
++                setattr(parent, field, new)
++                return True
++            if isinstance(value, list):
++                for i, x in enumerate(value):
++                    if x is old:
++                        value[i] = new
++                        return True
++    return False
++
++
++def _find_expr(tree, lines, span, types):
++    for n in ast.walk(tree):
++        if isinstance(n, types) and getattr(n, 'lineno', None) is not None and \
++                _node_span(lines, n) == span:
++            return n
++    return None
++
++
++def _needs_parens(text, tree, span, rhs, value):
++    """Would replacing ``span`` of ``text`` by ``rhs`` change the parsed meaning?"""
++    import copy
++    lines = text.split('\n')
++    if tree is None:
++        return not isinstance(value, (ast.Name, ast.Constant, ast.Attribute, ast.Call,
++                                      ast.Subscript, ast.List, ast.Tuple, ast.Dict, ast.Set,
++                                      ast.ListComp, ast.SetComp, ast.DictComp,
++                                      ast.GeneratorExp, ast.JoinedStr)) or \
++            isinstance(value, ast.Tuple)
++    t2 = copy.deepcopy(tree)
++    node = _find_expr(t2, lines, span, (ast.Name, ast.Attribute))
++    if node is None or not _replace_node(t2, node, copy.deepcopy(value)):
++        return True
++    starts = _line_starts(text)
++    s = starts[span[0][0] - 1] + span[0][1]
++    e = starts[span[1][0] - 1] + span[1][1]
++    cand = _try_strict(text[:s] + rhs + text[e:])
++    if cand is None:
++        return True
++    return ast.dump(cand) != ast.dump(t2)
++
++
++def _stmt_parent_body(tree, stmt):
++    for n in ast.walk(tree):
++        for field in ('body', 'orelse', 'finalbody', 'handlers'):
++            body = getattr(n, field, None)
++            if isinstance(body, list) and any(x is stmt for x in body):
++                return body
++    return None
++
++
++def _removal_edit(text, lines, tree, stmt):
++    """Edit deleting statement ``stmt`` (replacing it by ``pass`` if needed)."""
++    starts = _line_starts(text)
++    (l1, c1), (l2, c2) = _node_span(lines, stmt)
++    s = starts[l1 - 1] + c1
++    e = starts[l2 - 1] + c2
++    body = _stmt_parent_body(tree, stmt)
++    before = lines[l1 - 1][:c1]
++    after = lines[l2 - 1][c2:]
++    if body is not None and len(body) == 1:
++        return (s, e, 'pass')
++    m = re.match(r'\s*;\s*', after)
++    if m:
++        return (s, e + m.end(), '')
++    if before.strip():
++        m = re.search(r'\s*;\s*$', before)
++        if m:
++            return (starts[l1 - 1] + m.start(), e, '')
++    code_after = _code_part(after).strip()
++    if not before.strip() and not code_after:
++        ls = starts[l1 - 1]
++        le = starts[l2] if l2 < len(starts) else len(text)
++        return (ls, le, '')
++    return (s, e, 'pass')
++
++
++def inline(path, line, col, project=None):
++    ctx = find_refs(path, line, col, 'project', project)
++    if ctx.tgt is None:
++        raise NotAName('cursor is not on a name')
++    ident = ctx.ident
++    defs = [h for h in ctx.hits if _is_def_target(h[3])]
++    refs = [h for h in ctx.hits if not _is_def_target(h[3])]
++    bdefs = [h[3][1] for h in defs if h[3][0] == 'binding']
++    if any(b.kind in ('def', 'class') for b in bdefs):
++        raise SithError('cannot inline a function/class definition')
++    for b in bdefs:
++        if b.kind in ('import', 'from'):
++            try:
++                tk = ctx.rf.import_keys(b, frozenset())
++            except RecursionError:
++                tk = set()
++            if any(k[0] == 'm' for k in tk):
++                raise SithError('cannot inline a module')
++    if not defs:
++        raise SithError('no definition found to inline')
++    if len(defs) > 1:
++        raise SithError('cannot inline a name with multiple definitions')
++    dinfo, dl, dc, dt = defs[0]
++    if dt[0] != 'binding':
++        raise SithError('cannot inline an attribute')
++    b = dt[1]
++    stmt = b.stmt
++    ok = False
++    if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and \
++            isinstance(stmt.targets[0], ast.Name) and stmt.targets[0].id == ident:
++        ok = True
++    elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None and \
++            isinstance(stmt.target, ast.Name) and stmt.target.id == ident:
++        ok = True
++    if not ok:
++        raise SithError('cannot inline %r: it is not defined by a simple assignment' % ident)
++    if not refs:
++        raise SithError('name has no references to inline')
++    changes = _Changes(ctx.root)
++    dpath = os.path.realpath(dinfo.path)
++    dtext = changes.text(dpath)
++    dlines = dtext.split('\n')
++    if dlines[dl - 1][dc:dc + len(ident)] != ident:
++        raise SithError('source changed while refactoring')
++    rhs = _expr_text(dtext, dlines, stmt.value)
++    try:
++        value = ast.parse('(\n' + rhs + '\n)', mode='eval').body
++    except SyntaxError:
++        raise SithError('cannot inline %r: invalid definition' % ident)
++    sspan = _node_span(dlines, stmt)
++    per_file = {}
++    for finfo, ln, c, t in refs:
++        p = os.path.realpath(finfo.path)
++        if t[0] == 'name' and isinstance(t[1].ctx, ast.Load):
++            span = ((ln, c), (ln, c + len(ident)))
++        elif t[0] == 'attr' and isinstance(t[1].ctx, ast.Load):
++            span = _node_span(finfo.lines, t[1])
++        else:
++            raise SithError('cannot inline %r: it is reassigned, deleted or declared global'
++                            % ident)
++        if p == dpath and sspan[0] <= span[0] and span[1] <= sspan[1]:
++            raise SithError('cannot inline a recursive definition')
++        per_file.setdefault(p, []).append(span)
++    if dpath not in per_file:
++        per_file[dpath] = []
++    for p, spans in per_file.items():
++        text = changes.text(p)
++        lines = text.split('\n')
++        starts = _line_starts(text)
++        tree = _try_strict(text)
++        edits = []
++        for span in spans:
++            (l1, c1), (l2, c2) = span
++            if l1 > len(lines) or l2 > len(lines):
++                continue
++            s = starts[l1 - 1] + c1
++            e = starts[l2 - 1] + c2
++            r = rhs
++            if _needs_parens(text, tree, span, rhs, value):
++                r = '(' + rhs + ')'
++            edits.append((s, e, r))
++        if p == dpath:
++            dtree = tree if tree is not None else dinfo.tree
++            dstmt = stmt
++            if tree is not None:
++                dstmt = None
++                for n in ast.walk(tree):
++                    if isinstance(n, (ast.Assign, ast.AnnAssign)) and \
++                            _node_span(lines, n) == sspan:
++                        dstmt = n
++                        break
++                if dstmt is None:
++                    dstmt, dtree = stmt, dinfo.tree
++            edits.append(_removal_edit(text, lines, dtree, dstmt))
++        changes.set(p, _apply_edits(text, edits))
++    return changes
++
++
++# ----- selections -----
++
++def _parse_until(s):
++    m = re.match(r'^\s*(-?\d+)\s*[:,]\s*(-?\d+)\s*$', s or '')
++    if not m:
++        raise SithError('invalid --until value %r (expected <line>:<col>)' % s)
++    return int(m.group(1)), int(m.group(2))
++
++
++def _comment_cols(text):
++    """{line: column of its comment} and the set of lines continuing a token."""
++    import tokenize
++    comments = {}
++    cont = set()
++    try:
++        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
++            if tok.type == tokenize.COMMENT:
++                comments[tok.start[0]] = tok.start[1]
++            elif tok.start[0] < tok.end[0] and tok.type not in (tokenize.NL, tokenize.NEWLINE):
++                cont.update(range(tok.start[0] + 1, tok.end[0] + 1))
++    except (tokenize.TokenError, SyntaxError, IndentationError):
++        pass
++    return comments, cont
++
++
++def _code_range(lines, comments, ln):
++    """(first, end) columns of the code on line ``ln`` or None if it has none."""
++    t = lines[ln - 1]
++    if ln in comments:
++        t = t[:comments[ln]]
++    t = t.rstrip()
++    first = len(t) - len(t.lstrip())
++    if first >= len(t):
++        return None
++    return first, len(t)
++
++
++def _norm_start(lines, comments, pos):
++    ln, c = pos
++    while ln <= len(lines):
++        r = _code_range(lines, comments, ln)
++        if r is not None:
++            if c <= r[0]:
++                return (ln, r[0])
++            if c < r[1]:
++                return (ln, c)
++        ln += 1
++        c = 0
++    return (len(lines), len(lines[-1]))
++
++
++def _norm_end(lines, comments, pos):
++    ln, c = pos
++    while ln >= 1:
++        r = _code_range(lines, comments, ln)
++        if r is not None:
++            if c >= r[1]:
++                return (ln, r[1])
++            if c > r[0]:
++                return (ln, c)
++        ln -= 1
++        c = 1 << 30
++    return (1, 0)
++
++
++def _sel_positions(lines, line, col, until):
++    _check_pos(lines, line, col)
++    ul, uc = until
++    if ul > len(lines):
++        ul, uc = len(lines), len(lines[-1])
++    if ul < 1 or uc < 0:
++        raise SithError('--until position out of range')
++    uc = min(uc, len(lines[ul - 1]))
++    if (ul, uc) < (line, col):
++        raise SithError('selection end is before its start')
++    return (line, col), (ul, uc)
++
++
++# ----- extract variable -----
++
++def _parents(tree):
++    par = {}
++    for n in ast.walk(tree):
++        for ch in ast.iter_child_nodes(n):
++            par[id(ch)] = n
++    return par
++
++
++def _comp_or_lambda_locals(node, par):
++    """Names bound by the lambdas/comprehensions enclosing ``node``."""
++    out = set()
++    child, n = node, par.get(id(node))
++    while n is not None and not isinstance(n, ast.stmt):
++        if isinstance(n, ast.comprehension) and child is n.iter:
++            comp = par.get(id(n))
++            if comp is not None and comp.generators[0] is n:
++                # the first iterable is evaluated in the enclosing scope
++                child, n = comp, par.get(id(comp))
++                continue
++        if isinstance(n, ast.Lambda) and child is n.body:
++            out.update(a.arg for a in _all_args(n.args))
++        elif isinstance(n, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
++            for g in n.generators:
++                out.update(x.id for x in ast.walk(g.target) if isinstance(x, ast.Name))
++        child, n = n, par.get(id(n))
++    return out
++
++
++_NOT_EXTRACTABLE = (ast.Starred, ast.Slice, ast.FormattedValue)
++
++
++def extract_variable(path, line, col, until, name, project=None):
++    _check_ident(name)
++    text = read_source(path)
++    lines = text.split('\n')
++    start, end = _sel_positions(lines, line, col, until)
++    tree = _strict_parse(text)
++    comments, _ = _comment_cols(text)
++    start = _norm_start(lines, comments, start)
++    end = _norm_end(lines, comments, end)
++    if end <= start:
++        raise SithError('selection is not a complete expression')
++    starts = _line_starts(text)
++    so = starts[start[0] - 1] + start[1]
++    eo = starts[end[0] - 1] + end[1]
++    par = _parents(tree)
++    node = None
++    s, e = so, eo
++    while node is None:
++        for n in ast.walk(tree):
++            if not isinstance(n, ast.expr) or isinstance(n, _NOT_EXTRACTABLE):
++                continue
++            (a, b), (c, d) = _node_span(lines, n)
++            if starts[a - 1] + b == s and starts[c - 1] + d == e:
++                node = n
++                break
++        if node is not None:
++            break
++        sel = text[s:e]
++        if sel.startswith('(') and sel.endswith(')') and e - s >= 2:
++            try:
++                ast.parse(sel, mode='eval')
++            except SyntaxError:
++                break
++            s += 1
++            e -= 1
++            while s < e and text[s] in ' \t\n\\':
++                s += 1
++            while e > s and text[e - 1] in ' \t\n\\':
++                e -= 1
++            continue
++        break
++    if node is None:
++        raise SithError('selection is not a complete expression')
++    p = par.get(id(node))
++    if isinstance(getattr(node, 'ctx', None), (ast.Store, ast.Del)) or \
++            isinstance(p, ast.JoinedStr):
++        raise SithError('selection is not a complete expression')
++    if isinstance(p, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and \
++            node in getattr(p, 'type_params', ()):
++        raise SithError('selection is not a complete expression')
++    stmt = p
++    while stmt is not None and not isinstance(stmt, ast.stmt):
++        stmt = par.get(id(stmt))
++    if stmt is None:
++        raise SithError('selection is not a complete expression')
++    loc = _comp_or_lambda_locals(node, par)
++    used = set(x.id for x in ast.walk(node) if isinstance(x, ast.Name))
++    if loc & used:
++        raise SithError('cannot extract an expression using lambda or comprehension variables')
++    # an ``elif`` cannot be preceded by a statement: go up to the full ``if``
++    while isinstance(stmt, ast.If):
++        pp = par.get(id(stmt))
++        if isinstance(pp, ast.If) and len(pp.orelse) == 1 and pp.orelse[0] is stmt and \
++                lines[stmt.lineno - 1].lstrip().startswith('elif'):
++            stmt = pp
++        else:
++            break
++    sline = min([stmt.lineno] + [d.lineno for d in getattr(stmt, 'decorator_list', ())])
++    indent = _indent_of(lines[sline - 1])
++    sel = text[so:eo]
++    rhs = sel
++    if _try_strict(name + ' = ' + rhs) is None:
++        rhs = '(' + sel + ')'
++    new = _apply_edits(text, [(so, eo, name),
++                              (starts[sline - 1], starts[sline - 1],
++                               indent + name + ' = ' + rhs + '\n')])
++    changes = _Changes(project_root(path, project))
++    changes.set(path, new)
++    return changes
++
++
++# ----- extract function -----
++
++class _Flow:
++    """Evaluation-order walk recording reads that happen before assignment."""
++
++    def __init__(self):
++        self.reads = {}
++        self.writes = {}
++        self.returns = []
++        self.yields = False
++        self.awaits = False
++        self.escapes = False
++        self.decls = False
++        self.loop = 0
++
++    @staticmethod
++    def pos(n):
++        return (n.lineno, n.col_offset)
++
++    def read(self, name, n, A):
++        if name not in A and name not in self.reads:
++            self.reads[name] = self.pos(n)
++
++    def write(self, name, n, A):
++        A.add(name)
++        if name not in self.writes:
++            self.writes[name] = self.pos(n)
++
++    def stmts(self, body, A):
++        for s in body:
++            self.stmt(s, A)
++
++    def nested(self, node, A):
++        for name, n in _free_loads(node):
++            self.read(name, n, A)
++
++    def args(self, args, A):
++        for d in list(args.defaults) + [d for d in args.kw_defaults if d is not None]:
++            self.expr(d, A)
++        for a in _all_args(args):
++            if a.annotation is not None:
++                self.expr(a.annotation, A)
++
++    def stmt(self, s, A):
++        t = type(s)
++        if t in (ast.FunctionDef, ast.AsyncFunctionDef):
++            for d in s.decorator_list:
++                self.expr(d, A)
++            self.args(s.args, A)
++            if s.returns is not None:
++                self.expr(s.returns, A)
++            self.nested(s, A)
++            self.write(s.name, s, A)
++        elif t is ast.ClassDef:
++            for d in s.decorator_list:
++                self.expr(d, A)
++            for x in s.bases:
++                self.expr(x, A)
++            for k in s.keywords:
++                self.expr(k.value, A)
++            self.nested(s, A)
++            self.write(s.name, s, A)
++        elif t is ast.Return:
++            if s.value is not None:
++                self.expr(s.value, A)
++            self.returns.append(s)
++        elif t is ast.Delete:
++            for x in s.targets:
++                self.expr(x, A)
++        elif t is ast.Assign:
++            self.expr(s.value, A)
++            for x in s.targets:
++                self.target(x, A)
++        elif t is ast.AugAssign:
++            if isinstance(s.target, ast.Name):
++                self.read(s.target.id, s.target, A)
++            else:
++                self.expr(s.target, A)
++            self.expr(s.value, A)
++            if isinstance(s.target, ast.Name):
++                self.write(s.target.id, s.target, A)
++        elif t is ast.AnnAssign:
++            if s.value is not None:
++                self.expr(s.value, A)
++                self.target(s.target, A)
++        elif t in (ast.For, ast.AsyncFor):
++            if t is ast.AsyncFor:
++                self.awaits = True
++            self.expr(s.iter, A)
++            A2 = set(A)
++            self.target(s.target, A2)
++            self.loop += 1
++            self.stmts(s.body, A2)
++            self.loop -= 1
++            self.stmts(s.orelse, set(A))
++        elif t is ast.While:
++            self.expr(s.test, A)
++            self.loop += 1
++            self.stmts(s.body, set(A))
++            self.loop -= 1
++            self.stmts(s.orelse, set(A))
++        elif t is ast.If:
++            self.expr(s.test, A)
++            A1, A2 = set(A), set(A)
++            self.stmts(s.body, A1)
++            self.stmts(s.orelse, A2)
++            A |= A1 & A2
++        elif t in (ast.With, ast.AsyncWith):
++            if t is ast.AsyncWith:
++                self.awaits = True
++            for it in s.items:
++                self.expr(it.context_expr, A)
++                if it.optional_vars is not None:
++                    self.target(it.optional_vars, A)
++            self.stmts(s.body, A)
++        elif t.__name__ in ('Try', 'TryStar'):
++            A1 = set(A)
++            self.stmts(s.body, A1)
++            self.stmts(s.orelse, A1)
++            outs = [A1]
++            for h in s.handlers:
++                Ah = set(A)
++                if h.type is not None:
++                    self.expr(h.type, Ah)
++                if h.name:
++                    self.write(h.name, h, Ah)
++                self.stmts(h.body, Ah)
++                outs.append(Ah)
++            common = set.intersection(*outs)
++            self.stmts(s.finalbody, A)
++            A |= common
++        elif t is ast.Raise:
++            for x in (s.exc, s.cause):
++                if x is not None:
++                    self.expr(x, A)
++        elif t is ast.Assert:
++            self.expr(s.test, A)
++            if s.msg is not None:
++                self.expr(s.msg, A)
++        elif t in (ast.Import, ast.ImportFrom):
++            for a in s.names:
++                if a.name != '*':
++                    self.write(a.asname or a.name.split('.')[0], s, A)
++        elif t in (ast.Global, ast.Nonlocal):
++            self.decls = True
++        elif t is ast.Expr:
++            self.expr(s.value, A)
++        elif t in (ast.Break, ast.Continue):
++            if not self.loop:
++                self.escapes = True
++        elif t is ast.Match:
++            self.expr(s.subject, A)
++            for case in s.cases:
++                Ac = set(A)
++                self.pattern(case.pattern, Ac)
++                if case.guard is not None:
++                    self.expr(case.guard, Ac)
++                self.stmts(case.body, Ac)
++        elif t.__name__ == 'TypeAlias':
++            self.nested(s, A)
++            self.write(s.name.id, s.name, A)
++
++    def pattern(self, p, A):
++        for n in ast.walk(p):
++            if isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
++                self.write(n.name, n, A)
++            elif isinstance(n, ast.MatchMapping) and n.rest:
++                self.write(n.rest, n, A)
++            elif isinstance(n, ast.MatchValue):
++                self.expr(n.value, A)
++            elif isinstance(n, ast.MatchMapping):
++                for k in n.keys:
++                    self.expr(k, A)
++            elif isinstance(n, ast.MatchClass):
++                self.expr(n.cls, A)
++
++    def target(self, t, A):
++        if isinstance(t, ast.Name):
++            self.write(t.id, t, A)
++        elif isinstance(t, (ast.Tuple, ast.List)):
++            for x in t.elts:
++                self.target(x, A)
++        elif isinstance(t, ast.Starred):
++            self.target(t.value, A)
++        else:
++            self.expr(t, A)
++
++    def expr(self, e, A):
++        t = type(e)
++        if t is ast.Name:
++            if isinstance(e.ctx, ast.Store):
++                self.write(e.id, e, A)
++            else:
++                self.read(e.id, e, A)
++        elif t is ast.NamedExpr:
++            self.expr(e.value, A)
++            self.write(e.target.id, e.target, A)
++        elif t is ast.Lambda:
++            self.args(e.args, A)
++            self.nested(e, A)
++        elif t in (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp):
++            gens = e.generators
++            self.expr(gens[0].iter, A)
++            C = set(A)
++            for i, g in enumerate(gens):
++                if i:
++                    self.expr(g.iter, C)
++                for x in ast.walk(g.target):
++                    if isinstance(x, ast.Name):
++                        C.add(x.id)
++                for c in g.ifs:
++                    self.expr(c, C)
++            if t is ast.DictComp:
++                self.expr(e.key, C)
++                self.expr(e.value, C)
++            else:
++                self.expr(e.elt, C)
++        elif t is ast.Await:
++            self.awaits = True
++            self.expr(e.value, A)
++        elif t in (ast.Yield, ast.YieldFrom):
++            self.yields = True
++            if e.value is not None:
++                self.expr(e.value, A)
++        else:
++            for ch in ast.iter_child_nodes(e):
++                if isinstance(ch, ast.expr):
++                    self.expr(ch, A)
++                elif isinstance(ch, ast.keyword):
++                    self.expr(ch.value, A)
++
++
++def _free_loads(node):
++    """[(name, node)] of names a nested scope reads from its enclosing scopes."""
++    bound = set()
++    inner = []
++    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
++        bound.update(a.arg for a in _all_args(node.args))
++    if isinstance(node, ast.Lambda):
++        inner = [node.body]
++    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
++        inner = list(node.body)
++    elif type(node).__name__ == 'TypeAlias':
++        inner = [node.value]
++    loads = []
++    for root in inner:
++        for n in ast.walk(root):
++            if isinstance(n, ast.Name):
++                if isinstance(n.ctx, ast.Load):
++                    loads.append(n)
++                else:
++                    bound.add(n.id)
++            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
++                bound.add(n.name)
++                if not isinstance(n, ast.ClassDef):
++                    bound.update(a.arg for a in _all_args(n.args))
++            elif isinstance(n, ast.Lambda):
++                bound.update(a.arg for a in _all_args(n.args))
++            elif isinstance(n, (ast.Import, ast.ImportFrom)):
++                bound.update(a.asname or a.name.split('.')[0] for a in n.names)
++            elif isinstance(n, ast.ExceptHandler) and n.name:
++                bound.add(n.name)
++            elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
++                bound.add(n.name)
++            elif isinstance(n, ast.MatchMapping) and n.rest:
++                bound.add(n.rest)
++    return [(n.id, n) for n in loads if n.id not in bound]
++
++
++def _scope_bindings(scope_node):
++    """[(name, line)] of the names bound directly in a scope."""
++    out = []
++    if isinstance(scope_node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
++        for a in _all_args(scope_node.args):
++            out.append((a.arg, 0))
++    body = scope_node.body if isinstance(scope_node.body, list) else [scope_node.body]
++
++    def visit(n):
++        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
++            out.append((n.name, n.lineno))
++            return
++        if isinstance(n, ast.Lambda):
++            return
++        if isinstance(n, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
++            for x in ast.walk(n):
++                if isinstance(x, ast.NamedExpr):
++                    out.append((x.target.id, x.lineno))
++            return
++        if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
++            out.append((n.id, n.lineno))
++        elif isinstance(n, (ast.Import, ast.ImportFrom)):
++            for a in n.names:
++                if a.name != '*':
++                    out.append((a.asname or a.name.split('.')[0], n.lineno))
++        elif isinstance(n, ast.ExceptHandler) and n.name:
++            out.append((n.name, n.lineno))
++        elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
++            out.append((n.name, n.lineno))
++        elif isinstance(n, ast.MatchMapping) and n.rest:
++            out.append((n.rest, n.lineno))
++        for ch in ast.iter_child_nodes(n):
++            visit(ch)
++
++    for s in body:
++        visit(s)
++    return out
++
++
++def _stmt_start(lines, s):
++    decs = getattr(s, 'decorator_list', None)
++    if decs:
++        d = min(decs, key=lambda x: (x.lineno, x.col_offset))
++        t = lines[d.lineno - 1]
++        c = _char_col(lines, d.lineno, d.col_offset)
++        at = t.rfind('@', 0, c)
++        return (d.lineno, at if at >= 0 else c)
++    return (s.lineno, _char_col(lines, s.lineno, s.col_offset))
++
++
++def _stmt_end(lines, s):
++    return (s.end_lineno, _char_col(lines, s.end_lineno, s.end_col_offset))
++
++
++def _child_bodies(s):
++    out = []
++    for f in ('body', 'orelse', 'finalbody'):
++        b = getattr(s, f, None)
++        if isinstance(b, list) and b and isinstance(b[0], ast.stmt):
++            out.append(b)
++    for h in getattr(s, 'handlers', ()) or ():
++        out.append(h.body)
++    for c in getattr(s, 'cases', ()) or ():
++        out.append(c.body)
++    return out
++
++
++_PARTIAL = 'selection must span one or more complete statements'
++
++
++def _select_stmts(lines, comments, body, start, end, ancestors):
++    over = [s for s in body if _stmt_start(lines, s) < end and _stmt_end(lines, s) > start]
++    if not over:
++        raise SithError(_PARTIAL)
++    fs = _stmt_start(lines, over[0])
++    le = _stmt_end(lines, over[-1])
++    if start == fs and (end == le or (end[0] == le[0] and end[1] >= le[1] - 1)):
++        before = lines[fs[0] - 1][:fs[1]]
++        after = lines[le[0] - 1]
++        if le[0] in comments:
++            after = after[:comments[le[0]]]
++        after = after[le[1]:].strip()
++        if before.strip() or after not in ('', ';'):
++            raise SithError(_PARTIAL)
++        return over, ancestors
++    if len(over) == 1 and start >= fs and end <= le:
++        for b in _child_bodies(over[0]):
++            if any(_stmt_start(lines, s) < end and _stmt_end(lines, s) > start for s in b):
++                return _select_stmts(lines, comments, b, start, end, ancestors + [over[0]])
++    raise SithError(_PARTIAL)
++
++
++def _indent_unit(lines, cont):
++    best = None
++    for i, t in enumerate(lines):
++        if i + 1 in cont or not t.strip() or t.lstrip().startswith('#'):
++            continue
++        ind = _indent_of(t)
++        if ind.startswith('\t'):
++            return '\t'
++        if ind and (best is None or len(ind) < len(best)):
++            best = ind
++    return best or '    '
++
++
++def _loads_after(scope_node, lo, hi, loop):
++    """Names read in ``scope_node`` after line ``hi`` (or anywhere in ``loop``)."""
++    out = set()
++    for n in ast.walk(scope_node):
++        if isinstance(n, ast.Name) and getattr(n, 'lineno', None) is not None:
++            reading = isinstance(n.ctx, (ast.Load, ast.Del))
++            if not reading:
++                continue
++            if n.lineno > hi:
++                out.add(n.id)
++            elif loop is not None and not (lo <= n.lineno <= hi) and \
++                    loop.lineno <= n.lineno <= loop.end_lineno:
++                out.add(n.id)
++        elif isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name):
++            if n.lineno > hi or (loop is not None and not (lo <= n.lineno <= hi) and
++                                 loop.lineno <= n.lineno <= loop.end_lineno):
++                out.add(n.target.id)
++    return out
++
++
++def extract_function(path, line, col, until, name, project=None):
++    _check_ident(name)
++    text = read_source(path)
++    lines = text.split('\n')
++    start, end = _sel_positions(lines, line, col, until)
++    tree = _strict_parse(text)
++    comments, cont = _comment_cols(text)
++    start = _norm_start(lines, comments, start)
++    end = _norm_end(lines, comments, end)
++    if end <= start:
++        raise SithError(_PARTIAL)
++    stmts, ancestors = _select_stmts(lines, comments, tree.body, start, end, [])
++    first = _stmt_start(lines, stmts[0])[0]
++    last = stmts[-1].end_lineno
++
++    scope = tree
++    loop = None
++    for a in reversed(ancestors):
++        if isinstance(a, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
++            scope = a
++            break
++        if loop is None and isinstance(a, (ast.For, ast.AsyncFor, ast.While)):
++            loop = a
++    outer = [a for a in ancestors if isinstance(a, (ast.FunctionDef, ast.AsyncFunctionDef))
++             and a is not scope]
++
++    flow = _Flow()
++    flow.stmts(stmts, set())
++    if flow.yields:
++        raise SithError('cannot extract code containing yield')
++    if flow.decls:
++        raise SithError('cannot extract code containing global/nonlocal statements')
++    if flow.escapes:
++        raise SithError('cannot extract break/continue outside of their loop')
++    ends_return = isinstance(stmts[-1], ast.Return)
++    if flow.returns and not ends_return:
++        raise SithError('can only extract a return statement at the end of the selection')
++
++    # parameters
++    known = set()
++    for n, ln in _scope_bindings(scope):
++        if not (first <= ln <= last):
++            known.add(n)
++    for f in outer:
++        known.update(n for n, _ in _scope_bindings(f))
++    params = sorted((p for p in flow.reads if p in known), key=lambda p: flow.reads[p])
++
++    # return values
++    outputs = []
++    if not ends_return:
++        used = _loads_after(scope, first, last, loop)
++        outputs = sorted((w for w in flow.writes if w in used), key=lambda w: flow.writes[w])
++
++    # method handling
++    self_name = None
++    decorator = None
++    callee = name
++    sp = None
++    if scope is not tree:
++        sp = ancestors[ancestors.index(scope) - 1] if ancestors.index(scope) > 0 else tree
++    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) and isinstance(sp, ast.ClassDef):
++        decs = _decorator_names(scope)
++        pos_args = list(getattr(scope.args, 'posonlyargs', [])) + list(scope.args.args)
++        if 'staticmethod' in decs:
++            decorator = '@staticmethod'
++            callee = sp.name + '.' + name
++        elif pos_args:
++            self_name = pos_args[0].arg
++            if 'classmethod' in decs:
++                decorator = '@classmethod'
++            params = [p for p in params if p != self_name]
++            callee = self_name + '.' + name
++
++    unit = _indent_unit(lines, cont)
++    sel_indent = _indent_of(lines[first - 1])
++    if scope is tree:
++        ins = first
++        base = sel_indent
++    else:
++        ins = _stmt_start(lines, scope)[0]
++        base = _indent_of(lines[ins - 1])
++    inner = base + unit
++    body = []
++    for ln in range(first, last + 1):
++        t = lines[ln - 1]
++        if ln in cont:
++            body.append(t)
++        elif not t.strip():
++            body.append('')
++        elif t.startswith(sel_indent):
++            body.append(inner + t[len(sel_indent):])
++        else:
++            body.append(inner + t.lstrip())
++    if outputs:
++        body.append(inner + 'return ' + ', '.join(outputs))
++    head = []
++    if decorator:
++        head.append(base + decorator)
++    head.append('%s%sdef %s(%s):' % (base, 'async ' if flow.awaits else '', name,
++                                     ', '.join(([self_name] if self_name else []) + params)))
++    func = head + body + [''] * (2 if not base else 1)
++
++    call = '%s(%s)' % (callee, ', '.join(params))
++    if flow.awaits:
++        call = 'await ' + call
++    if ends_return:
++        call = 'return ' + call
++    elif outputs:
++        call = ', '.join(outputs) + ' = ' + call
++    new_lines = lines[:ins - 1] + func + lines[ins - 1:first - 1] + [sel_indent + call] + \
++        lines[last:]
++    changes = _Changes(project_root(path, project))
++    changes.set(path, '\n'.join(new_lines))
++    return changes
++
++
++# ----- syntax errors -----
++
++def _compile_error(src):
++    try:
++        with warnings.catch_warnings():
++            warnings.simplefilter('ignore')
++            compile(src, '<sith>', 'exec', dont_inherit=True)
++    except SyntaxError as e:
++        return e
++    except (ValueError, RecursionError, MemoryError, OverflowError) as e:
++        err = SyntaxError(str(e))
++        err.lineno, err.offset = 1, 1
++        return err
++    return None
++
++
++def _error_dict(lines, e):
++    ln = e.lineno or 1
++    ln = max(1, min(ln, len(lines)))
++    col = (e.offset or 1) - 1
++    col = max(0, min(col, len(lines[ln - 1])))
++    el = getattr(e, 'end_lineno', None)
++    ec = getattr(e, 'end_offset', None)
++    if el is None or ec is None or el < 1 or ec < 1 or (el, ec - 1) < (ln, col):
++        el, ec = ln, col
++    else:
++        el = min(el, len(lines))
++        ec = max(0, min(ec - 1, len(lines[el - 1])))
++        if (el, ec) < (ln, col):
++            el, ec = ln, col
++    if (el, ec) == (ln, col) and col < len(lines[ln - 1]):
++        ec = col + 1
++    return {'line': ln, 'column': col, 'until_line': el, 'until_column': ec,
++            'message': e.msg or 'invalid syntax'}
++
++
++def syntax_errors(path):
++    text = read_source(path)
++    lines = text.split('\n')
++    work = text.replace('\0', ' ').split('\n')
++    out = []
++    repaired = set()
++    seen = set()
++    last = 0
++    for _ in range(2 * len(work) + 20):
++        e = _compile_error('\n'.join(work))
++        if e is None:
++            break
++        ln = max(1, min(e.lineno or len(work), len(work)))
++        msg = e.msg or ''
++        spurious = isinstance(e, IndentationError) and 'unexpected indent' in msg and \
++            any(k in repaired for k in range(max(1, ln - 3), ln))
++        key = (ln, msg)
++        if key in seen:
++            break
++        seen.add(key)
++        if not out or (ln > last and not spurious):
++            out.append(_error_dict(lines, e))
++            last = ln
++        # repair the offending line(s) and look for further errors
++        if 'indented block' in msg:
++            m = _OPENER_RE.search(msg)
++            if m and 1 <= int(m.group(1)) <= len(work):
++                k = int(m.group(1))
++                work[k - 1] = _code_part(work[k - 1]).rstrip() + ' pass'
++                repaired.add(k)
++                continue
++        if isinstance(e, IndentationError) and 'unexpected indent' in msg:
++            width = len(_indent_of(work[ln - 1]).expandtabs(8))
++            k = ln
++            while k <= len(work):
++                t = work[k - 1]
++                if t.strip() and len(_indent_of(t).expandtabs(8)) < width:
++                    break
++                work[k - 1] = ''
++                repaired.add(k)
++                k += 1
++            continue
++        if 'never closed' in msg:
++            # drop the whole unterminated bracket group
++            k = ln
++            ind = _indent_of(work[ln - 1])
++            work[ln - 1] = ind + 'pass'
++            repaired.add(ln)
++            k = ln + 1
++            while k <= len(work) and work[k - 1].strip() and \
++                    len(_indent_of(work[k - 1]).expandtabs(8)) > len(ind.expandtabs(8)):
++                work[k - 1] = ''
++                repaired.add(k)
++                k += 1
++            continue
++        line = work[ln - 1]
++        if not line.strip():
++            k = ln - 1
++            while k >= 1 and not work[k - 1].strip():
++                k -= 1
++            if k < 1:
++                break
++            ln = k
++            line = work[ln - 1]
++        ind = _indent_of(line)
++        code = _code_part(line).strip()
++        if code.endswith(':') or _next_indent_deeper(work, ln):
++            repl = ind + 'if True:'
++        else:
++            repl = ind + 'pass'
++        if line == repl or line.strip() in ('pass', 'if True:'):
++            repl = ''
++        work[ln - 1] = repl
++        repaired.add(ln)
++    out.sort(key=lambda d: (d['line'], d['column']))
++    return out
++
++
+ def _parse_int(s, what):
+     try:
+         return int(s)
+@@ -5279,41 +6597,52 @@
+          '       sith.py references <file> <line> <col> [--scope file|project] '
+          '[--project <dir>]\n'
+          '       sith.py search <query> [--project <dir>]\n'
+-         '       sith.py names <file> [--all-scopes] [--project <dir>]\n')
+-
+-_FLAGS = ('--fuzzy', '--follow-imports', '--all-scopes')
++         '       sith.py names <file> [--all-scopes] [--project <dir>]\n'
++         '       sith.py rename <file> <line> <col> --new-name <name> [--diff] '
++         '[--project <dir>]\n'
++         '       sith.py inline <file> <line> <col> [--diff] [--project <dir>]\n'
++         '       sith.py extract-variable <file> <line> <col> --until <line>:<col> '
++         '--name <name> [--diff] [--project <dir>]\n'
++         '       sith.py extract-function <file> <line> <col> --until <line>:<col> '
++         '--name <name> [--diff] [--project <dir>]\n'
++         '       sith.py errors <file>\n')
++
++_FLAGS = ('--fuzzy', '--follow-imports', '--all-scopes', '--diff')
++_OPTIONS = ('--project', '--scope', '--new-name', '--until', '--name')
+ _ARITY = {'complete': 4, 'infer': 4, 'goto': 4, 'signatures': 4, 'references': 4,
+-          'search': 2, 'names': 2}
++          'search': 2, 'names': 2, 'rename': 4, 'inline': 4, 'extract-variable': 4,
++          'extract-function': 4, 'errors': 2}
++_REQUIRED = {'rename': ('--new-name',), 'extract-variable': ('--until', '--name'),
++             'extract-function': ('--until', '--name')}
+ 
+ 
+ def main(argv):
+-    project = None
+-    scope = 'file'
++    opts = {}
+     rest = []
+     i = 0
+     while i < len(argv):
+         a = argv[i]
+-        if a in ('--project', '--scope') and i + 1 < len(argv):
+-            if a == '--project':
+-                project = argv[i + 1]
+-            else:
+-                scope = argv[i + 1]
++        if a in _OPTIONS and i + 1 < len(argv):
++            opts[a] = argv[i + 1]
+             i += 2
+             continue
+-        if a.startswith('--project='):
+-            project = a[len('--project='):]
+-        elif a.startswith('--scope='):
+-            scope = a[len('--scope='):]
++        k, eq, v = a.partition('=')
++        if eq and k in _OPTIONS:
++            opts[k] = v
+         else:
+             rest.append(a)
+         i += 1
++    project = opts.get('--project')
++    scope = opts.get('--scope', 'file')
+     flags = set(a for a in rest if a in _FLAGS)
+     args = [a for a in rest if a not in _FLAGS]
+     if not args or args[0] not in _ARITY or len(args) != _ARITY[args[0]] or \
+-            scope not in ('file', 'project'):
++            scope not in ('file', 'project') or \
++            any(o not in opts for o in _REQUIRED.get(args[0], ())):
+         sys.stderr.write(USAGE)
+         return 1
+     cmd = args[0]
++    diff = '--diff' in flags
+     try:
+         sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))
+         if cmd == 'search':
+@@ -5322,6 +6651,8 @@
+         elif cmd == 'names':
+             res = names(args[1], '--all-scopes' in flags, project)
+             out = {'names': res, 'definitions': res}
++        elif cmd == 'errors':
++            out = {'errors': syntax_errors(args[1])}
+         else:
+             line = _parse_int(args[2], 'line')
+             col = _parse_int(args[3], 'column')
+@@ -5331,13 +6662,27 @@
+                 out = {'signatures': signatures(args[1], line, col, project)}
+             elif cmd == 'references':
+                 out = {'references': references(args[1], line, col, scope, project)}
++            elif cmd == 'rename':
++                out = rename(args[1], line, col, opts['--new-name'], project)
++            elif cmd == 'inline':
++                out = inline(args[1], line, col, project)
++            elif cmd == 'extract-variable':
++                out = extract_variable(args[1], line, col, _parse_until(opts['--until']),
++                                       opts['--name'], project)
++            elif cmd == 'extract-function':
++                out = extract_function(args[1], line, col, _parse_until(opts['--until']),
++                                       opts['--name'], project)
+             else:
+                 out = {'definitions': navigate(args[1], line, col, cmd, project,
+                                                '--follow-imports' in flags)}
++        if isinstance(out, _Changes):
++            text = out.output(diff)
++        else:
++            text = json.dumps(out, separators=(',', ':')) + '\n'
+     except SithError as e:
+         sys.stderr.write('error: %s\n' % e)
+         return 1
+-    sys.stdout.write(json.dumps(out, separators=(',', ':')) + '\n')
++    sys.stdout.write(text)
+     sys.stdout.flush()
+     return 0
+ 
+

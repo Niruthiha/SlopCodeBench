@@ -1,0 +1,633 @@
+
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.16, pytest-9.2.0, pluggy-1.7.0 -- /tmp/uv-cache/archive-v0/tEPLrhuyrcocuXNJ/bin/python
+cachedir: .pytest_cache
+metadata: {'Python': '3.12.16', 'Platform': 'Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41', 'Packages': {'pytest': '9.2.0', 'pluggy': '1.7.0'}, 'Plugins': {'timeout': '2.4.0', 'json-report': '1.5.0', 'metadata': '3.1.1', 'json-ctrf': '0.6.5'}}
+rootdir: /workspace
+configfile: pytest.ini
+plugins: timeout-2.4.0, json-report-1.5.0, metadata-3.1.1, json-ctrf-0.6.5
+timeout: 180.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 73 items
+
+.evaluation_tests/test_checkpoint_1.py::test_recipe_core[naga] PASSED    [  1%]
+.evaluation_tests/test_checkpoint_1.py::test_recipe_core[barrage_l] PASSED [  2%]
+.evaluation_tests/test_checkpoint_1.py::test_recipe_core[fernite_carbide] PASSED [  4%]
+.evaluation_tests/test_checkpoint_1.py::test_recipe_functionality[athanor] PASSED [  5%]
+.evaluation_tests/test_checkpoint_1.py::test_recipe_functionality[azariel] PASSED [  6%]
+.evaluation_tests/test_checkpoint_1.py::test_recipe_functionality[proteus] PASSED [  8%]
+.evaluation_tests/test_checkpoint_1.py::test_materials_sorted_case_insensitive PASSED [  9%]
+.evaluation_tests/test_checkpoint_1.py::test_run_time_rounds_up PASSED   [ 10%]
+.evaluation_tests/test_checkpoint_1.py::test_buildable_column_accuracy PASSED [ 12%]
+.evaluation_tests/test_checkpoint_1.py::test_unpublished_item_error PASSED [ 13%]
+.evaluation_tests/test_checkpoint_1.py::test_case_sensitive_item_name PASSED [ 15%]
+.evaluation_tests/test_checkpoint_1.py::test_nonexistent_item_error PASSED [ 16%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_core[barrage_l-1] PASSED [ 17%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_core[barrage_l-2] PASSED [ 19%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_core[barrage_l-3] PASSED [ 20%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_core[barrage_l-4] PASSED [ 21%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_core[barrage_l-5] PASSED [ 23%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_core[proteus-1] PASSED [ 24%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_core[proteus-5] PASSED [ 26%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_functionality[dual_giga-1] PASSED [ 27%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_functionality[dual_giga-5] PASSED [ 28%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_functionality[redeemer-1] PASSED [ 30%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_functionality[jackdaw-5] FAILED [ 31%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_functionality[tengu-5] PASSED [ 32%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_functionality[valravn-5] PASSED [ 34%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_functionality[subsystem-5] PASSED [ 35%]
+.evaluation_tests/test_checkpoint_2.py::test_default_skill_is_five PASSED [ 36%]
+.evaluation_tests/test_checkpoint_2.py::test_tech_iii_accepts_blueprint_input PASSED [ 38%]
+.evaluation_tests/test_checkpoint_2.py::test_invention_time_rounds_up PASSED [ 39%]
+.evaluation_tests/test_checkpoint_2.py::test_probability_clamps_to_one PASSED [ 41%]
+.evaluation_tests/test_checkpoint_2.py::test_skill_level_zero PASSED     [ 42%]
+.evaluation_tests/test_checkpoint_2.py::test_skill_level_six PASSED      [ 43%]
+.evaluation_tests/test_checkpoint_2.py::test_skill_level_negative PASSED [ 45%]
+.evaluation_tests/test_checkpoint_3.py::test_naga_core[me10] PASSED      [ 46%]
+.evaluation_tests/test_checkpoint_3.py::test_naga_core[me5] PASSED       [ 47%]
+.evaluation_tests/test_checkpoint_3.py::test_naga_core[te20] PASSED      [ 49%]
+.evaluation_tests/test_checkpoint_3.py::test_naga_core[me5_waste] PASSED [ 50%]
+.evaluation_tests/test_checkpoint_3.py::test_naga_core[me10_te20] PASSED [ 52%]
+.evaluation_tests/test_checkpoint_3.py::test_fernite_carbide_te10 FAILED [ 53%]
+.evaluation_tests/test_checkpoint_3.py::test_proteus_me5_waste PASSED    [ 54%]
+.evaluation_tests/test_checkpoint_3.py::test_ark_me5_waste PASSED        [ 56%]
+.evaluation_tests/test_checkpoint_3.py::test_reaction_ignores_me PASSED  [ 57%]
+.evaluation_tests/test_checkpoint_3.py::test_te_rounds_at_seconds_level PASSED [ 58%]
+.evaluation_tests/test_checkpoint_3.py::test_me10_with_display_waste PASSED [ 60%]
+.evaluation_tests/test_checkpoint_3.py::test_reaction_with_display_waste PASSED [ 61%]
+.evaluation_tests/test_checkpoint_3.py::test_me_negative PASSED          [ 63%]
+.evaluation_tests/test_checkpoint_3.py::test_me_eleven PASSED            [ 64%]
+.evaluation_tests/test_checkpoint_3.py::test_te_negative PASSED          [ 65%]
+.evaluation_tests/test_checkpoint_3.py::test_te_odd PASSED               [ 67%]
+.evaluation_tests/test_checkpoint_3.py::test_te_twentytwo PASSED         [ 68%]
+.evaluation_tests/test_checkpoint_4.py::test_plan_core[barrage_l_invention-3] PASSED [ 69%]
+.evaluation_tests/test_checkpoint_4.py::test_plan_core[barrage_l_me10_te20-3] PASSED [ 71%]
+.evaluation_tests/test_checkpoint_4.py::test_functionality[bane-3] PASSED [ 72%]
+.evaluation_tests/test_checkpoint_4.py::test_functionality[bane_invent-3] PASSED [ 73%]
+.evaluation_tests/test_checkpoint_4.py::test_functionality[megathron-3] PASSED [ 75%]
+.evaluation_tests/test_checkpoint_4.py::test_functionality[svipul_l1-1] FAILED [ 76%]
+.evaluation_tests/test_checkpoint_4.py::test_multiword_item_name_with_runs PASSED [ 78%]
+.evaluation_tests/test_checkpoint_4.py::test_config_negative_values PASSED [ 79%]
+.evaluation_tests/test_checkpoint_4.py::test_config_bad_values PASSED    [ 80%]
+.evaluation_tests/test_checkpoint_5.py::test_build_all_core[barrage_l_30d] PASSED [ 82%]
+.evaluation_tests/test_checkpoint_5.py::test_build_all_core[barrage_l_3d] PASSED [ 83%]
+.evaluation_tests/test_checkpoint_5.py::test_build_all_core[megathron_3d] PASSED [ 84%]
+.evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[kronos_invent] FAILED [ 86%]
+.evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[megathron] PASSED [ 87%]
+.evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[megathron_3d] PASSED [ 89%]
+.evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[revelation_10] PASSED [ 90%]
+.evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[revelation_10_3d] FAILED [ 91%]
+.evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[loki_l1_1d] FAILED [ 93%]
+.evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[ion_siege] PASSED [ 94%]
+.evaluation_tests/test_checkpoint_5.py::test_checkpoint4_config_accepted PASSED [ 95%]
+.evaluation_tests/test_checkpoint_5.py::test_split_days_zero_fails PASSED [ 97%]
+.evaluation_tests/test_checkpoint_5.py::test_split_days_negative_fails PASSED [ 98%]
+.evaluation_tests/test_checkpoint_5.py::test_split_days_over_thirty_fails FAILED [100%]
+
+=================================== FAILURES ===================================
+___________________ test_invention_functionality[jackdaw-5] ____________________
+
+case_name = 'jackdaw', skill_level = 5
+entrypoint_argv = ['uv', 'run', 'industry.py']
+sde_dir = PosixPath('/workspace/.evaluation_tests/assets/sde_dir')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize("case_name,skill_level", FUNCTIONALITY_CASES)
+    def test_invention_functionality(case_name, skill_level, entrypoint_argv, sde_dir):
+        """Functionality: Extended invention tests."""
+        case = load_json_case(2, case_name)
+        result = run_command(
+            entrypoint_argv,
+            "invention",
+            case["item_name"],
+            "--sde",
+            str(sde_dir),
+            "--skill",
+            str(skill_level),
+        )
+        assert result.returncode == 0, f"Command failed: {result.stderr}"
+>       actual = parse_invention_output(result.stdout)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.evaluation_tests/test_checkpoint_2.py:101: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.evaluation_tests/conftest.py:229: in parse_invention_output
+    data["probabilities"] = parse_markdown_table(table_text, is_t3=is_t3)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+text = '| Decryptor                       | Probability | Runs | ME | TE |\n|---------------------------------|-------------|...tor               | 41.71       | 20   | 5  | 10 |\n| Symmetry Decryptor              | 37.92       | 22   | 3  | 12 |'
+is_t3 = True
+
+    def parse_markdown_table(text: str, is_t3: bool = False) -> dict | list[dict]:
+        """Parse markdown table into structured data.
+    
+        Args:
+            text: The markdown table text
+            is_t3: If True, keys are "Invented From|Decryptor" for invention tables
+    
+        Returns:
+            For invention tables (is_t3=False with Decryptor column): dict keyed by decryptor
+            For invention tables (is_t3=True): dict keyed by "relic|decryptor"
+            For recipe tables: list of dicts with Item as a field
+        """
+        lines = [
+            line.strip()
+            for line in text.strip().splitlines()
+            if line.strip().startswith("|")
+        ]
+        if len(lines) < 2:
+            return {} if is_t3 else []
+    
+        header = [cell.strip() for cell in lines[0].strip().strip("|").split("|")]
+        data_lines = lines[2:]
+    
+        # Check if this is an invention table (has Decryptor column)
+        is_invention_table = "Decryptor" in header
+    
+        if is_invention_table:
+            result = {}
+            for line in data_lines:
+                if line.strip():
+                    cells = [
+                        cell.strip() for cell in line.strip().strip("|").split("|")
+                    ]
+                    if any(cells):
+                        row = dict(zip(header, cells))
+                        # Convert numeric columns to proper types
+                        if "Probability" in row:
+                            row["Probability"] = float(row["Probability"])
+                        if "Runs" in row:
+                            row["Runs"] = int(row["Runs"])
+                        if "ME" in row:
+                            row["ME"] = int(row["ME"])
+                        if "TE" in row:
+                            row["TE"] = int(row["TE"])
+    
+                        # Build the key and remove key columns from value dict
+                        if is_t3:
+                            key = (
+>                               f"{row.pop('Invented From')}|{row.pop('Decryptor')}"
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^
+                            )
+E                           KeyError: 'Invented From'
+
+.evaluation_tests/conftest.py:127: KeyError
+__________________________ test_fernite_carbide_te10 ___________________________
+
+entrypoint_argv = ['uv', 'run', 'industry.py']
+sde_dir = PosixPath('/workspace/.evaluation_tests/assets/sde_dir')
+
+    @pytest.mark.functionality
+    def test_fernite_carbide_te10(entrypoint_argv, sde_dir):
+        """Functionality: Fernite Carbide reaction with TE=10 (ME doesn't apply to reactions)."""
+        data = load_json_case(3, "fernite_carbide")
+        case = next(c for c in data["cases"] if c["case_id"] == "te10")
+    
+        result = run_command(
+            entrypoint_argv,
+            "recipe",
+            data["item_name"],
+            "--time-efficiency",
+            "10",
+            "--sde",
+            str(sde_dir),
+        )
+        assert result.returncode == 0, f"Command failed: {result.stderr}"
+        actual = parse_item_output(result.stdout)
+>       assert_dict_equal(actual, case["expected"])
+
+.evaluation_tests/test_checkpoint_3.py:76: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = {'item': 'Fernite Carbide (16673)', 'group': 'Material > Composite', 'market_group': 'Manufacture & Research > Materials > Reaction Materials > Advanced Moon Materials', 'tech_level': 'Tech I', ...}
+expected = {'item': 'Fernite Carbide (16673)', 'group': 'Material > Composite', 'market_group': 'Manufacture & Research > Materials > Reaction Materials > Advanced Moon Materials', 'tech_level': 'Tech I', ...}
+msg = '', tolerance = 0.02
+
+    def assert_dict_equal(actual, expected, msg="", tolerance=0.02):
+        """Assert dicts are equal using deepdiff for better error messages.
+    
+        Args:
+            actual: The actual result dict
+            expected: The expected result dict
+            msg: Optional message for assertion failure
+            tolerance: Tolerance for numeric comparisons (default 0.02)
+        """
+        diff = DeepDiff(
+            actual,
+            expected,
+            ignore_order=True,
+            math_epsilon=tolerance,
+            ignore_numeric_type_changes=True,
+        )
+>       assert not diff, f"{msg}\nDiff: {diff}"
+E       AssertionError: 
+E         Diff: {'values_changed': {"root['run_time']": {'new_value': 162, 'old_value': 180}}}
+E       assert not {'values_changed': {"root['run_time']": {'new_value': 162, 'old_value': 180}}}
+
+.evaluation_tests/conftest.py:342: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  deepdiff.diff:diff.py:305 math_epsilon in conjunction with ignore_order=True is only used for flat object comparisons. Custom math_epsilon will not have an effect when comparing nested objects.
+_______________________ test_functionality[svipul_l1-1] ________________________
+
+case_name = 'svipul_l1', invention_skill = 1
+entrypoint_argv = ['uv', 'run', 'industry.py']
+sde_dir = PosixPath('/workspace/.evaluation_tests/assets/sde_dir')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_functionality_svipul_l1_10')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_name,invention_skill",
+        FUNCTIONALITY_CASES,
+    )
+    def test_functionality(
+        case_name, invention_skill, entrypoint_argv, sde_dir, tmp_path
+    ):
+        """Functionality: Extended functionality tests."""
+        expected_materials = load_csv_materials(4, case_name)
+        expected_jobs = load_csv_jobs(4, case_name)
+    
+        config_path = create_config_file(
+            checkpoint=4,
+            path=tmp_path,
+            te_bonus=20,
+            invention_skill=invention_skill,
+        )
+        output_dir = tmp_path / "outputs"
+        output_dir.mkdir()
+    
+        result = run_command(
+            entrypoint_argv,
+            "plan",
+            load_build_string(4, case_name).strip(),
+            "--sde",
+            str(sde_dir),
+            "--config",
+            str(config_path),
+            "--output",
+            str(output_dir),
+        )
+>       assert result.returncode == 0, f"Command failed: {result.stderr}"
+E       AssertionError: Command failed: Error: No published item named 'Svipul 1 Accelerant Decryptor Small Malfunctioning Hull Section' found in SDE
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['uv', 'run', 'industry.py', 'plan', 'Svipul 1 Accelerant Decryptor Small Malfunctioning Hull Section x1', '--sde', '/workspace/.evaluation_tests/assets/sde_dir', '--config', '/tmp/pytest-of-agent/pytest-0/test_functionality_svipul_l1_10/build.yaml', '--output', '/tmp/pytest-of-agent/pytest-0/test_functionality_svipul_l1_10/outputs'], returncode=1, stdout='', stderr="Error: No published item named 'Svipul 1 Accelerant Decryptor Small Malfunctioning Hull Section' found in SDE\n").returncode
+
+.evaluation_tests/test_checkpoint_4.py:127: AssertionError
+_________________ test_build_all_functionality[kronos_invent] __________________
+
+case_name = 'kronos_invent', split_days = 30, invention_skill = 3, timeout = 60
+entrypoint_argv = ['uv', 'run', 'industry.py']
+sde_dir = PosixPath('/workspace/.evaluation_tests/assets/sde_dir')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_build_all_functionality_k0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_name,split_days,invention_skill,timeout",
+        FUNCTIONALITY_CASES,
+        ids=[c[0] for c in FUNCTIONALITY_CASES],
+    )
+    def test_build_all_functionality(
+        case_name,
+        split_days,
+        invention_skill,
+        timeout,
+        entrypoint_argv,
+        sde_dir,
+        tmp_path,
+    ):
+        """Core: Build-all with job splitting."""
+        # Load expected data from CSV files
+        expected_jobs = load_csv_jobs(5, case_name)
+        expected_materials = load_csv_materials(5, case_name)
+        build_string = load_build_string(5, case_name).strip()
+    
+        # Create config and run command
+        config_path = create_config_file(
+            checkpoint=5,
+            path=tmp_path,
+            te_bonus=20,
+            invention_skill=invention_skill,
+            split_days=split_days,
+            component_me=10,
+            component_te=20,
+        )
+        output_dir = tmp_path / "outputs"
+        output_dir.mkdir()
+    
+        result = run_command(
+            entrypoint_argv,
+            "plan",
+            build_string,
+            "--sde",
+            str(sde_dir),
+            "--build-all",
+            "--config",
+            str(config_path),
+            "--output",
+            str(output_dir),
+            timeout=timeout,
+        )
+        assert result.returncode == 0, f"Command failed: {result.stderr}"
+    
+        # Parse and normalize actual output
+        actual_jobs = normalize_csv_jobs(parse_csv_file(output_dir / "jobs.csv"))
+        actual_materials = normalize_csv_materials(
+            parse_csv_file(output_dir / "materials.csv")
+        )
+    
+        # Compare normalized dicts
+>       assert_dict_equal(
+            actual_jobs, expected_jobs, f"Jobs mismatch for {case_name}"
+        )
+
+.evaluation_tests/test_checkpoint_5.py:158: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = {'Auto-Integrity Preservation Seal Blueprint': {1800: {'days': 24.0, 'count': 1}}, 'Caesarium Cadmide Reaction Formula...nt': 1}}, 'Carbon Polymers Reaction Formula': {283: {'days': 28.3, 'count': 11}, 284: {'days': 28.4, 'count': 2}}, ...}
+expected = {'Auto-Integrity Preservation Seal Blueprint': {1800: {'days': 24.0, 'count': 1}}, 'Caesarium Cadmide Reaction Formula...nt': 1}}, 'Carbon Polymers Reaction Formula': {283: {'days': 28.3, 'count': 11}, 284: {'days': 28.4, 'count': 2}}, ...}
+msg = 'Jobs mismatch for kronos_invent', tolerance = 0.02
+
+    def assert_dict_equal(actual, expected, msg="", tolerance=0.02):
+        """Assert dicts are equal using deepdiff for better error messages.
+    
+        Args:
+            actual: The actual result dict
+            expected: The expected result dict
+            msg: Optional message for assertion failure
+            tolerance: Tolerance for numeric comparisons (default 0.02)
+        """
+        diff = DeepDiff(
+            actual,
+            expected,
+            ignore_order=True,
+            math_epsilon=tolerance,
+            ignore_numeric_type_changes=True,
+        )
+>       assert not diff, f"{msg}\nDiff: {diff}"
+E       AssertionError: Jobs mismatch for kronos_invent
+E         Diff: {'values_changed': {"root['Photonic Metamaterials Reaction Formula']": {'new_value': {299: {'days': 29.9, 'count': 4}, 300: {'days': 30.0, 'count': 3}}, 'old_value': {262: {'days': 26.2, 'count': 8}}}}}
+E       assert not {'values_changed': {"root['Photonic Metamaterials Reaction Formula']": {'new_value': {299: {'days': 29.9, 'count': 4}, 300: {'days': 30.0, 'count': 3}}, 'old_value': {262: {'days': 26.2, 'count': 8}}}}}
+
+.evaluation_tests/conftest.py:342: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  deepdiff.diff:diff.py:305 math_epsilon in conjunction with ignore_order=True is only used for flat object comparisons. Custom math_epsilon will not have an effect when comparing nested objects.
+________________ test_build_all_functionality[revelation_10_3d] ________________
+
+case_name = 'revelation_10_3d', split_days = 3, invention_skill = 3
+timeout = 120, entrypoint_argv = ['uv', 'run', 'industry.py']
+sde_dir = PosixPath('/workspace/.evaluation_tests/assets/sde_dir')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_build_all_functionality_r1')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_name,split_days,invention_skill,timeout",
+        FUNCTIONALITY_CASES,
+        ids=[c[0] for c in FUNCTIONALITY_CASES],
+    )
+    def test_build_all_functionality(
+        case_name,
+        split_days,
+        invention_skill,
+        timeout,
+        entrypoint_argv,
+        sde_dir,
+        tmp_path,
+    ):
+        """Core: Build-all with job splitting."""
+        # Load expected data from CSV files
+        expected_jobs = load_csv_jobs(5, case_name)
+        expected_materials = load_csv_materials(5, case_name)
+        build_string = load_build_string(5, case_name).strip()
+    
+        # Create config and run command
+        config_path = create_config_file(
+            checkpoint=5,
+            path=tmp_path,
+            te_bonus=20,
+            invention_skill=invention_skill,
+            split_days=split_days,
+            component_me=10,
+            component_te=20,
+        )
+        output_dir = tmp_path / "outputs"
+        output_dir.mkdir()
+    
+        result = run_command(
+            entrypoint_argv,
+            "plan",
+            build_string,
+            "--sde",
+            str(sde_dir),
+            "--build-all",
+            "--config",
+            str(config_path),
+            "--output",
+            str(output_dir),
+            timeout=timeout,
+        )
+        assert result.returncode == 0, f"Command failed: {result.stderr}"
+    
+        # Parse and normalize actual output
+        actual_jobs = normalize_csv_jobs(parse_csv_file(output_dir / "jobs.csv"))
+        actual_materials = normalize_csv_materials(
+            parse_csv_file(output_dir / "materials.csv")
+        )
+    
+        # Compare normalized dicts
+>       assert_dict_equal(
+            actual_jobs, expected_jobs, f"Jobs mismatch for {case_name}"
+        )
+
+.evaluation_tests/test_checkpoint_5.py:158: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = {'Auto-Integrity Preservation Seal Blueprint': {222: {'days': 2.96, 'count': 4}, 223: {'days': 2.97, 'count': 2}}, 'Ax...'count': 1}, 24: {'days': 2.4, 'count': 1}}, 'Caesarium Cadmide Reaction Formula': {2: {'days': 0.2, 'count': 1}}, ...}
+expected = {'Auto-Integrity Preservation Seal Blueprint': {222: {'days': 2.96, 'count': 4}, 223: {'days': 2.97, 'count': 2}}, 'Ax...'count': 1}, 24: {'days': 2.4, 'count': 1}}, 'Caesarium Cadmide Reaction Formula': {2: {'days': 0.2, 'count': 1}}, ...}
+msg = 'Jobs mismatch for revelation_10_3d', tolerance = 0.02
+
+    def assert_dict_equal(actual, expected, msg="", tolerance=0.02):
+        """Assert dicts are equal using deepdiff for better error messages.
+    
+        Args:
+            actual: The actual result dict
+            expected: The expected result dict
+            msg: Optional message for assertion failure
+            tolerance: Tolerance for numeric comparisons (default 0.02)
+        """
+        diff = DeepDiff(
+            actual,
+            expected,
+            ignore_order=True,
+            math_epsilon=tolerance,
+            ignore_numeric_type_changes=True,
+        )
+>       assert not diff, f"{msg}\nDiff: {diff}"
+E       AssertionError: Jobs mismatch for revelation_10_3d
+E         Diff: {'dictionary_item_added': ["root['Carbon Polymers Reaction Formula'][29]", "root['Pressurized Oxidizers Reaction Formula'][29]", "root['Sulfuric Acid Reaction Formula'][29]"], 'dictionary_item_removed': ["root['Carbon Polymers Reaction Formula'][27]", "root['Pressurized Oxidizers Reaction Formula'][27]", "root['Sulfuric Acid Reaction Formula'][27]"], 'values_changed': {"root['Carbon Polymers Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}, "root['Fullerene Intercalated Graphite Reaction Formula']": {'new_value': {29: {'days': 2.9, 'count': 1}, 30: {'days': 3.0, 'count': 1}}, 'old_value': {19: {'days': 1.9, 'count': 1}, 20: {'days': 2.0, 'count': 2}}}, "root['Pressurized Oxidizers Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}, "root['Sulfuric Acid Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}}}
+E       assert not {'dictionary_item_added': ["root['Carbon Polymers Reaction Formula'][29]", "root['Pressurized Oxidizers Reaction Formula'][29]", "root['Sulfuric Acid Reaction Formula'][29]"], 'dictionary_item_removed': ["root['Carbon Polymers Reaction Formula'][27]", "root['Pressurized Oxidizers Reaction Formula'][27]", "root['Sulfuric Acid Reaction Formula'][27]"], 'values_changed': {"root['Carbon Polymers Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}, "root['Fullerene Intercalated Graphite Reaction Formula']": {'new_value': {29: {'days': 2.9, 'count': 1}, 30: {'days': 3.0, 'count': 1}}, 'old_value': {19: {'days': 1.9, 'count': 1}, 20: {'days': 2.0, 'count': 2}}}, "root['Pressurized Oxidizers Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}, "root['Sulfuric Acid Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}}}
+
+.evaluation_tests/conftest.py:342: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  deepdiff.diff:diff.py:305 math_epsilon in conjunction with ignore_order=True is only used for flat object comparisons. Custom math_epsilon will not have an effect when comparing nested objects.
+___________________ test_build_all_functionality[loki_l1_1d] ___________________
+
+case_name = 'loki_l1_1d', split_days = 1, invention_skill = 1, timeout = 60
+entrypoint_argv = ['uv', 'run', 'industry.py']
+sde_dir = PosixPath('/workspace/.evaluation_tests/assets/sde_dir')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_build_all_functionality_l0')
+
+    @pytest.mark.functionality
+    @pytest.mark.parametrize(
+        "case_name,split_days,invention_skill,timeout",
+        FUNCTIONALITY_CASES,
+        ids=[c[0] for c in FUNCTIONALITY_CASES],
+    )
+    def test_build_all_functionality(
+        case_name,
+        split_days,
+        invention_skill,
+        timeout,
+        entrypoint_argv,
+        sde_dir,
+        tmp_path,
+    ):
+        """Core: Build-all with job splitting."""
+        # Load expected data from CSV files
+        expected_jobs = load_csv_jobs(5, case_name)
+        expected_materials = load_csv_materials(5, case_name)
+        build_string = load_build_string(5, case_name).strip()
+    
+        # Create config and run command
+        config_path = create_config_file(
+            checkpoint=5,
+            path=tmp_path,
+            te_bonus=20,
+            invention_skill=invention_skill,
+            split_days=split_days,
+            component_me=10,
+            component_te=20,
+        )
+        output_dir = tmp_path / "outputs"
+        output_dir.mkdir()
+    
+        result = run_command(
+            entrypoint_argv,
+            "plan",
+            build_string,
+            "--sde",
+            str(sde_dir),
+            "--build-all",
+            "--config",
+            str(config_path),
+            "--output",
+            str(output_dir),
+            timeout=timeout,
+        )
+        assert result.returncode == 0, f"Command failed: {result.stderr}"
+    
+        # Parse and normalize actual output
+        actual_jobs = normalize_csv_jobs(parse_csv_file(output_dir / "jobs.csv"))
+        actual_materials = normalize_csv_materials(
+            parse_csv_file(output_dir / "materials.csv")
+        )
+    
+        # Compare normalized dicts
+>       assert_dict_equal(
+            actual_jobs, expected_jobs, f"Jobs mismatch for {case_name}"
+        )
+
+.evaluation_tests/test_checkpoint_5.py:158: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = {'C3-FTM Acid Reaction Formula': {9: {'days': 0.9, 'count': 62}}, 'Carbon-86 Epoxy Resin Reaction Formula': {8: {'days... {200: {'days': 0.89, 'count': 4}}, 'Emergent Neurovisual Interface Blueprint': {200: {'days': 0.89, 'count': 1}}, ...}
+expected = {'C3-FTM Acid Reaction Formula': {9: {'days': 0.9, 'count': 2}, 10: {'days': 1.0, 'count': 54}}, 'Carbon-86 Epoxy Resi... {200: {'days': 0.89, 'count': 4}}, 'Emergent Neurovisual Interface Blueprint': {200: {'days': 0.89, 'count': 1}}, ...}
+msg = 'Jobs mismatch for loki_l1_1d', tolerance = 0.02
+
+    def assert_dict_equal(actual, expected, msg="", tolerance=0.02):
+        """Assert dicts are equal using deepdiff for better error messages.
+    
+        Args:
+            actual: The actual result dict
+            expected: The expected result dict
+            msg: Optional message for assertion failure
+            tolerance: Tolerance for numeric comparisons (default 0.02)
+        """
+        diff = DeepDiff(
+            actual,
+            expected,
+            ignore_order=True,
+            math_epsilon=tolerance,
+            ignore_numeric_type_changes=True,
+        )
+>       assert not diff, f"{msg}\nDiff: {diff}"
+E       AssertionError: Jobs mismatch for loki_l1_1d
+E         Diff: {'dictionary_item_added': ["root['C3-FTM Acid Reaction Formula'][10]", "root['Fullerene Intercalated Graphite Reaction Formula'][10]", "root['Fulleroferrocene Reaction Formula'][10]", "root['Lanthanum Metallofullerene Reaction Formula'][10]", "root['Methanofullerene Reaction Formula'][10]", "root['PPD Fullerene Fibers Reaction Formula'][10]", "root['Scandium Metallofullerene Reaction Formula'][10]"], 'dictionary_item_removed': ["root['Fullerene Intercalated Graphite Reaction Formula'][8]", "root['Fulleroferrocene Reaction Formula'][8]", "root['Methanofullerene Reaction Formula'][8]", "root['PPD Fullerene Fibers Reaction Formula'][8]", "root['Scandium Metallofullerene Reaction Formula'][8]"], 'values_changed': {"root['C3-FTM Acid Reaction Formula']['number:9.000000000000']['count']": {'new_value': 2, 'old_value': 62}, "root['Carbon-86 Epoxy Resin Reaction Formula']": {'new_value': {10: {'days': 1.0, 'count': 25}}, 'old_value': {8: {'days': 0.8, 'count': 2}, 9: {'days': 0.9, 'count': 26}}}, "root['Fullerene Intercalated Graphite Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 16}, "root['Fulleroferrocene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 16}, "root['Lanthanum Metallofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 3, 'old_value': 13}, "root['Methanofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 6}, "root['PPD Fullerene Fibers Reaction Formula']['number:9.000000000000']['count']": {'new_value': 3, 'old_value': 11}, "root['Scandium Metallofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 1, 'old_value': 27}}}
+E       assert not {'dictionary_item_added': ["root['C3-FTM Acid Reaction Formula'][10]", "root['Fullerene Intercalated Graphite Reaction Formula'][10]", "root['Fulleroferrocene Reaction Formula'][10]", "root['Lanthanum Metallofullerene Reaction Formula'][10]", "root['Methanofullerene Reaction Formula'][10]", "root['PPD Fullerene Fibers Reaction Formula'][10]", "root['Scandium Metallofullerene Reaction Formula'][10]"], 'dictionary_item_removed': ["root['Fullerene Intercalated Graphite Reaction Formula'][8]", "root['Fulleroferrocene Reaction Formula'][8]", "root['Methanofullerene Reaction Formula'][8]", "root['PPD Fullerene Fibers Reaction Formula'][8]", "root['Scandium Metallofullerene Reaction Formula'][8]"], 'values_changed': {"root['C3-FTM Acid Reaction Formula']['number:9.000000000000']['count']": {'new_value': 2, 'old_value': 62}, "root['Carbon-86 Epoxy Resin Reaction Formula']": {'new_value': {10: {'days': 1.0, 'count': 25}}, 'old_value': {8: {'days': 0.8, 'count': 2}, 9: {'days': 0.9, 'count': 26}}}, "root['Fullerene Intercalated Graphite Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 16}, "root['Fulleroferrocene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 16}, "root['Lanthanum Metallofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 3, 'old_value': 13}, "root['Methanofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 6}, "root['PPD Fullerene Fibers Reaction Formula']['number:9.000000000000']['count']": {'new_value': 3, 'old_value': 11}, "root['Scandium Metallofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 1, 'old_value': 27}}}
+
+.evaluation_tests/conftest.py:342: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  deepdiff.diff:diff.py:305 math_epsilon in conjunction with ignore_order=True is only used for flat object comparisons. Custom math_epsilon will not have an effect when comparing nested objects.
+______________________ test_split_days_over_thirty_fails _______________________
+
+entrypoint_argv = ['uv', 'run', 'industry.py']
+sde_dir = PosixPath('/workspace/.evaluation_tests/assets/sde_dir')
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_split_days_over_thirty_fa0')
+
+    @pytest.mark.error
+    def test_split_days_over_thirty_fails(entrypoint_argv, sde_dir, tmp_path):
+        """Error: split_days=31 should fail with clear error."""
+        config_path = create_config_file(
+            checkpoint=5,
+            path=tmp_path,
+            te_bonus=20,
+            invention_skill=3,
+            split_days=31,
+        )
+        output_dir = tmp_path / "outputs"
+        output_dir.mkdir()
+    
+        result = run_command(
+            entrypoint_argv,
+            "plan",
+            "Barrage L 10 None x10",
+            "--sde",
+            str(sde_dir),
+            "--build-all",
+            "--config",
+            str(config_path),
+            "--output",
+            str(output_dir),
+        )
+>       assert result.returncode != 0, "Expected error for split_days=31"
+E       AssertionError: Expected error for split_days=31
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['uv', 'run', 'industry.py', 'plan', 'Barrage L 10 None x10', '--sde', '/workspace/.evaluation_tests/assets/sde_dir', '--build-all', '--config', '/tmp/pytest-of-agent/pytest-0/test_split_days_over_thirty_fa0/build.yaml', '--output', '/tmp/pytest-of-agent/pytest-0/test_split_days_over_thirty_fa0/outputs'], returncode=0, stdout='', stderr='').returncode
+
+.evaluation_tests/test_checkpoint_5.py:284: AssertionError
+--------------------------------- JSON report ----------------------------------
+report saved to: .scbench/pytest-report.json
+=========================== short test summary info ============================
+FAILED .evaluation_tests/test_checkpoint_2.py::test_invention_functionality[jackdaw-5] - KeyError: 'Invented From'
+FAILED .evaluation_tests/test_checkpoint_3.py::test_fernite_carbide_te10 - AssertionError: 
+  Diff: {'values_changed': {"root['run_time']": {'new_value': 162, 'old_value': 180}}}
+assert not {'values_changed': {"root['run_time']": {'new_value': 162, 'old_value': 180}}}
+FAILED .evaluation_tests/test_checkpoint_4.py::test_functionality[svipul_l1-1] - AssertionError: Command failed: Error: No published item named 'Svipul 1 Accelerant Decryptor Small Malfunctioning Hull Section' found in SDE
+  
+assert 1 == 0
+ +  where 1 = CompletedProcess(args=['uv', 'run', 'industry.py', 'plan', 'Svipul 1 Accelerant Decryptor Small Malfunctioning Hull Section x1', '--sde', '/workspace/.evaluation_tests/assets/sde_dir', '--config', '/tmp/pytest-of-agent/pytest-0/test_functionality_svipul_l1_10/build.yaml', '--output', '/tmp/pytest-of-agent/pytest-0/test_functionality_svipul_l1_10/outputs'], returncode=1, stdout='', stderr="Error: No published item named 'Svipul 1 Accelerant Decryptor Small Malfunctioning Hull Section' found in SDE\n").returncode
+FAILED .evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[kronos_invent] - AssertionError: Jobs mismatch for kronos_invent
+  Diff: {'values_changed': {"root['Photonic Metamaterials Reaction Formula']": {'new_value': {299: {'days': 29.9, 'count': 4}, 300: {'days': 30.0, 'count': 3}}, 'old_value': {262: {'days': 26.2, 'count': 8}}}}}
+assert not {'values_changed': {"root['Photonic Metamaterials Reaction Formula']": {'new_value': {299: {'days': 29.9, 'count': 4}, 300: {'days': 30.0, 'count': 3}}, 'old_value': {262: {'days': 26.2, 'count': 8}}}}}
+FAILED .evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[revelation_10_3d] - AssertionError: Jobs mismatch for revelation_10_3d
+  Diff: {'dictionary_item_added': ["root['Carbon Polymers Reaction Formula'][29]", "root['Pressurized Oxidizers Reaction Formula'][29]", "root['Sulfuric Acid Reaction Formula'][29]"], 'dictionary_item_removed': ["root['Carbon Polymers Reaction Formula'][27]", "root['Pressurized Oxidizers Reaction Formula'][27]", "root['Sulfuric Acid Reaction Formula'][27]"], 'values_changed': {"root['Carbon Polymers Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}, "root['Fullerene Intercalated Graphite Reaction Formula']": {'new_value': {29: {'days': 2.9, 'count': 1}, 30: {'days': 3.0, 'count': 1}}, 'old_value': {19: {'days': 1.9, 'count': 1}, 20: {'days': 2.0, 'count': 2}}}, "root['Pressurized Oxidizers Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}, "root['Sulfuric Acid Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}}}
+assert not {'dictionary_item_added': ["root['Carbon Polymers Reaction Formula'][29]", "root['Pressurized Oxidizers Reaction Formula'][29]", "root['Sulfuric Acid Reaction Formula'][29]"], 'dictionary_item_removed': ["root['Carbon Polymers Reaction Formula'][27]", "root['Pressurized Oxidizers Reaction Formula'][27]", "root['Sulfuric Acid Reaction Formula'][27]"], 'values_changed': {"root['Carbon Polymers Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}, "root['Fullerene Intercalated Graphite Reaction Formula']": {'new_value': {29: {'days': 2.9, 'count': 1}, 30: {'days': 3.0, 'count': 1}}, 'old_value': {19: {'days': 1.9, 'count': 1}, 20: {'days': 2.0, 'count': 2}}}, "root['Pressurized Oxidizers Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}, "root['Sulfuric Acid Reaction Formula']['number:28.000000000000']['count']": {'new_value': 9, 'old_value': 14}}}
+FAILED .evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[loki_l1_1d] - AssertionError: Jobs mismatch for loki_l1_1d
+  Diff: {'dictionary_item_added': ["root['C3-FTM Acid Reaction Formula'][10]", "root['Fullerene Intercalated Graphite Reaction Formula'][10]", "root['Fulleroferrocene Reaction Formula'][10]", "root['Lanthanum Metallofullerene Reaction Formula'][10]", "root['Methanofullerene Reaction Formula'][10]", "root['PPD Fullerene Fibers Reaction Formula'][10]", "root['Scandium Metallofullerene Reaction Formula'][10]"], 'dictionary_item_removed': ["root['Fullerene Intercalated Graphite Reaction Formula'][8]", "root['Fulleroferrocene Reaction Formula'][8]", "root['Methanofullerene Reaction Formula'][8]", "root['PPD Fullerene Fibers Reaction Formula'][8]", "root['Scandium Metallofullerene Reaction Formula'][8]"], 'values_changed': {"root['C3-FTM Acid Reaction Formula']['number:9.000000000000']['count']": {'new_value': 2, 'old_value': 62}, "root['Carbon-86 Epoxy Resin Reaction Formula']": {'new_value': {10: {'days': 1.0, 'count': 25}}, 'old_value': {8: {'days': 0.8, 'count': 2}, 9: {'days': 0.9, 'count': 26}}}, "root['Fullerene Intercalated Graphite Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 16}, "root['Fulleroferrocene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 16}, "root['Lanthanum Metallofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 3, 'old_value': 13}, "root['Methanofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 6}, "root['PPD Fullerene Fibers Reaction Formula']['number:9.000000000000']['count']": {'new_value': 3, 'old_value': 11}, "root['Scandium Metallofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 1, 'old_value': 27}}}
+assert not {'dictionary_item_added': ["root['C3-FTM Acid Reaction Formula'][10]", "root['Fullerene Intercalated Graphite Reaction Formula'][10]", "root['Fulleroferrocene Reaction Formula'][10]", "root['Lanthanum Metallofullerene Reaction Formula'][10]", "root['Methanofullerene Reaction Formula'][10]", "root['PPD Fullerene Fibers Reaction Formula'][10]", "root['Scandium Metallofullerene Reaction Formula'][10]"], 'dictionary_item_removed': ["root['Fullerene Intercalated Graphite Reaction Formula'][8]", "root['Fulleroferrocene Reaction Formula'][8]", "root['Methanofullerene Reaction Formula'][8]", "root['PPD Fullerene Fibers Reaction Formula'][8]", "root['Scandium Metallofullerene Reaction Formula'][8]"], 'values_changed': {"root['C3-FTM Acid Reaction Formula']['number:9.000000000000']['count']": {'new_value': 2, 'old_value': 62}, "root['Carbon-86 Epoxy Resin Reaction Formula']": {'new_value': {10: {'days': 1.0, 'count': 25}}, 'old_value': {8: {'days': 0.8, 'count': 2}, 9: {'days': 0.9, 'count': 26}}}, "root['Fullerene Intercalated Graphite Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 16}, "root['Fulleroferrocene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 16}, "root['Lanthanum Metallofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 3, 'old_value': 13}, "root['Methanofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 8, 'old_value': 6}, "root['PPD Fullerene Fibers Reaction Formula']['number:9.000000000000']['count']": {'new_value': 3, 'old_value': 11}, "root['Scandium Metallofullerene Reaction Formula']['number:9.000000000000']['count']": {'new_value': 1, 'old_value': 27}}}
+FAILED .evaluation_tests/test_checkpoint_5.py::test_split_days_over_thirty_fails - AssertionError: Expected error for split_days=31
+assert 0 != 0
+ +  where 0 = CompletedProcess(args=['uv', 'run', 'industry.py', 'plan', 'Barrage L 10 None x10', '--sde', '/workspace/.evaluation_tests/assets/sde_dir', '--build-all', '--config', '/tmp/pytest-of-agent/pytest-0/test_split_days_over_thirty_fa0/build.yaml', '--output', '/tmp/pytest-of-agent/pytest-0/test_split_days_over_thirty_fa0/outputs'], returncode=0, stdout='', stderr='').returncode
+=================== 7 failed, 66 passed in 113.23s (0:01:53) ===================

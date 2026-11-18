@@ -1,0 +1,1 @@
+- [MTL Part 2 decisions](mtl-part2-decisions.md) — ambiguous-spec choices (strict no-op, param typing, lag k errors, calc staging)

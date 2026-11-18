@@ -1,0 +1,1328 @@
+{
+ "packet": "P19",
+ "checkpoints": [
+  {
+   "ck": 1,
+   "V": {
+    "present": [
+     "V1",
+     "V8"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 11,
+       "line": null,
+       "quote": "mkdir -p /tmp/t && cd /tmp/t && cat > ev.csv <<'EOF'"
+      },
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 12,
+       "line": null,
+       "quote": "cd /tmp/t; P=/workspace/.venv/bin/python; M=/workspace/mtl.py"
+      },
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 13,
+       "line": null,
+       "quote": "cd /tmp/t; P=/workspace/.venv/bin/python; M=/workspace/mtl.py cat > f.csv <<'EOF'"
+      }
+     ],
+     "V8": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 2,
+       "line": null,
+       "quote": "Write /workspace/DESIGN.md (3745 chars, 50 lines)"
+      }
+     ]
+    }
+   },
+   "summary": "Wrote DESIGN.md, then built mtl.py plus an mtl_engine package with one module per stage. Checked by hand-running the CLI on throwaway CSV/DSL files in /tmp/t covering features, error paths and exit codes; no test suite."
+  },
+  {
+   "ck": 2,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "mtl_engine/lexer.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 4,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/lexer.py mtl_engine/ast_nodes.py mtl_engine/parser.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/ast_nodes.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 4,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/lexer.py mtl_engine/ast_nodes.py mtl_engine/parser.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/parser.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 4,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/lexer.py mtl_engine/ast_nodes.py mtl_engine/parser.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/functions.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 5,
+        "line": null,
+        "quote": "cat mtl_engine/typecheck.py mtl_engine/evaluator.py mtl_engine/functions.py mtl_engine/aggregates.py mtl_engine/pipeline.py mtl_engine/output.py mtl_engine/csv_loader.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/typecheck.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 5,
+        "line": null,
+        "quote": "cat mtl_engine/typecheck.py mtl_engine/evaluator.py mtl_engine/functions.py mtl_engine/aggregates.py mtl_engine/pipeline.py mtl_engine/output.py mtl_engine/csv_loader.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/evaluator.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 5,
+        "line": null,
+        "quote": "cat mtl_engine/typecheck.py mtl_engine/evaluator.py mtl_engine/functions.py mtl_engine/aggregates.py mtl_engine/pipeline.py mtl_engine/output.py mtl_engine/csv_loader.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/pipeline.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 5,
+        "line": null,
+        "quote": "cat mtl_engine/typecheck.py mtl_engine/evaluator.py mtl_engine/functions.py mtl_engine/aggregates.py mtl_engine/pipeline.py mtl_engine/output.py mtl_engine/csv_loader.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/output.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 5,
+        "line": null,
+        "quote": "cat mtl_engine/typecheck.py mtl_engine/evaluator.py mtl_engine/functions.py mtl_engine/aggregates.py mtl_engine/pipeline.py mtl_engine/output.py mtl_engine/csv_loader.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/csv_loader.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 5,
+        "line": null,
+        "quote": "cat mtl_engine/typecheck.py mtl_engine/evaluator.py mtl_engine/functions.py mtl_engine/aggregates.py mtl_engine/pipeline.py mtl_engine/output.py mtl_engine/csv_loader.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/dtypes.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 2,
+        "line": null,
+        "quote": "cat mtl.py mtl_engine/__init__.py mtl_engine/errors.py mtl_engine/cli.py mtl_engine/dtypes.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/cli.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 2,
+        "line": null,
+        "quote": "cat mtl.py mtl_engine/__init__.py mtl_engine/errors.py mtl_engine/cli.py mtl_engine/dtypes.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": 2,
+       "step": null,
+       "line": 1390,
+       "quote": "@@ -0,0 +1,117 @@"
+      },
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": 2,
+       "step": null,
+       "line": 936,
+       "quote": "+class _DocumentParser:"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 16,
+       "line": null,
+       "quote": "Write /workspace/mtl_engine/schema.py (4038 chars, 118 lines)"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": 2,
+       "step": null,
+       "line": 515,
+       "quote": "+def evaluate(expr, row, frame=None):"
+      },
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": 2,
+       "step": null,
+       "line": 336,
+       "quote": "+def load_csv(path, ts_parser, columns=None):"
+      },
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": 2,
+       "step": null,
+       "line": 1543,
+       "quote": "+def check_program(program, schema, params=None):"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 5,
+       "line": null,
+       "quote": "cat mtl_engine/typecheck.py mtl_engine/evaluator.py mtl_engine/functions.py mtl_engine/aggregates.py mtl_engine/pipeline.py mtl_engine/output.py mtl_engine/csv_loader.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R3",
+      "what": "Moved duplicated int/float/bool text parsing into shared dtypes.looks_like/parse_text helpers",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 20,
+        "line": null,
+        "quote": "The int/float/bool text parsing is now duplicated across three modules; I'll consolidate it into `dtypes.py`."
+       },
+       {
+        "src": "diffs/checkpoint_2.patch",
+        "ck": 2,
+        "step": null,
+        "line": 477,
+        "quote": "+def parse_text(text, t):"
+       },
+       {
+        "src": "diffs/checkpoint_2.patch",
+        "ck": 2,
+        "step": null,
+        "line": 438,
+        "quote": "-def _parse_float(value):"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V5",
+     "V6",
+     "V7"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 28,
+       "line": null,
+       "quote": "mkdir -p /tmp/tcases && cat > /tmp/tcases/run_cases.py <<'PYEOF'"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 29,
+       "line": null,
+       "quote": "cat > /tmp/tcases/run_ok.py <<'PYEOF'"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 26,
+       "line": null,
+       "quote": "The spec's example output shape matches."
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 27,
+       "line": null,
+       "quote": "Now the second spec example (infix `starts_with`, `extends`, overrides), plus a regression check against the Part 1 baseline."
+      }
+     ],
+     "V6": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 31,
+       "line": null,
+       "quote": "compiled mtl.py mtl_engine requirements.txt"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 7,
+       "line": null,
+       "quote": "cp -r /workspace /tmp/part1_baseline"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 30,
+       "line": null,
+       "quote": "Now a broader Part 1 regression comparison against the untouched baseline (stdout, stderr, and exit codes)."
+      }
+     ]
+    }
+   },
+   "summary": "Read all modules wholesale, then added schema/params/casts modules and edited parser, typechecker, evaluator, pipeline, CLI. Checked with /tmp case scripts, both spec examples, an ast/compile pass and a diff against a saved Part 1 copy."
+  },
+  {
+   "ck": 3,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "mtl_engine/cli.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat mtl.py mtl_engine/cli.py mtl_engine/csv_loader.py mtl_engine/errors.py mtl_engine/pipeline.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/csv_loader.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat mtl.py mtl_engine/cli.py mtl_engine/csv_loader.py mtl_engine/errors.py mtl_engine/pipeline.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/pipeline.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat mtl.py mtl_engine/cli.py mtl_engine/csv_loader.py mtl_engine/errors.py mtl_engine/pipeline.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/aggregates.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 4,
+        "line": null,
+        "quote": "cd mtl_engine && cat dtypes.py casts.py timeutil.py evaluator.py functions.py aggregates.py output.py params.py schema.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/typecheck.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 5,
+        "line": null,
+        "quote": "cat typecheck.py ast_nodes.py && sed -n 1,80p parser.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 11,
+       "line": null,
+       "quote": "Write /workspace/mtl_engine/loader.py (18007 chars, 517 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 8,
+       "line": null,
+       "quote": "Write /workspace/mtl_engine/inputs.py (3445 chars, 109 lines)"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 13,
+       "line": null,
+       "quote": "def run(program, records, schema_calcs=(), row_schema=None, sink=None):"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 4,
+       "line": null,
+       "quote": "cd mtl_engine && cat dtypes.py casts.py timeutil.py evaluator.py functions.py aggregates.py output.py params.py schema.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "New multi-format loader calls existing dtypes.parse_text/looks_like for text-to-type conversion",
+      "evidence": [
+       {
+        "src": "code/checkpoint_3/mtl_engine/loader.py",
+        "ck": 3,
+        "step": null,
+        "line": 331,
+        "quote": "return dtypes.parse_text(text, ftype)"
+       },
+       {
+        "src": "code/checkpoint_3/mtl_engine/loader.py",
+        "ck": 3,
+        "step": null,
+        "line": 232,
+        "quote": "if all(dtypes.looks_like(v, t) for v in present):"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V4",
+     "V5"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 16,
+       "line": null,
+       "quote": "mkdir -p /tmp/t/data/sub /tmp/t/data/pq && cd /tmp/t && cat > data/a.csv <<'EOF'"
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 21,
+       "line": null,
+       "quote": "cd /tmp/t && M=/workspace/mtl.py; P=/workspace/.venv/bin/python"
+      }
+     ],
+     "V4": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 7,
+       "line": null,
+       "quote": "Python's csv reader recovers after a malformed record, so per-row reporting works."
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 14,
+       "line": null,
+       "quote": "Now let me build test data (CSV, gz, TSV, Parquet, messy rows) and run the spec example."
+      }
+     ]
+    }
+   },
+   "summary": "Read the package, added inputs, badrecords and a new loader (replacing csv_loader), and rewired pipeline/CLI. Probed stdlib csv recovery, then hand-ran mixed CSV/TSV.gz/Parquet fixtures in /tmp/t, including the spec example."
+  },
+  {
+   "ck": 4,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "mtl_engine/cli.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 2,
+        "line": null,
+        "quote": "cat mtl_engine/cli.py mtl_engine/errors.py mtl_engine/ast_nodes.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/errors.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 2,
+        "line": null,
+        "quote": "cat mtl_engine/cli.py mtl_engine/errors.py mtl_engine/ast_nodes.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/ast_nodes.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 2,
+        "line": null,
+        "quote": "cat mtl_engine/cli.py mtl_engine/errors.py mtl_engine/ast_nodes.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/lexer.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 3,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/lexer.py mtl_engine/parser.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/parser.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 3,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/lexer.py mtl_engine/parser.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/typecheck.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 4,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/typecheck.py mtl_engine/dtypes.py mtl_engine/schema.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/pipeline.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 5,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/pipeline.py mtl_engine/inputs.py mtl_engine/loader.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/loader.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 5,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/pipeline.py mtl_engine/inputs.py mtl_engine/loader.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "yes",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 14,
+       "line": null,
+       "quote": "Write /workspace/mtl_engine/ingest.py (18736 chars, 478 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 20,
+       "line": null,
+       "quote": "Write /workspace/mtl_engine/joins.py (13632 chars, 355 lines)"
+      }
+     ],
+     "cross_internal": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 15,
+       "line": null,
+       "quote": "def _scan(directory, recursive): return inputs._scan(directory, recursive)"
+      },
+      {
+       "src": "code/checkpoint_4/mtl_engine/ingest.py",
+       "ck": 4,
+       "step": null,
+       "line": 466,
+       "quote": "return inputs.format_from_name(name) is not None or not inputs._has_extension(name)"
+      }
+     ],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_4.patch",
+       "ck": 4,
+       "step": null,
+       "line": 13,
+       "quote": "+    def __init__(self, name, line, qualifier=None):"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 6,
+       "line": null,
+       "quote": "cd /workspace; cat mtl_engine/evaluator.py mtl_engine/casts.py mtl_engine/badrecords.py mtl_engine/params.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R3",
+      "what": "Split transform_rows out of pipeline.prepare_rows so join with-blocks and main pipeline share it",
+      "evidence": [
+       {
+        "src": "code/checkpoint_4/mtl_engine/pipeline.py",
+        "ck": 4,
+        "step": null,
+        "line": 50,
+        "quote": "def transform_rows(records, calcs, row_ops, sink=None):"
+       },
+       {
+        "src": "code/checkpoint_4/mtl_engine/joins.py",
+        "ck": 4,
+        "step": null,
+        "line": 261,
+        "quote": "rows = transform_rows(rows, calcs, block.filters, sink)"
+       }
+      ]
+     },
+     {
+      "code": "R3",
+      "what": "Factored shared CLI setup into _setup used by legacy and ingest paths",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 28,
+        "line": null,
+        "quote": "fixing that, and deduplicating the setup code."
+       },
+       {
+        "src": "code/checkpoint_4/mtl_engine/cli.py",
+        "ck": 4,
+        "step": null,
+        "line": 90,
+        "quote": "def _setup(args):"
+       }
+      ]
+     },
+     {
+      "code": "R2",
+      "what": "ingest._expand_one re-implements inputs.resolve directory/glob expansion for config sources",
+      "evidence": [
+       {
+        "src": "code/checkpoint_4/mtl_engine/ingest.py",
+        "ck": 4,
+        "step": null,
+        "line": 438,
+        "quote": "def _expand_one(pattern, source):"
+       },
+       {
+        "src": "code/checkpoint_3/mtl_engine/inputs.py",
+        "ck": 3,
+        "step": null,
+        "line": 43,
+        "quote": "def resolve(patterns, recursive=False, forced=AUTO):"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V5",
+     "V7"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 22,
+       "line": null,
+       "quote": "mkdir -p /tmp/t4/data/web/2024 /tmp/t4/data/pos && cd /tmp/t4"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 23,
+       "line": null,
+       "quote": "cd /tmp/t4; PY=/workspace/.venv/bin/python; M=/workspace/mtl.py"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 22,
+       "line": null,
+       "quote": "The spec example works end to end (hand-verified: NYC/PROMO-A pairs give 32.0 / 13.0)."
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 23,
+       "line": null,
+       "quote": "Next: chained joins, `_`, join aliases, JSON config, no-`sources` mode, and a regression check of the old `--input` mode."
+      }
+     ]
+    }
+   },
+   "summary": "Read all modules, added ingest-config and joins modules, extended parser/AST/loader/CLI. Checked on /tmp/t4 fixtures mirroring the spec example, join-type and error variants, and old --input mode."
+  },
+  {
+   "ck": 5,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "mtl_engine/errors.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 2,
+        "line": null,
+        "quote": "cat mtl.py; cat mtl_engine/cli.py mtl_engine/errors.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/cli.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 2,
+        "line": null,
+        "quote": "cat mtl.py; cat mtl_engine/cli.py mtl_engine/errors.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/parser.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 3,
+        "line": null,
+        "quote": "grep -rn -i \"udf\" mtl_engine/*.py | head -30; cat mtl_engine/parser.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/ast_nodes.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 4,
+        "line": null,
+        "quote": "cat mtl_engine/lexer.py mtl_engine/ast_nodes.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/loader.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 7,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/loader.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/evaluator.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 9,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/functions.py mtl_engine/evaluator.py mtl_engine/typecheck.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/typecheck.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 9,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/functions.py mtl_engine/evaluator.py mtl_engine/typecheck.py"
+       }
+      ]
+     },
+     {
+      "place": "mtl_engine/joins.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 10,
+        "line": null,
+        "quote": "cd /workspace; cat mtl_engine/joins.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 19,
+       "line": null,
+       "quote": "Write /workspace/mtl_engine/state.py (13259 chars, 356 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 15,
+       "line": null,
+       "quote": "Write /workspace/mtl_engine/udfs.py (9855 chars, 237 lines)"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": 5,
+       "step": null,
+       "line": 216,
+       "quote": "+def _run_ingest(run_ctx, program):"
+      },
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": 5,
+       "step": null,
+       "line": 443,
+       "quote": "+def _parse_delimited(path, text, delimiter, file_format):"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 8,
+       "line": null,
+       "quote": "cd /workspace; cat mtl_engine/pipeline.py mtl_engine/output.py mtl_engine/badrecords.py mtl_engine/params.py mtl_engine/timeutil.py mtl_engine/aggregates.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "state.py dropped its own wrapper and calls existing timeutil.format_utc",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 20,
+        "line": null,
+        "quote": "from .timeutil import format_utc"
+       },
+       {
+        "src": "code/checkpoint_5/mtl_engine/state.py",
+        "ck": 5,
+        "step": null,
+        "line": 24,
+        "quote": "from .timeutil import format_utc"
+       }
+      ]
+     },
+     {
+      "code": "R1",
+      "what": "state.py opens files via existing loader.open_source",
+      "evidence": [
+       {
+        "src": "code/checkpoint_5/mtl_engine/state.py",
+        "ck": 5,
+        "step": null,
+        "line": 224,
+        "quote": "opened = loader.open_source(input_file)"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V6",
+     "V7"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 24,
+       "line": null,
+       "quote": "cd /tmp/t; P=/workspace/.venv/bin/python; M=/workspace/mtl.py"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 25,
+       "line": null,
+       "quote": "mkdir -p /tmp/t2/web /tmp/t2/pos && cd /tmp/t2"
+      }
+     ],
+     "V6": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 27,
+       "line": null,
+       "quote": "python -m pyflakes mtl_engine/"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 25,
+       "line": null,
+       "quote": "Checking bare Part‑1 DSLs, failure atomicity, and added/removed files."
+      }
+     ]
+    }
+   },
+   "summary": "Read nearly all modules, added versions, udfs, state and metadata modules and rewired the CLI. Checked resume, joins, UDFs, Parquet/gzip and bare Part-1 DSLs on /tmp fixtures, then ran pyflakes."
+  }
+ ],
+ "failures": [
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_3.py::test_checkpoint_3_hidden[04_many_files]"
+   ],
+   "first_ck": 3,
+   "regression": false,
+   "code": "F2",
+   "why": "file10.csv has timestamp '08:010:00Z', not valid ISO-8601; the test expects it counted (n=10, total 550). Spec says unparsable timestamps are bad rows and dropped, which is what the code did (n=9).",
+   "evidence": [
+    {
+     "src": "tests/assets/checkpoint_3_hidden/04_many_files/file10.csv",
+     "ck": 3,
+     "step": null,
+     "line": 2,
+     "quote": "2025-09-14T08:010:00Z,100.0"
+    },
+    {
+     "src": "tests/assets/checkpoint_3_hidden/04_many_files/EXPECTED.json",
+     "ck": 3,
+     "step": null,
+     "line": 1,
+     "quote": "{\"n\": 10, \"total\": 550.0}"
+    },
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": 3,
+     "step": null,
+     "line": 194,
+     "quote": "* Rows with unparsable `timestamp` → dropped with `TIMESTAMP_PARSE_ERROR`."
+    },
+    {
+     "src": "results/checkpoint_3.md",
+     "ck": 3,
+     "step": null,
+     "line": 34,
+     "quote": "actual = 9, expected = 10"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_3.py::test_checkpoint_3_edge_format_auto_ambiguous"
+   ],
+   "first_ck": 3,
+   "regression": false,
+   "code": "F2",
+   "why": "Test expects exit 3 for an extensionless file under default auto. Spec says auto detects by extension and --format forces ambiguous files, but never states an error; agent chose to sniff content instead.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": 3,
+     "step": null,
+     "line": 28,
+     "quote": "* `--format` (optional): default `auto` (detect by extension per file). If set to `csv` or `tsv` or `parquet`, **force** that format for files where the extension is ambiguous (e.g., no extension)."
+    },
+    {
+     "src": "tests/test_checkpoint_3.py",
+     "ck": 3,
+     "step": null,
+     "line": 189,
+     "quote": "    assert result.returncode == 3"
+    },
+    {
+     "src": "code/checkpoint_3/mtl_engine/inputs.py",
+     "ck": 3,
+     "step": null,
+     "line": 22,
+     "quote": "    \"\"\"One file of the input set; `format` is None when it must be sniffed from content.\"\"\""
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_4.py::test_checkpoint_4_hidden[05_join_full_outer]"
+   ],
+   "first_ck": 4,
+   "regression": false,
+   "code": "F2",
+   "why": "Project maps W.timestamp as timestamp, so the unmatched pos row (orange) has a null timestamp; the code drops it as the spec says, but the test expects it kept in the 10:00 window with null keys.",
+   "evidence": [
+    {
+     "src": "tests/assets/checkpoint_4_hidden/05_join_full_outer/pipeline.mtl",
+     "ck": 4,
+     "step": null,
+     "line": 24,
+     "quote": "      W.timestamp as timestamp,"
+    },
+    {
+     "src": "tests/assets/checkpoint_4_hidden/05_join_full_outer/EXPECTED.json",
+     "ck": 4,
+     "step": null,
+     "line": 5,
+     "quote": "    \"location\": null,"
+    },
+    {
+     "src": "spec/checkpoint_4.md",
+     "ck": 4,
+     "step": null,
+     "line": 174,
+     "quote": "* **Missing timestamps:** If a row post-`project` lacks a `timestamp` (null) it cannot be windowed; such rows are **bad** (strict: fail; non-strict: drop)."
+    },
+    {
+     "src": "code/checkpoint_4/mtl_engine/joins.py",
+     "ck": 4,
+     "step": null,
+     "line": 249,
+     "quote": "        if row.get(EVENT_TIME) is None:"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_4.py::test_checkpoint_4_regression[33_recursive_directory]"
+   ],
+   "first_ck": 4,
+   "regression": false,
+   "code": "F2",
+   "why": "Ingest source lists directory 'data' without a recursive key; test expects data/sub/x.csv included (n=3). Spec never states the per-source recursive default; code treats unset as non-recursive unless the pattern has '**'.",
+   "evidence": [
+    {
+     "src": "tests/assets/checkpoint_4_regression/33_recursive_directory/ingest.yaml",
+     "ck": 4,
+     "step": null,
+     "line": 4,
+     "quote": "      - \"data\""
+    },
+    {
+     "src": "tests/assets/checkpoint_4_regression/33_recursive_directory/EXPECTED",
+     "ck": 4,
+     "step": null,
+     "line": 1,
+     "quote": "{\"n\": 3}"
+    },
+    {
+     "src": "spec/checkpoint_4.md",
+     "ck": 4,
+     "step": null,
+     "line": 46,
+     "quote": "    recursive: true"
+    },
+    {
+     "src": "code/checkpoint_4/mtl_engine/ingest.py",
+     "ck": 4,
+     "step": null,
+     "line": 442,
+     "quote": "        recursive = \"**\" in pattern"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_hidden[03_join_full_outer]"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F2",
+   "why": "Same case as ck4 05_join_full_outer plus an mtl_version header: unmatched pos row has null projected W.timestamp and is dropped per spec line 174; the test expects it kept.",
+   "evidence": [
+    {
+     "src": "tests/assets/checkpoint_5_hidden/03_join_full_outer/pipeline.mtl",
+     "ck": 5,
+     "step": null,
+     "line": 25,
+     "quote": "      W.timestamp as timestamp,"
+    },
+    {
+     "src": "spec/checkpoint_4.md",
+     "ck": 4,
+     "step": null,
+     "line": 174,
+     "quote": "* **Missing timestamps:** If a row post-`project` lacks a `timestamp` (null) it cannot be windowed; such rows are **bad** (strict: fail; non-strict: drop)."
+    },
+    {
+     "src": "code/checkpoint_5/mtl_engine/joins.py",
+     "ck": 5,
+     "step": null,
+     "line": 257,
+     "quote": "        if row.get(EVENT_TIME) is None:"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[11_null_aggregates]"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F2",
+   "why": "Filter on category 'dairy' removes every row; test expects sum(price) = 0 over no rows, but the Part 1 spec says non-count aggregates over no rows are null, which the code returns.",
+   "evidence": [
+    {
+     "src": "tests/assets/checkpoint_5_regression/11_null_aggregates/pipeline.mtl",
+     "ck": 5,
+     "step": null,
+     "line": 13,
+     "quote": "  filter(category == 'dairy')"
+    },
+    {
+     "src": "tests/assets/checkpoint_5_regression/11_null_aggregates/EXPECTED.json",
+     "ck": 5,
+     "step": null,
+     "line": 4,
+     "quote": "    \"total\": 0"
+    },
+    {
+     "src": "spec/checkpoint_1.md",
+     "ck": 1,
+     "step": null,
+     "line": 173,
+     "quote": "     * Other aggregates → `null` (JSON `null`)"
+    },
+    {
+     "src": "code/checkpoint_5/mtl_engine/aggregates.py",
+     "ck": 5,
+     "step": null,
+     "line": 55,
+     "quote": "        return None"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::test_checkpoint_5_regression[33_recursive_directory]"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F2",
+   "why": "Same case as ck4 33_recursive_directory (adds mtl_version header): 'data' source without recursive key; code does not descend into data/sub, test expects it to; spec silent on the default.",
+   "evidence": [
+    {
+     "src": "tests/assets/checkpoint_5_regression/33_recursive_directory/ingest.yaml",
+     "ck": 5,
+     "step": null,
+     "line": 4,
+     "quote": "      - \"data\""
+    },
+    {
+     "src": "code/checkpoint_5/mtl_engine/ingest.py",
+     "ck": 5,
+     "step": null,
+     "line": 442,
+     "quote": "        recursive = \"**\" in pattern"
+    },
+    {
+     "src": "results/checkpoint_5.md",
+     "ck": 5,
+     "step": null,
+     "line": 138,
+     "quote": "actual = 2, expected = 3"
+    }
+   ]
+  }
+ ],
+ "observations": "In this run we observed one-module-per-stage files (ck1 step 3) that each later session read almost wholesale before editing (ck2 steps 2,4,5; ck3 steps 2,4,5; ck4 steps 2-7; ck5 steps 2-10), so every edited place was first shown by a reading sweep (L3). Each session added new modules for its feature (schema/params/casts at ck2 steps 12-19; inputs/badrecords/loader at ck3 steps 8-11; ingest/joins at ck4 steps 14,20; versions/udfs/state/metadata at ck5 steps 14-21) and changed existing code mainly at call points and signatures. Extraction happened at ck2 step 20 and ck4 steps 17-18 and 28. In ck4 step 15 ingest.py wrapped the private inputs._scan, and its file expansion repeats inputs.resolve logic. Verification was always hand runs on throwaway fixtures in /tmp (ck1 steps 11-13; ck2 steps 28-30; ck3 steps 16-21; ck4 steps 22-30; ck5 steps 23-26). It never wrote a test suite. Only ck2 saved a copy of the previous code to diff old-mode behaviour against (ck2 steps 7,30). ck1 wrote DESIGN.md (step 2). All seven failures were coded F2: in each, the test asserts behaviour the spec leaves unstated or states differently. At ck3 step 21 the agent chose content sniffing for a file with no extension, where the test expects exit 3. It dropped an invalid timestamp at ck3 and dropped full-join rows with a null projected timestamp at ck4 and ck5 per the spec. It did not recurse into a directory source when recursive was unset (ck4, ck5), and it returned null for an empty sum (ck5)."
+}

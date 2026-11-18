@@ -1,0 +1,451 @@
+proxies up: scb-egress-eval scb-egress-agent 
+cell start 2026-11-10T16:07:32-05:00 problem=eve_industry cond=c2_modular seed=1 harness=7ac5c3f dirty=0
+Starting Slop Code CLI
+	Seed: 42
+	Verbose: 0
+--------------------------------
+Output directory: /home/niruthi/features/scbench/runs/eve_industry/c2_modular_s1_20261110T1607
+Using model: anthropic/opus-5.5
+[11/10/26 16:07:36] INFO     Starting agent run                                 
+                             agent_config='configs/agents/claude_code_parnas.yam
+                             l'                                                 
+                             environment_config='configs/environments/docker-pyt
+                             hon3.12-uv-parnas-agent.yaml'                      
+                             model='anthropic/opus-5.5' one_shot=False          
+                             pass_policy='any' problem_names=['eve_industry']   
+                             prompt_path='configs/prompts/parnas/c2_modular.jinj
+                             a' thinking='high'                                 
+                    INFO     Building base image for environment 'python3.12'   
+                             base_image='ghcr.io/astral-sh/uv:python3.12-trixie-
+                             slim' image_name='slop-code:python3.12'            
+                    INFO     Checking if image exists                           
+                             image_name='slop-code:python3.12'                  
+                    INFO     Found current image and not forcing build          
+                    INFO     Checking if image exists                           
+                             image_name='slop-code:claude_code-2.1.310-python3.1
+                             2'                                                 
+                    INFO     Found image and not forcing build                  
+                    INFO     Starting agent runs num_problems=1 num_workers=1   
+                    INFO     Starting run problems queue monitor                
+                             problem_names=['eve_industry']                     
+[11/10/26 16:07:39] INFO     'eve_industry': progress update                    
+                             checkpoint='STARTING' cost=0.0 elapsed=0.002141    
+                             state='initialized' steps=0 total_steps=0          
+                    INFO     'eve_industry': progress update                    
+                             checkpoint='STARTING' cost=0.0 elapsed=0.021537    
+                             state='initialized' steps=0 total_steps=0          
+                    INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.0 elapsed=0.124055
+                             state='running' steps=0 total_steps=0              
+[11/10/26 16:07:42] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.02512             
+                             elapsed=3.249832 state='running' steps=1           
+                             total_steps=1                                      
+[11/10/26 16:07:43] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.06106             
+                             elapsed=4.86764 state='running' steps=2            
+                             total_steps=2                                      
+[11/10/26 16:08:03] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.08219             
+                             elapsed=23.977668 state='running' steps=3          
+                             total_steps=3                                      
+[11/10/26 16:08:13] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.1199              
+                             elapsed=34.34422 state='running' steps=4           
+                             total_steps=4                                      
+[11/10/26 16:08:22] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.20682             
+                             elapsed=43.458439 state='running' steps=5          
+                             total_steps=5                                      
+[11/10/26 16:08:40] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.23969             
+                             elapsed=61.334112 state='running' steps=6          
+                             total_steps=6                                      
+[11/10/26 16:08:54] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.27416             
+                             elapsed=75.208584 state='running' steps=7          
+                             total_steps=7                                      
+[11/10/26 16:09:17] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.31302             
+                             elapsed=98.604494 state='running' steps=8          
+                             total_steps=8                                      
+[11/10/26 16:09:57] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.35731             
+                             elapsed=138.51586 state='running' steps=9          
+                             total_steps=9                                      
+[11/10/26 16:10:10] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.37318             
+                             elapsed=151.638901 state='running' steps=10        
+                             total_steps=10                                     
+[11/10/26 16:10:13] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.68776             
+                             elapsed=154.244381 state='running' steps=10        
+                             total_steps=10                                     
+                    INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_1' cost=0.68776             
+                             elapsed=154.345272 state='evaluating' steps=10     
+                             total_steps=10                                     
+[11/10/26 16:11:18] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=0.68776             
+                             elapsed=219.557362 state='evaluating' steps=0      
+                             total_steps=10                                     
+[11/10/26 16:11:20] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=0.68776             
+                             elapsed=221.89709 state='running' steps=0          
+                             total_steps=10                                     
+[11/10/26 16:11:23] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=0.69369             
+                             elapsed=224.502704 state='running' steps=1         
+                             total_steps=11                                     
+[11/10/26 16:11:25] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=0.74024             
+                             elapsed=226.35881 state='running' steps=2          
+                             total_steps=12                                     
+[11/10/26 16:11:26] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=0.80526             
+                             elapsed=227.46423 state='running' steps=3          
+                             total_steps=13                                     
+[11/10/26 16:11:31] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=0.82048             
+                             elapsed=232.826737 state='running' steps=4         
+                             total_steps=14                                     
+[11/10/26 16:11:36] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=0.8571              
+                             elapsed=237.686181 state='running' steps=5         
+                             total_steps=15                                     
+[11/10/26 16:11:43] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=0.87399             
+                             elapsed=244.552781 state='running' steps=6         
+                             total_steps=16                                     
+[11/10/26 16:11:52] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=0.91562             
+                             elapsed=253.921486 state='running' steps=7         
+                             total_steps=17                                     
+[11/10/26 16:12:04] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=0.96691             
+                             elapsed=265.544714 state='running' steps=8         
+                             total_steps=18                                     
+[11/10/26 16:12:29] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=0.98465             
+                             elapsed=290.691146 state='running' steps=9         
+                             total_steps=19                                     
+[11/10/26 16:12:41] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.03113             
+                             elapsed=302.313623 state='running' steps=10        
+                             total_steps=20                                     
+[11/10/26 16:12:49] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.0829              
+                             elapsed=310.67944 state='running' steps=11         
+                             total_steps=21                                     
+[11/10/26 16:12:54] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.10273             
+                             elapsed=315.040503 state='running' steps=12        
+                             total_steps=22                                     
+[11/10/26 16:13:11] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.12086             
+                             elapsed=332.674328 state='running' steps=13        
+                             total_steps=23                                     
+[11/10/26 16:13:15] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.1543              
+                             elapsed=336.533263 state='running' steps=14        
+                             total_steps=24                                     
+[11/10/26 16:13:50] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.20851             
+                             elapsed=371.207787 state='running' steps=15        
+                             total_steps=25                                     
+[11/10/26 16:13:58] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.23616             
+                             elapsed=379.826618 state='running' steps=16        
+                             total_steps=26                                     
+[11/10/26 16:14:30] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.275               
+                             elapsed=411.732312 state='running' steps=17        
+                             total_steps=27                                     
+[11/10/26 16:14:48] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.30173             
+                             elapsed=429.861734 state='running' steps=18        
+                             total_steps=28                                     
+[11/10/26 16:15:02] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.32123             
+                             elapsed=443.234082 state='running' steps=19        
+                             total_steps=29                                     
+[11/10/26 16:15:03] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.77212             
+                             elapsed=444.588156 state='running' steps=19        
+                             total_steps=29                                     
+[11/10/26 16:15:04] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_2' cost=1.77212             
+                             elapsed=445.190973 state='evaluating' steps=19     
+                             total_steps=29                                     
+[11/10/26 16:16:55] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=1.77212             
+                             elapsed=556.698738 state='evaluating' steps=0      
+                             total_steps=29                                     
+[11/10/26 16:16:58] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=1.77212             
+                             elapsed=559.058106 state='running' steps=0         
+                             total_steps=29                                     
+[11/10/26 16:17:00] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=1.77748             
+                             elapsed=561.662939 state='running' steps=1         
+                             total_steps=30                                     
+[11/10/26 16:17:02] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=1.81326             
+                             elapsed=563.766876 state='running' steps=2         
+                             total_steps=31                                     
+[11/10/26 16:17:12] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=1.85764             
+                             elapsed=573.136851 state='running' steps=3         
+                             total_steps=32                                     
+[11/10/26 16:17:19] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=1.8805              
+                             elapsed=580.24873 state='running' steps=4          
+                             total_steps=33                                     
+[11/10/26 16:17:23] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=1.88901             
+                             elapsed=584.105412 state='running' steps=5         
+                             total_steps=34                                     
+[11/10/26 16:17:35] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=1.91184             
+                             elapsed=596.227153 state='running' steps=6         
+                             total_steps=35                                     
+[11/10/26 16:17:59] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=1.94325             
+                             elapsed=620.359975 state='running' steps=7         
+                             total_steps=36                                     
+[11/10/26 16:18:18] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=1.9608              
+                             elapsed=638.996223 state='running' steps=8         
+                             total_steps=37                                     
+                    INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=2.09987             
+                             elapsed=639.100489 state='running' steps=8         
+                             total_steps=37                                     
+                    INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_3' cost=2.09987             
+                             elapsed=639.453507 state='evaluating' steps=8      
+                             total_steps=37                                     
+[11/10/26 16:20:36] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.09987             
+                             elapsed=777.734552 state='evaluating' steps=0      
+                             total_steps=37                                     
+[11/10/26 16:20:39] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.09987             
+                             elapsed=780.091903 state='running' steps=0         
+                             total_steps=37                                     
+[11/10/26 16:20:42] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.10495             
+                             elapsed=782.950034 state='running' steps=1         
+                             total_steps=38                                     
+[11/10/26 16:20:45] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.144               
+                             elapsed=786.307611 state='running' steps=2         
+                             total_steps=39                                     
+[11/10/26 16:20:48] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.26329             
+                             elapsed=789.162475 state='running' steps=3         
+                             total_steps=40                                     
+[11/10/26 16:21:39] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.2818              
+                             elapsed=840.352504 state='running' steps=4         
+                             total_steps=41                                     
+[11/10/26 16:21:57] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.34376             
+                             elapsed=858.232828 state='running' steps=5         
+                             total_steps=42                                     
+[11/10/26 16:22:31] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.39943             
+                             elapsed=892.144981 state='running' steps=6         
+                             total_steps=43                                     
+[11/10/26 16:23:02] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.43323             
+                             elapsed=923.290386 state='running' steps=7         
+                             total_steps=44                                     
+[11/10/26 16:23:15] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.44886             
+                             elapsed=936.914379 state='running' steps=8         
+                             total_steps=45                                     
+[11/10/26 16:23:17] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.72923             
+                             elapsed=938.01789 state='running' steps=8          
+                             total_steps=45                                     
+                    INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_4' cost=2.72923             
+                             elapsed=938.369345 state='evaluating' steps=8      
+                             total_steps=45                                     
+[11/10/26 16:25:55] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=2.72923             
+                             elapsed=1096.287312 state='evaluating' steps=0     
+                             total_steps=45                                     
+[11/10/26 16:25:57] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=2.72923             
+                             elapsed=1098.894031 state='running' steps=0        
+                             total_steps=45                                     
+[11/10/26 16:26:00] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=2.73484             
+                             elapsed=1101.250858 state='running' steps=1        
+                             total_steps=46                                     
+[11/10/26 16:26:02] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=2.77354             
+                             elapsed=1103.856236 state='running' steps=2        
+                             total_steps=47                                     
+[11/10/26 16:26:12] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=2.93142             
+                             elapsed=1112.97437 state='running' steps=3         
+                             total_steps=48                                     
+[11/10/26 16:27:28] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=2.96937             
+                             elapsed=1189.458566 state='running' steps=4        
+                             total_steps=49                                     
+[11/10/26 16:27:34] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.03482             
+                             elapsed=1195.821368 state='running' steps=5        
+                             total_steps=50                                     
+[11/10/26 16:27:53] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.08329             
+                             elapsed=1214.703167 state='running' steps=6        
+                             total_steps=51                                     
+[11/10/26 16:28:04] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.11961             
+                             elapsed=1225.324553 state='running' steps=7        
+                             total_steps=52                                     
+[11/10/26 16:28:28] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.16092             
+                             elapsed=1249.722436 state='running' steps=8        
+                             total_steps=53                                     
+[11/10/26 16:29:13] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.20271             
+                             elapsed=1294.904369 state='running' steps=9        
+                             total_steps=54                                     
+[11/10/26 16:29:37] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.23424             
+                             elapsed=1318.050152 state='running' steps=10       
+                             total_steps=55                                     
+[11/10/26 16:30:11] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.27505             
+                             elapsed=1352.212591 state='running' steps=11       
+                             total_steps=56                                     
+[11/10/26 16:30:28] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.31869             
+                             elapsed=1369.343783 state='running' steps=12       
+                             total_steps=57                                     
+[11/10/26 16:30:43] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.34602             
+                             elapsed=1383.964507 state='running' steps=13       
+                             total_steps=58                                     
+[11/10/26 16:30:48] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.36973             
+                             elapsed=1389.074384 state='running' steps=14       
+                             total_steps=59                                     
+[11/10/26 16:30:55] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.38936             
+                             elapsed=1396.184889 state='running' steps=15       
+                             total_steps=60                                     
+[11/10/26 16:31:05] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.96758             
+                             elapsed=1406.803737 state='running' steps=16       
+                             total_steps=61                                     
+[11/10/26 16:31:06] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_5' cost=3.96758             
+                             elapsed=1407.15498 state='evaluating' steps=16     
+                             total_steps=61                                     
+[11/10/26 16:34:27] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=3.96758             
+                             elapsed=1608.056635 state='evaluating' steps=0     
+                             total_steps=61                                     
+[11/10/26 16:34:29] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=3.96758             
+                             elapsed=1610.412124 state='running' steps=0        
+                             total_steps=61                                     
+[11/10/26 16:34:32] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=3.97273             
+                             elapsed=1613.017799 state='running' steps=1        
+                             total_steps=62                                     
+[11/10/26 16:34:33] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=4.01126             
+                             elapsed=1614.873436 state='running' steps=2        
+                             total_steps=63                                     
+[11/10/26 16:34:37] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=4.16263             
+                             elapsed=1617.980838 state='running' steps=3        
+                             total_steps=64                                     
+[11/10/26 16:35:01] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=4.18531             
+                             elapsed=1642.125463 state='running' steps=4        
+                             total_steps=65                                     
+[11/10/26 16:35:38] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=4.223               
+                             elapsed=1679.539902 state='running' steps=5        
+                             total_steps=66                                     
+[11/10/26 16:37:29] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=4.25777             
+                             elapsed=1790.841847 state='running' steps=6        
+                             total_steps=67                                     
+[11/10/26 16:38:20] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=4.37135             
+                             elapsed=1841.790973 state='running' steps=7        
+                             total_steps=68                                     
+[11/10/26 16:38:47] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=4.45296             
+                             elapsed=1868.198192 state='running' steps=8        
+                             total_steps=69                                     
+[11/10/26 16:39:15] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=4.49207             
+                             elapsed=1896.35153 state='running' steps=9         
+                             total_steps=70                                     
+[11/10/26 16:39:33] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=4.53149             
+                             elapsed=1914.479997 state='running' steps=10       
+                             total_steps=71                                     
+[11/10/26 16:39:44] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=4.5561              
+                             elapsed=1925.098022 state='running' steps=11       
+                             total_steps=72                                     
+[11/10/26 16:39:47] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=5.15048             
+                             elapsed=1927.953527 state='running' steps=11       
+                             total_steps=72                                     
+                    INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=5.15048             
+                             elapsed=1928.059659 state='evaluating' steps=11    
+                             total_steps=72                                     
+[11/10/26 16:43:16] INFO     'eve_industry': progress update                    
+                             checkpoint='checkpoint_6' cost=6.33338             
+                             elapsed=2137.933421 state='completed' steps=11     
+                             total_steps=83                                     
+[11/10/26 16:43:26] INFO     Agent runs completed failed=0 successful=1 total=1 
+
+All 1 problems completed successfully!
+[11/10/26 16:43:33] INFO     Updated checkpoint results                         
+                             path='/home/niruthi/features/scbench/runs/eve_indus
+                             try/c2_modular_s1_20261110T1607/checkpoint_results.
+                             jsonl' report_count=6                              
+
+                       Run Summary                       
+╭──────────────────────────────┬────────────────────────╮
+│ Metric                       │                  Value │
+├──────────────────────────────┼────────────────────────┤
+│ Problems ran                 │                      1 │
+│ Checkpoints                  │                      6 │
+│ Total cost                   │                $5.1505 │
+│ Mean cost / chkpt            │     $0.8584 +/- 0.3644 │
+│ Mean time / chkpt            │        207.0 +/- 93.8s │
+│ Mean input tokens / chkpt    │                  3,712 │
+│ Mean output tokens / chkpt   │                 18,753 │
+│ Mean steps / chkpt           │           12.0 +/- 4.5 │
+├──────────────────────────────┼────────────────────────┤
+│ % checkpoints solved         │                  16.7% │
+│ % checkpoints iso solved     │                  33.3% │
+│ % checkpoints core solved    │                 100.0% │
+│ % problems solved            │                   0.0% │
+│ % problems partial           │                 100.0% │
+│ Mean test pass rate          │                  0.925 │
+├──────────────────────────────┼────────────────────────┤
+│ Mean lint:loc                │      0.1702 +/- 0.0142 │
+│ Mean verbosity score         │      0.1855 +/- 0.0346 │
+│ Mean erosion score           │      0.3830 +/- 0.1092 │
+╰──────────────────────────────┴────────────────────────╯
+                    INFO     Saved run summary                                  
+                             path='/home/niruthi/features/scbench/runs/eve_indus
+                             try/c2_modular_s1_20261110T1607/result.json'       
+cell end 2026-11-10T16:43:36-05:00 rc=0

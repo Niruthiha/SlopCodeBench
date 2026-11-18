@@ -1,0 +1,1146 @@
+{
+ "packet": "P30",
+ "checkpoints": [
+  {
+   "ck": 1,
+   "V": {
+    "present": [
+     "V2",
+     "V5"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 6,
+       "line": null,
+       "quote": "from industry import SDE s=SDE('sde')"
+      },
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 8,
+       "line": null,
+       "quote": "for n in Loki \"Drake\" \"Hydrogen Fuel Block Blueprint\" \"naga\" \"Tritanium\"; do .venv/bin/python industry.py recipe \"$n\" --sde sde"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 5,
+       "line": null,
+       "quote": "for n in Naga \"Barrage L Blueprint\" \"Fernite Carbide\"; do time .venv/bin/python industry.py recipe \"$n\" --sde sde; echo; done"
+      },
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 5,
+       "line": null,
+       "quote": "All three examples match. Now checking edge cases in the data (duplicate names, multiple blueprints per product, unpublished blueprints)."
+      }
+     ]
+    }
+   },
+   "summary": "Explored SDE files, wrote industry.py in one Write, ran the three spec examples (all matched), then probed data edge cases and other items via python -c and ad-hoc CLI runs."
+  },
+  {
+   "ck": 2,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "SDE (class, __init__)",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 2,
+        "line": null,
+        "quote": "cd /workspace; cat industry.py"
+       }
+      ]
+     },
+     {
+      "place": "main",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 2,
+        "line": null,
+        "quote": "cd /workspace; cat industry.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "NA",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": 2,
+       "step": null,
+       "line": 168,
+       "quote": "+def render_invention(sde, product, bp, skill):"
+      },
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": 2,
+       "step": null,
+       "line": 268,
+       "quote": "+    if args.command == \"invention\":"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 2,
+       "line": null,
+       "quote": "cd /workspace; cat industry.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "New invention report reuses SDE helpers category_group, tech_level, market_path, is_published.",
+      "evidence": [
+       {
+        "src": "diffs/checkpoint_2.patch",
+        "ck": 2,
+        "step": null,
+        "line": 170,
+        "quote": "+    category, group = sde.category_group(product)"
+       },
+       {
+        "src": "diffs/checkpoint_2.patch",
+        "ck": 2,
+        "step": null,
+        "line": 214,
+        "quote": "+        f\"Market Group: {sde.market_path(product)}\","
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 6,
+       "line": null,
+       "quote": "mkdir -p /tmp/work && cd /tmp/work && cat > search.py <<'EOF' from decimal import Decimal, ROUND_HALF_UP, ROUND_HALF_EVEN"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 9,
+       "line": null,
+       "quote": "cd /tmp/work && cat > sweep.py <<'EOF' import sys, collections sys.path.insert(0,'/workspace') import industry"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 5,
+       "line": null,
+       "quote": "for b in (0.26,0.21,0.14): for m in (0,20,80,-40,90,-10,50,10): p=b*(1+10/30+5/40)*(1+m/100)"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 8,
+       "line": null,
+       "quote": "Now diffing against the three spec examples verbatim."
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 8,
+       "line": null,
+       "quote": "All three examples match byte-for-byte. Running a crash sweep over every inventable product in the SDE:"
+      }
+     ]
+    }
+   },
+   "summary": "Read whole file, added SDE invention tables and invention command; brute-forced probability formula order in /tmp, diffed three spec examples, swept all 1,092 inventable products; patched relic-less Tech III to Tech II layout."
+  },
+  {
+   "ck": 3,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "render",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py; ls sde"
+       }
+      ]
+     },
+     {
+      "place": "main",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py; ls sde"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "NA",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 51,
+       "quote": "+    minutes = math.ceil(Fraction(seconds) * (100 - te) / 100 / 60)"
+      },
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 74,
+       "quote": "+        needed = material_amount(mqty, me)"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 39,
+       "quote": "+def render(sde, product, bp, aid, me=0, te=0, waste=False):"
+      },
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 103,
+       "quote": "+        sys.stdout.write(render(sde, product, bp, aid, args.me, args.te, args.waste) + \"\\n\")"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 2,
+       "line": null,
+       "quote": "cat industry.py; ls sde"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": []
+   },
+   "V": {
+    "present": [
+     "V2",
+     "V5"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 3,
+       "line": null,
+       "quote": ".venv/bin/python industry.py recipe Naga --sde sde; .venv/bin/python industry.py recipe Naga Blueprint --sde sde | tail -3"
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 5,
+       "line": null,
+       "quote": "$P Fullerides --sde sde -me 10 -te 20 -waste | sed -n 8,14p"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 5,
+       "line": null,
+       "quote": "P=\".venv/bin/python industry.py recipe\"; $P Naga --sde sde -te 20 | grep \"Run Time\"; $P Naga --sde sde -me=10 -te=20 | grep -c 23400"
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 5,
+       "line": null,
+       "quote": "its output matches every Naga example in the spec. I checked ME=10, ME=5 with the waste column, TE=20 alone, and ME=10 with TE=20 together."
+      }
+     ]
+    }
+   },
+   "summary": "Read whole file, edited render body for ME/TE/waste and added flag parsing in one scripted patch; checked Naga spec examples and a Fullerides reaction via CLI runs."
+  },
+  {
+   "ck": 4,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "render_invention",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py; ls -la sde"
+       }
+      ]
+     },
+     {
+      "place": "main",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py; ls -la sde"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "NA",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_4.patch",
+       "ck": 4,
+       "step": null,
+       "line": 111,
+       "quote": "+def parse_build_string(sde, text):"
+      },
+      {
+       "src": "diffs/checkpoint_4.patch",
+       "ck": 4,
+       "step": null,
+       "line": 239,
+       "quote": "+def build_plan(sde, req, config):"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 2,
+       "line": null,
+       "quote": "cat industry.py; ls -la sde"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 3,
+       "line": null,
+       "quote": "p,bp=I.resolve_invention(s,'Barrage L') print(p,bp,s.inv_sources[bp],s.activity_time[(bp,1)])"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R3",
+      "what": "Extracted invention source selection from render_invention into invention_sources for plan reuse.",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 4,
+        "line": null,
+        "quote": "# 1. Factor out invention source selection so plan can reuse it."
+       },
+       {
+        "src": "diffs/checkpoint_4.patch",
+        "ck": 4,
+        "step": null,
+        "line": 20,
+        "quote": "+def invention_sources(sde, product, bp):"
+       }
+      ]
+     },
+     {
+      "code": "R1",
+      "what": "parse_build_string resolves names via existing resolve_invention and SDE.resolve.",
+      "evidence": [
+       {
+        "src": "diffs/checkpoint_4.patch",
+        "ck": 4,
+        "step": null,
+        "line": 161,
+        "quote": "+                cand[\"product\"], cand[\"bp\"] = resolve_invention(sde, cand[\"name\"])"
+       }
+      ]
+     },
+     {
+      "code": "R2",
+      "what": "invention_plan recomputes success chance with Fractions instead of calling existing success_chance.",
+      "evidence": [
+       {
+        "src": "diffs/checkpoint_4.patch",
+        "ck": 4,
+        "step": null,
+        "line": 212,
+        "quote": "+    chance = min(Fraction(1), Fraction(str(base)) * factor * (100 + mult) / 100)"
+       },
+       {
+        "src": "diffs/checkpoint_2.patch",
+        "ck": 2,
+        "step": null,
+        "line": 119,
+        "quote": "+def success_chance(base, science_levels, encryption_levels, multiplier):"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 6,
+       "line": null,
+       "quote": "cd /tmp/t; for b in \"Nonexistent Thing 1 x1\" \"Barrage L 10 11 20\" \"Hammerhead II 20 Accelerant Decryptor x4\""
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 3,
+       "line": null,
+       "quote": "p,bp=I.resolve_invention(s,'Barrage L') print(p,bp,s.inv_sources[bp],s.activity_time[(bp,1)])"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 6,
+       "line": null,
+       "quote": "/workspace/.venv/bin/python /workspace/industry.py plan $b --config c.yaml --sde /workspace/sde --output o"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 5,
+       "line": null,
+       "quote": "Both spec examples match exactly. A quick check of error handling:"
+      }
+     ]
+    }
+   },
+   "summary": "Read whole file, probed invention data, extracted invention_sources, added plan command (build-string parser, config, materials/jobs CSV); matched both spec examples and ran error-handling cases."
+  },
+  {
+   "ck": 5,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "load_plan_config",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 4,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "build_plan",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 4,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "SDE (class)",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 4,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "main",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 4,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "NA",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 12,
+       "line": null,
+       "quote": "start=s.index(''' if aid != MANUFACTURING: me = te = 0 runs = req[\"runs\"] ''') end=s.index('def write_plan')"
+      },
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": 5,
+       "step": null,
+       "line": 154,
+       "quote": "+    def add_jobs(job_bp, job_aid, runs, job_me, job_te, count):"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": 5,
+       "step": null,
+       "line": 136,
+       "quote": "+def build_plan(sde, req, config, build_all=False):"
+      },
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": 5,
+       "step": null,
+       "line": 227,
+       "quote": "+            material_rows, job_rows = build_plan(sde, req, config, args.build_all)"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 4,
+       "line": null,
+       "quote": "Read /workspace/industry.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "Component ME/TE validation reuses existing get_int via a new source parameter.",
+      "evidence": [
+       {
+        "src": "diffs/checkpoint_5.patch",
+        "ck": 5,
+        "step": null,
+        "line": 71,
+        "quote": "+        \"component_me\": get_int(\"me\", 10, 0, MAX_ME, defaults),"
+       }
+      ]
+     },
+     {
+      "code": "R1",
+      "what": "add_jobs reuses existing job_material_amount and format_decimal for split parts.",
+      "evidence": [
+       {
+        "src": "diffs/checkpoint_5.patch",
+        "ck": 5,
+        "step": null,
+        "line": 162,
+        "quote": "+                amount = job_material_amount(qty, job_me, part_runs) * part_count * count"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 6,
+       "line": null,
+       "quote": "mkdir -p /tmp/t && cd /tmp/t && cat > c30.yaml <<'EOF' split_days: 30 component_bpo_defaults: me: 10 te: 20 te_bonus: 20 invention_skill: 3 EOF"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 13,
+       "line": null,
+       "quote": "print(3/0.1, 30*0.1, 3/(10800*0.8/86400), 10800*0.8/86400, 30*10800*0.8/86400, 3/(10800/86400*0.8), 3*86400/(10800*0.8))"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 17,
+       "line": null,
+       "quote": "o=I.component_order(s, items, set()) pos={t:i for i,t in enumerate(o)}"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 12,
+       "line": null,
+       "quote": "Three of four example cases pass. The miss is Fernite Carbide at exactly 3.0 days, so I'll check the float arithmetic at that boundary."
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 15,
+       "line": null,
+       "quote": "b30/jobs OK b30/materials OK b3/jobs OK b3/materials OK m3/jobs OK m3/materials OK"
+      }
+     ]
+    }
+   },
+   "summary": "Read whole file, added config fields, split_runs, component ordering and build-all into build_plan; wrote spec expected CSVs to /tmp, iterated split rule until all six matched, then probed edge cases and ordering."
+  },
+  {
+   "ck": 6,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "invention_plan",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 3,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "component_order",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 3,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "build_plan",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 3,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     },
+     {
+      "place": "main",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 3,
+        "line": null,
+        "quote": "Read /workspace/industry.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "NA",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": 6,
+       "step": null,
+       "line": 192,
+       "quote": "+    for mid in component_order(sde, list(mats) + sorted(targets), exclude, should_build):"
+      },
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": 6,
+       "step": null,
+       "line": 215,
+       "quote": "+    for mid in set(mats) | set(targets) | set(produced):"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": 6,
+       "step": null,
+       "line": 78,
+       "quote": "+def component_order(sde, roots, exclude, should_build=None):"
+      },
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": 6,
+       "step": null,
+       "line": 255,
+       "quote": "+            material_rows, job_rows = build_plan(sde, req, config, args.build_all, stocks, targets)"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 3,
+       "line": null,
+       "quote": "Read /workspace/industry.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R3",
+      "what": "Split invention_plan into invention_setup (per-attempt) so target invention and plan share it.",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 7,
+        "line": null,
+        "quote": "# 1. refactor invention_plan into setup + plan"
+       },
+       {
+        "src": "diffs/checkpoint_6.patch",
+        "ck": 6,
+        "step": null,
+        "line": 44,
+        "quote": "+    me, te, max_runs, chance, per_attempt = invention_setup("
+       }
+      ]
+     },
+     {
+      "code": "R1",
+      "what": "add_invented_jobs reuses invention_setup and existing add_jobs for target T2 builds.",
+      "evidence": [
+       {
+        "src": "diffs/checkpoint_6.patch",
+        "ck": 6,
+        "step": null,
+        "line": 171,
+        "quote": "+            add_jobs(inv_bp, MANUFACTURING, max_runs, inv_me, inv_te, full)"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5",
+     "V7"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 4,
+       "line": null,
+       "quote": "mkdir -p /tmp/t && cd /tmp/t && cat > config.yaml <<'EOF' split_days: 30 component_bpo_defaults: me: 10 te: 20 te_bonus: 20 invention_skill: 3 EOF"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 5,
+       "line": null,
+       "quote": "for n in ['Fulleride Reaction Formula','Platinum Technite Reaction Formula','Carbon Polymers Reaction Formula','Fernite Carbide Reaction Formula'"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 9,
+       "line": null,
+       "quote": "Edge cases behave sensibly. Last check: plans that don't use `--stocks`/`--targets` should come out exactly as before."
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 4,
+       "line": null,
+       "quote": "Fullerides 100000 Hydrogen Fuel Block 1000 Helium Fuel Block 1000 R.A.M.- Ammunition Tech 100 Rifter 100 EOF"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 10,
+       "line": null,
+       "quote": "Edge cases behave sensibly. Last check: plans that don't use `--stocks`/`--targets` should come out exactly as before."
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 11,
+       "line": null,
+       "quote": "I didn't save a copy of the old code, but `__pycache__` still has the bytecode compiled from it. I'll run that as the baseline."
+      }
+     ]
+    }
+   },
+   "summary": "Read whole file, extracted invention_setup, rewrote build_plan as stock/target ledger, added stock-file parser; ran spec example (one row off, judged spec error), edge cases, and compared outputs against old bytecode as regression baseline."
+  }
+ ],
+ "failures": [
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_2.py::test_invention_functionality[jackdaw-5]"
+   ],
+   "first_ck": 2,
+   "regression": false,
+   "code": "F1",
+   "why": "Jackdaw is Tech III; spec gives Tech III table an Invented From column. relic_quality's prefix match missed 'Small … Hull Section' relics, and the agent fell back to the Tech II layout instead.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_2.md",
+     "ck": null,
+     "step": null,
+     "line": 43,
+     "quote": "  * **Tech III columns/order:** `Invented From | Decryptor | Probability | Runs | ME | TE`"
+    },
+    {
+     "src": "trace",
+     "ck": 2,
+     "step": 9,
+     "line": null,
+     "quote": "[(\"LookupErrorNo relics found for 'Confessor'\", 1), (\"LookupErrorNo relics found for 'Hecate'\", 1), (\"LookupErrorNo relics found for 'Jackdaw'\", 1)"
+    },
+    {
+     "src": "trace",
+     "ck": 2,
+     "step": 10,
+     "line": null,
+     "quote": "# Relic-based layout; Tech III items inv"
+    },
+    {
+     "src": "results/checkpoint_2.md",
+     "ck": null,
+     "step": null,
+     "line": 63,
+     "quote": "E                           KeyError: 'Invented From'"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_3.py::test_fernite_carbide_te10"
+   ],
+   "first_ck": 3,
+   "regression": false,
+   "code": "F1",
+   "why": "Spec limits only ME to manufacturing and says time is impacted by TE; render zeroes both ME and TE for reactions, so reaction run time ignores TE (180 vs expected 162).",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": null,
+     "step": null,
+     "line": 20,
+     "quote": "So your `recipe` command now needs to have its `quantity` column updated based on the ME (if it is a manufacturing job) and its time impacted by the TE."
+    },
+    {
+     "src": "code/checkpoint_3/industry.py",
+     "ck": 3,
+     "step": null,
+     "line": 547,
+     "quote": "        me = te = 0"
+    },
+    {
+     "src": "results/checkpoint_3.md",
+     "ck": null,
+     "step": null,
+     "line": 58,
+     "quote": "E         Diff: {'values_changed': {\"root['run_time']\": {'new_value': 162, 'old_value': 180}}}"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_4.py::test_functionality[svipul_l1-1]"
+   ],
+   "first_ck": 4,
+   "regression": false,
+   "code": "F4",
+   "why": "parse_build_string recognises relics via relic_quality, which requires names starting with Intact/Malfunctioning/Wrecked; 'Small Malfunctioning Hull Section' is not matched, so the build string is unparsed.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_4/industry.py",
+     "ck": 4,
+     "step": null,
+     "line": 365,
+     "quote": "        if name.startswith(prefix):"
+    },
+    {
+     "src": "code/checkpoint_4/industry.py",
+     "ck": 4,
+     "step": null,
+     "line": 665,
+     "quote": "        if aid in INVENTION_ACTIVITIES and sde.is_published(src) and relic_quality(name) is not None:"
+    },
+    {
+     "src": "results/checkpoint_4.md",
+     "ck": null,
+     "step": null,
+     "line": 51,
+     "quote": "E       AssertionError: Command failed: Error: No published item named 'Svipul 1 Accelerant Decryptor Small Malfunctioning Hull Section' found in SDE"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[kronos_invent]",
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[revelation_10_3d]",
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[loki_l1_1d]"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F1",
+   "why": "Spec formula max_runs = floor(split_days/days_per_run); agent replaced it with ceil(...)-1 (strictly under limit) to fit the split_days=3 example, so jobs hitting exactly the limit (e.g. 300 runs/30.0 days) are split further.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 25,
+     "quote": "max_runs = floor(split_days / days_per_run)"
+    },
+    {
+     "src": "code/checkpoint_5/industry.py",
+     "ck": 5,
+     "step": null,
+     "line": 823,
+     "quote": "    max_runs = max(1, math.ceil(limit / days_per_run) - 1)"
+    },
+    {
+     "src": "trace",
+     "ck": 5,
+     "step": 14,
+     "line": null,
+     "quote": "I'll compute the limit exactly with fractions, so a job may run up to but not including `split_days`."
+    },
+    {
+     "src": "results/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 60,
+     "quote": "E         Diff: {'values_changed': {\"root['Photonic Metamaterials Reaction Formula']\": {'new_value': {299: {'days': 29.9, 'count': 4}, 300: {'days': 30.0, 'count': 3}}, 'old_value': {262: {'days': 26."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::test_split_days_over_thirty_fails"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F2",
+   "why": "Spec lists split_days as '<float <= 30' but also uses min(30,split_days), implying larger values are clamped; agent clamped instead of rejecting 31. Defensible reading of ambiguous spec.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 9,
+     "quote": "split_days: 3.0 # <float <= 30, default is 3>"
+    },
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 18,
+     "quote": "* If the real time (time less TE) for a job takes > **`min(30,split_days)` days**, then you will need to split the job up into multiple jobs"
+    },
+    {
+     "src": "code/checkpoint_5/industry.py",
+     "ck": 5,
+     "step": null,
+     "line": 670,
+     "quote": "        \"split_days\": min(MAX_SPLIT_DAYS, get_float(\"split_days\", 3.0)),"
+    },
+    {
+     "src": "results/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 130,
+     "quote": "E       AssertionError: Expected error for split_days=31"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_build_all_with_stocks_functionality[kronos]"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F1",
+   "why": "Same split rule as ck5: split_runs (unchanged at ck6) uses ceil(limit/dpr)-1 instead of the spec's floor formula, so Photonic Metamaterials 2096 runs split into 8x262 instead of 3x300+4x299.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": null,
+     "step": null,
+     "line": 25,
+     "quote": "max_runs = floor(split_days / days_per_run)"
+    },
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": null,
+     "step": null,
+     "line": 68,
+     "quote": "E         Diff: {'values_changed': {\"root['Photonic Metamaterials Reaction Formula']\": {'new_value': {299: {'days': 29.9, 'count': 4}, 300: {'days': 30.0, 'count': 3}}, 'old_value': {262: {'days': 26."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_build_all_with_stocks_functionality[ion_siege_real]"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "Materials reporting differs: expected omits Crystallite Alloy row (stock above target) and shows datacore end_amount 0; spec only says target outputs show start/end amounts and gives no rule for these cases.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_6.md",
+     "ck": null,
+     "step": null,
+     "line": 21,
+     "quote": "Outputs from stock targets show up in the `materials.csv` with whatever start amount they had if stockpile is present with the appropriate end amount based on the target quantity. "
+    },
+    {
+     "src": "tests/cases/checkpoint_6/ion_siege_real/materials.csv",
+     "ck": null,
+     "step": null,
+     "line": 12,
+     "quote": "Datacore - Plasma Physics,0,0.0,1030,0"
+    },
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": null,
+     "step": null,
+     "line": 116,
+     "quote": "E         Diff: {'dictionary_item_removed': [\"root['Crystallite Alloy']\"], 'values_changed': {\"root['Datacore - Plasma Physics']['end_amount']\": {'new_value': 0, 'old_value': 1006}, \"root['Datacore - "
+    }
+   ]
+  }
+ ],
+ "observations": "In this run we observed a single-file program (industry.py) grown entirely by scripted string-replace patches and whole-file reads: every later session began by reading the full file ([2.2], [3.2], [4.2], [5.4], [6.3]). Twice the agent extracted shared helpers before extending (invention_sources at [4.4]; invention_setup at [6.7]), while at ck4 it re-derived the success chance in Fractions rather than calling success_chance (diff ck4 l.212). Verification centred on reproducing spec examples: probability-formula brute force in /tmp ([2.6]), byte-diffs of examples ([2.8], [5.12]-[5.15]), and a regression check against old bytecode ([6.11]). Fitting examples drove two lasting failures: at [2.10], after the sweep showed 'No relics found for Jackdaw' ([2.9]), it fell back to the Tech II layout rather than fixing the relic prefix match, a bug that resurfaced in ck4 build-string parsing; at [5.14]-[5.15] it replaced the spec's floor split formula with a strict-under rule to match the split_days=3 example, which caused three ck5 failures and one at ck6. At ck6 it noticed one row off from the spec example and called the example an error ([6.11] final). No memory notes were written; sessions only checked for a memory directory ([5.2], [6.2])."
+}

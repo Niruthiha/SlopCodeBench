@@ -1,0 +1,1543 @@
+=== appctl_cli/__init__.py
+     1	"""appctl: a hierarchical command dispatcher."""
+     2	
+     3	__version__ = "1.0.0"
+     4	
+     5	PROGRAM_NAME = "appctl"
+=== appctl_cli/app.py
+     1	"""Top-level orchestration: config, aliases, rewrite, parse, resolve, validate, run."""
+     2	
+     3	import os
+     4	import sys
+     5	
+     6	from . import config_loader
+     7	from .arguments import END_OF_OPTIONS, is_assoc_token, parse_argv
+     8	from .commands import build_command_tree
+     9	from .context import Context
+    10	from .errors import AppctlError, UsageError
+    11	from .help import render_root_help, render_usage
+    12	from .output import Output
+    13	from .remote import run_remote
+    14	from .resolver import resolve
+    15	from .rewrites import apply_rewrites
+    16	from .runtime_config import build_runtime_config, deprecation_warnings, is_strict_mode
+    17	from .suggest import get_suggestion
+    18	from .validator import ArgumentValidator
+    19	
+    20	
+    21	def extract_alias(argv):
+    22	    """Return ``(alias, argv_without_alias)``; the alias is the first non-flag token."""
+    23	    for index, token in enumerate(argv):
+    24	        if token == END_OF_OPTIONS:
+    25	            break
+    26	        if is_assoc_token(token):
+    27	            continue
+    28	        if config_loader.is_alias(token):
+    29	            return token, argv[:index] + argv[index + 1:]
+    30	        break
+    31	    return None, list(argv)
+    32	
+    33	
+    34	def _unique(items):
+    35	    seen = []
+    36	    for item in items:
+    37	        if item not in seen:
+    38	            seen.append(item)
+    39	    return seen
+    40	
+    41	
+    42	def check_disabled(command, typed, disabled):
+    43	    """Raise if the command or one of its parents is disabled."""
+    44	    disabled = {" ".join(str(entry).split()) for entry in disabled}
+    45	    for path in (command.path, typed[:len(command.path)]):
+    46	        for depth in range(1, len(path) + 1):
+    47	            name = " ".join(path[:depth])
+    48	            if name in disabled:
+    49	                raise AppctlError(f"The '{name}' command has been disabled.")
+    50	
+    51	
+    52	def guarded(output, action, *args):
+    53	    """Run ``action`` and report user-facing errors; return the exit code."""
+    54	    try:
+    55	        return int(action(*args) or 0)
+    56	    except UsageError as exc:
+    57	        output.line(exc.usage)
+    58	        return exc.exit_code
+    59	    except AppctlError as exc:
+    60	        output.error(exc.message)
+    61	        return exc.exit_code
+    62	
+    63	
+    64	class Runner:
+    65	    def __init__(self, argv, parsed, environ, output, strict, loaded):
+    66	        self.argv = argv
+    67	        self.parsed = parsed
+    68	        self.environ = environ
+    69	        self.output = output
+    70	        self.strict = strict
+    71	        self.loaded = loaded
+    72	        self._root = None
+    73	
+    74	    @property
+    75	    def root(self):
+    76	        if self._root is None:
+    77	            self._root = build_command_tree()
+    78	        return self._root
+    79	
+    80	    # -- aliases ----------------------------------------------------------
+    81	
+    82	    def run_alias(self, name, stack=()):
+    83	        aliases = self.loaded.aliases
+    84	        if name == config_loader.ALL_ALIAS and not aliases:
+    85	            raise AppctlError("Cannot use '@all' when no aliases are registered.")
+    86	        if name not in aliases:
+    87	            message = f"Alias '{name}' not found."
+    88	            suggestion = get_suggestion(name, list(aliases))
+    89	            if suggestion:
+    90	                message += f"\nDid you mean '{suggestion}'?"
+    91	            raise AppctlError(message)
+    92	        definition = aliases[name]
+    93	        if name == config_loader.ALL_ALIAS and definition is None:
+    94	            members = sorted((a for a, d in aliases.items() if a != name and not isinstance(d, list)),
+    95	                             key=config_loader.alias_sort_key)
+    96	            return self.run_group(name, members, stack)
+    97	        if isinstance(definition, list):
+    98	            members = _unique(definition)
+    99	            invalid = [m for m in members if m not in aliases]
+   100	            if invalid:
+   101	                raise AppctlError(
+   102	                    f"Group '{name}' contains one or more invalid aliases: {', '.join(invalid)}."
+   103	                )
+   104	            return self.run_group(name, members, stack)
+   105	        return self.run(name, definition if isinstance(definition, dict) else {})
+   106	
+   107	    def run_group(self, name, members, stack):
+   108	        stack = stack + (name,)
+   109	        result = 0
+   110	        for member in members:
+   111	            if member in stack:
+   112	                continue
+   113	            self.output.log(member)
+   114	            self.output.stdout.flush()
+   115	            code = guarded(self.output, self.run_alias, member, stack)
+   116	            self.output.stdout.flush()
+   117	            if code:
+   118	                result = code
+   119	        return result
+   120	
+   121	    # -- a single execution ----------------------------------------------
+   122	
+   123	    def run(self, alias=None, alias_params=None):
+   124	        runtime = build_runtime_config(self.parsed.runtime, self.loaded.merged, alias_params)
+   125	        if runtime.get("ssh"):
+   126	            return run_remote(runtime["ssh"], self.argv, self.environ, self.output,
+   127	                              alias=alias, alias_params=alias_params,
+   128	                              skip_tty=bool(runtime.get("skip-tty")))
+   129	        positional = self.parsed.positional
+   130	        if not positional:
+   131	            self.output.line(render_root_help(self.root))
+   132	            return 0
+   133	        command, remaining = resolve(self.root, positional)
+   134	        check_disabled(command, positional, runtime["disabled_commands"])
+   135	        if not command.is_runnable:
+   136	            self.output.line(render_usage(command))
+   137	            return 0
+   138	        self.output.debug(f"Running command: {command.full_name}")
+   139	        args, assoc = ArgumentValidator(command).validate(
+   140	            remaining, self.parsed.assoc, warn=self.output.warning
+   141	        )
+   142	        context = Context(root=self.root, command=command, output=self.output,
+   143	                          runtime=runtime, strict=self.strict, config=self.loaded,
+   144	                          alias=alias)
+   145	        return command.handler(context, args, assoc)
+   146	
+   147	
+   148	def main(argv=None, environ=None, stdout=None, stderr=None, cwd=None):
+   149	    argv = sys.argv[1:] if argv is None else list(argv)
+   150	    environ = os.environ if environ is None else environ
+   151	    strict = is_strict_mode(environ)
+   152	
+   153	    alias, argv = extract_alias(argv)
+   154	    parsed = parse_argv(apply_rewrites(argv), strict=strict)
+   155	    output = Output(quiet=bool(parsed.runtime.get("quiet")), debug=bool(parsed.runtime.get("debug")),
+   156	                    stdout=stdout, stderr=stderr)
+   157	    for warning in deprecation_warnings(parsed.runtime):
+   158	        print(warning, file=output.stderr)
+   159	
+   160	    def start():
+   161	        loaded = config_loader.load(environ, cwd)
+   162	        runner = Runner(argv, parsed, environ, output, strict, loaded)
+   163	        if alias:
+   164	            return runner.run_alias(alias)
+   165	        return runner.run()
+   166	
+   167	    return guarded(output, start)
+=== appctl_cli/arguments.py
+     1	"""Splitting raw argv into positional, associative and global arguments."""
+     2	
+     3	from dataclasses import dataclass, field
+     4	
+     5	from .runtime_config import is_global_parameter
+     6	
+     7	END_OF_OPTIONS = "--"
+     8	
+     9	
+    10	def is_assoc_token(token):
+    11	    """True for ``--key``, ``--key=value`` and ``--no-key`` tokens."""
+    12	    return token.startswith("--") and len(token) > 2
+    13	
+    14	
+    15	def parse_assoc_token(token):
+    16	    """Return ``(key, value)`` for an associative token.
+    17	
+    18	    ``--key=value`` yields the string value, ``--no-key`` yields ``False``
+    19	    and a bare ``--key`` yields ``True``.
+    20	    """
+    21	    body = token[2:]
+    22	    if "=" in body:
+    23	        key, value = body.split("=", 1)
+    24	        return key, value
+    25	    if body.startswith("no-"):
+    26	        return body[3:], False
+    27	    return body, True
+    28	
+    29	
+    30	@dataclass
+    31	class ParsedArguments:
+    32	    positional: list = field(default_factory=list)
+    33	    assoc: dict = field(default_factory=dict)
+    34	    runtime: dict = field(default_factory=dict)
+    35	
+    36	
+    37	def parse_argv(argv, strict=False):
+    38	    """Classify every argv token.
+    39	
+    40	    Global parameters become runtime configuration. In strict mode only
+    41	    those appearing before the first positional token are treated as
+    42	    global; afterwards every argument is command-specific.
+    43	    """
+    44	    parsed = ParsedArguments()
+    45	    end_of_options = False
+    46	    seen_positional = False
+    47	    for token in argv:
+    48	        if not end_of_options and token == END_OF_OPTIONS:
+    49	            end_of_options = True
+    50	            continue
+    51	        if end_of_options or not is_assoc_token(token):
+    52	            parsed.positional.append(token)
+    53	            seen_positional = True
+    54	            continue
+    55	        key, value = parse_assoc_token(token)
+    56	        if is_global_parameter(key) and not (strict and seen_positional):
+    57	            parsed.runtime[key] = value
+    58	        else:
+    59	            parsed.assoc[key] = value
+    60	    return parsed
+=== appctl_cli/command.py
+     1	"""The command tree node."""
+     2	
+     3	from .errors import SynopsisError
+     4	from .synopsis import invalid_tokens, parse_synopsis
+     5	
+     6	
+     7	def sort_key(name):
+     8	    """Case-insensitive alphabetical ordering with a stable tie-break."""
+     9	    return (name.lower(), name)
+    10	
+    11	
+    12	class Command:
+    13	    """A node in the command tree.
+    14	
+    15	    A command may have a handler, subcommands, or both. A command with
+    16	    subcommands but no handler only prints its usage when invoked.
+    17	    """
+    18	
+    19	    def __init__(self, name, description="", synopsis="", handler=None,
+    20	                 alias=None, defaults=None, options=None, longdesc=""):
+    21	        self.name = name
+    22	        self.description = description
+    23	        self.synopsis = " ".join((synopsis or "").split())
+    24	        self.handler = handler
+    25	        self.alias = alias
+    26	        self.defaults = dict(defaults or {})
+    27	        self.options = dict(options or {})
+    28	        self.longdesc = longdesc
+    29	        self.parent = None
+    30	        self.subcommands = {}
+    31	
+    32	        self.tokens = parse_synopsis(self.synopsis)
+    33	        bad = invalid_tokens(self.tokens)
+    34	        if bad:
+    35	            raise SynopsisError(
+    36	                f"The '{name}' command has an invalid synopsis part: {', '.join(bad)}"
+    37	            )
+    38	
+    39	    # -- tree structure -------------------------------------------------
+    40	
+    41	    def add_subcommand(self, command):
+    42	        for taken in self._taken_names():
+    43	            if taken in (command.name, command.alias):
+    44	                raise ValueError(
+    45	                    f"'{taken}' is already registered under '{self.full_name or 'appctl'}'"
+    46	                )
+    47	        command.parent = self
+    48	        self.subcommands[command.name] = command
+    49	        return command
+    50	
+    51	    def _taken_names(self):
+    52	        for sub in self.subcommands.values():
+    53	            yield sub.name
+    54	            if sub.alias:
+    55	                yield sub.alias
+    56	
+    57	    def find_subcommand(self, token):
+    58	        """Match a subcommand by canonical name first, then by alias."""
+    59	        if token in self.subcommands:
+    60	            return self.subcommands[token]
+    61	        for sub in self.subcommands.values():
+    62	            if sub.alias and sub.alias == token:
+    63	                return sub
+    64	        return None
+    65	
+    66	    def sorted_subcommands(self):
+    67	        return [self.subcommands[k] for k in sorted(self.subcommands, key=sort_key)]
+    68	
+    69	    def subcommand_names(self):
+    70	        return list(self.subcommands)
+    71	
+    72	    # -- properties -----------------------------------------------------
+    73	
+    74	    @property
+    75	    def is_root(self):
+    76	        return self.parent is None
+    77	
+    78	    @property
+    79	    def has_subcommands(self):
+    80	        return bool(self.subcommands)
+    81	
+    82	    @property
+    83	    def is_runnable(self):
+    84	        return self.handler is not None
+    85	
+    86	    @property
+    87	    def path(self):
+    88	        """Canonical names from the top-level command down to this one."""
+    89	        parts = []
+    90	        node = self
+    91	        while node is not None and not node.is_root:
+    92	            parts.append(node.name)
+    93	            node = node.parent
+    94	        return list(reversed(parts))
+    95	
+    96	    @property
+    97	    def full_name(self):
+    98	        return " ".join(self.path)
+    99	
+   100	    def tokens_of_type(self, *types):
+   101	        return [t for t in self.tokens if t.type in types]
+   102	
+   103	    def __repr__(self):
+   104	        return f"Command({self.full_name or '<root>'!r})"
+=== appctl_cli/config_loader.py
+     1	"""Loading of global/project YAML config files and alias definitions."""
+     2	
+     3	import json
+     4	import os
+     5	import re
+     6	from dataclasses import dataclass, field
+     7	
+     8	import yaml
+     9	
+    10	from .errors import AppctlError
+    11	
+    12	CONFIG_PATH_ENV = "APPCTL_CONFIG_PATH"
+    13	ROOT_DIR_ENV = "APPCTL_ROOT_DIR"
+    14	PACKAGES_DIR_ENV = "APPCTL_PACKAGES_DIR"
+    15	RUNTIME_ALIAS_ENV = "APPCTL_RUNTIME_ALIAS"
+    16	
+    17	PROJECT_CONFIG_FILES = ("appctl.local.yml", "appctl.yml")
+    18	ALIAS_RE = re.compile(r"^@[A-Za-z0-9_.\-]+$")
+    19	ALL_ALIAS = "@all"
+    20	META_KEY = "_"
+    21	
+    22	# Keys the global config file must always define, with their defaults.
+    23	REQUIRED_GLOBAL_KEYS = (("locale", "en_US"), ("installer_version", "stable"))
+    24	
+    25	
+    26	def is_alias(name):
+    27	    return isinstance(name, str) and bool(ALIAS_RE.match(name))
+    28	
+    29	
+    30	def alias_sort_key(name):
+    31	    return (name.lower(), name)
+    32	
+    33	
+    34	# -- locations -----------------------------------------------------------
+    35	
+    36	
+    37	def root_dir(environ):
+    38	    value = environ.get(ROOT_DIR_ENV)
+    39	    if value:
+    40	        return value
+    41	    return os.path.join(os.path.expanduser("~"), ".appctl")
+    42	
+    43	
+    44	def global_config_path(environ):
+    45	    value = environ.get(CONFIG_PATH_ENV)
+    46	    if value:
+    47	        return value
+    48	    return os.path.join(root_dir(environ), "config", "config.yml")
+    49	
+    50	
+    51	def packages_dir(environ):
+    52	    value = environ.get(PACKAGES_DIR_ENV)
+    53	    if value:
+    54	        return value
+    55	    return os.path.join(root_dir(environ), "packages")
+    56	
+    57	
+    58	def find_project_config(cwd):
+    59	    """Search upward from ``cwd``; the first directory with a config wins."""
+    60	    directory = os.path.abspath(cwd)
+    61	    while True:
+    62	        for name in PROJECT_CONFIG_FILES:
+    63	            candidate = os.path.join(directory, name)
+    64	            if os.path.isfile(candidate):
+    65	                return candidate
+    66	        parent = os.path.dirname(directory)
+    67	        if parent == directory:
+    68	            return None
+    69	        directory = parent
+    70	
+    71	
+    72	# -- auto-creation ---------------------------------------------------------
+    73	
+    74	
+    75	def _read_mapping(path):
+    76	    with open(path, encoding="utf-8") as handle:
+    77	        text = handle.read()
+    78	    try:
+    79	        data = yaml.safe_load(text)
+    80	    except yaml.YAMLError as exc:
+    81	        raise AppctlError(f"Unable to parse the config file '{path}': {exc}") from exc
+    82	    if data is None:
+    83	        data = {}
+    84	    if not isinstance(data, dict):
+    85	        raise AppctlError(f"The config file '{path}' must contain a YAML mapping.")
+    86	    return data, text
+    87	
+    88	
+    89	def ensure_global_config(path, strict=True):
+    90	    """Add missing required keys to the global config file, creating it.
+    91	
+    92	    Write failures raise :class:`AppctlError` unless ``strict`` is false.
+    93	    """
+    94	    try:
+    95	        if os.path.exists(path):
+    96	            data, text = _read_mapping(path)
+    97	        else:
+    98	            data, text = {}, ""
+    99	        missing = [(k, v) for k, v in REQUIRED_GLOBAL_KEYS if k not in data]
+   100	        if not missing:
+   101	            return
+   102	        if text and not text.endswith("\n"):
+   103	            text += "\n"
+   104	        text += "".join(f"{key}: {value}\n" for key, value in missing)
+   105	        directory = os.path.dirname(path)
+   106	        if directory:
+   107	            os.makedirs(directory, exist_ok=True)
+   108	        with open(path, "w", encoding="utf-8") as handle:
+   109	            handle.write(text)
+   110	    except OSError as exc:
+   111	        if strict:
+   112	            reason = exc.strerror or str(exc)
+   113	            raise AppctlError(f"Unable to write the config file '{path}': {reason}.") from exc
+   114	
+   115	
+   116	# -- YAML loading with inheritance -------------------------------------------
+   117	
+   118	
+   119	def _merge(base, override, append_arrays):
+   120	    """Overlay ``override`` on ``base``; nested mappings merge recursively."""
+   121	    if isinstance(base, dict) and isinstance(override, dict):
+   122	        merged = dict(base)
+   123	        for key, value in override.items():
+   124	            merged[key] = _merge(base[key], value, append_arrays) if key in base else value
+   125	        return merged
+   126	    if append_arrays and isinstance(base, list) and isinstance(override, list):
+   127	        return base + override
+   128	    return override
+   129	
+   130	
+   131	def _absolutize_alias_paths(data, directory):
+   132	    for key, value in data.items():
+   133	        if is_alias(key) and isinstance(value, dict):
+   134	            path = value.get("path")
+   135	            if isinstance(path, str) and path and "ssh" not in value:
+   136	                value["path"] = os.path.normpath(os.path.join(directory, os.path.expanduser(path)))
+   137	
+   138	
+   139	def load_config_file(path, accumulated=None, _seen=None):
+   140	    """Merge the YAML file at ``path`` (and its ancestors) over ``accumulated``."""
+   141	    accumulated = dict(accumulated or {})
+   142	    if not path:
+   143	        return accumulated
+   144	    path = os.path.abspath(path)
+   145	    seen = set(_seen or ())
+   146	    if path in seen or not os.path.isfile(path):
+   147	        return accumulated
+   148	    seen.add(path)
+   149	    try:
+   150	        data, _ = _read_mapping(path)
+   151	    except OSError:
+   152	        return accumulated
+   153	    directory = os.path.dirname(path)
+   154	    meta = data.pop(META_KEY, None)
+   155	    meta = meta if isinstance(meta, dict) else {}
+   156	    inherit = meta.get("inherit")
+   157	    if isinstance(inherit, str) and inherit:
+   158	        base = os.path.join(directory, os.path.expanduser(inherit))
+   159	        accumulated = load_config_file(base, accumulated, seen)
+   160	    _absolutize_alias_paths(data, directory)
+   161	    return _merge(accumulated, data, meta.get("merge") is True)
+   162	
+   163	
+   164	# -- aliases -------------------------------------------------------------------
+   165	
+   166	
+   167	def runtime_aliases(environ, cwd):
+   168	    raw = environ.get(RUNTIME_ALIAS_ENV)
+   169	    if not raw:
+   170	        return {}
+   171	    try:
+   172	        decoded = json.loads(raw)
+   173	    except ValueError:
+   174	        return {}
+   175	    if not isinstance(decoded, dict):
+   176	        return {}
+   177	    aliases = {k: v for k, v in decoded.items() if is_alias(k)}
+   178	    _absolutize_alias_paths(aliases, cwd)
+   179	    return aliases
+   180	
+   181	
+   182	def collect_aliases(config, extra=None):
+   183	    """Return ``{name: definition}``, registering ``@all`` when needed.
+   184	
+   185	    A definition is either a mapping of connection parameters or a list
+   186	    of alias names (a group).
+   187	    """
+   188	    aliases = {}
+   189	    for key, value in list(config.items()) + list((extra or {}).items()):
+   190	        if not is_alias(key):
+   191	            continue
+   192	        if isinstance(value, list):
+   193	            aliases[key] = [str(v) for v in value]
+   194	        elif isinstance(value, dict):
+   195	            aliases[key] = dict(value)
+   196	        elif value is None:
+   197	            aliases[key] = {}
+   198	        else:
+   199	            aliases[key] = value
+   200	    if aliases and ALL_ALIAS not in aliases:
+   201	        aliases[ALL_ALIAS] = None  # implicit: every registered alias
+   202	    return aliases
+   203	
+   204	
+   205	# -- entry point ---------------------------------------------------------------
+   206	
+   207	
+   208	@dataclass
+   209	class LoadedConfig:
+   210	    global_path: str = None
+   211	    project_path: str = None
+   212	    global_config: dict = field(default_factory=dict)
+   213	    merged: dict = field(default_factory=dict)
+   214	    aliases: dict = field(default_factory=dict)
+   215	    packages_dir: str = None
+   216	
+   217	
+   218	def load(environ, cwd=None):
+   219	    cwd = cwd or os.getcwd()
+   220	    global_path = global_config_path(environ)
+   221	    explicit = bool(environ.get(CONFIG_PATH_ENV) or environ.get(ROOT_DIR_ENV))
+   222	    ensure_global_config(global_path, strict=explicit)
+   223	    global_config = load_config_file(global_path)
+   224	    project_path = find_project_config(cwd)
+   225	    if project_path and os.path.abspath(project_path) == os.path.abspath(global_path):
+   226	        project_path = None
+   227	    merged = load_config_file(project_path, global_config)
+   228	    return LoadedConfig(
+   229	        global_path=global_path,
+   230	        project_path=project_path,
+   231	        global_config=global_config,
+   232	        merged=merged,
+   233	        aliases=collect_aliases(merged, runtime_aliases(environ, cwd)),
+   234	        packages_dir=packages_dir(environ),
+   235	    )
+=== appctl_cli/context.py
+     1	"""Execution context handed to command handlers."""
+     2	
+     3	from dataclasses import dataclass, field
+     4	
+     5	
+     6	@dataclass
+     7	class Context:
+     8	    root: object
+     9	    command: object
+    10	    output: object
+    11	    runtime: dict = field(default_factory=dict)
+    12	    strict: bool = False
+    13	    config: object = None
+    14	    alias: str = None
+=== appctl_cli/errors.py
+     1	"""Exception types used to signal user-facing failures."""
+     2	
+     3	
+     4	class AppctlError(Exception):
+     5	    """A fatal error reported as ``Error: <message>`` on STDERR."""
+     6	
+     7	    def __init__(self, message, exit_code=1):
+     8	        super().__init__(message)
+     9	        self.message = message
+    10	        self.exit_code = exit_code
+    11	
+    12	
+    13	class CommandNotFoundError(AppctlError):
+    14	    """Raised when a command or subcommand cannot be resolved."""
+    15	
+    16	
+    17	class UsageError(AppctlError):
+    18	    """Raised when a command must print its usage on STDOUT and fail."""
+    19	
+    20	    def __init__(self, usage, exit_code=1):
+    21	        super().__init__(usage, exit_code)
+    22	        self.usage = usage
+    23	
+    24	
+    25	class SynopsisError(ValueError):
+    26	    """Raised when a command is registered with a malformed synopsis."""
+=== appctl_cli/formatter.py
+     1	"""Rendering of records as table, csv, json, yaml, count or ids."""
+     2	
+     3	import csv
+     4	import io
+     5	import json
+     6	
+     7	from .errors import AppctlError
+     8	
+     9	LIST_FORMATS = ("table", "csv", "json", "yaml", "count", "ids")
+    10	ITEM_FORMATS = ("table", "csv", "json", "yaml")
+    11	
+    12	
+    13	def _text(value):
+    14	    if value is None:
+    15	        return ""
+    16	    if isinstance(value, bool):
+    17	        return "true" if value else "false"
+    18	    return str(value)
+    19	
+    20	
+    21	def _check_format(fmt, allowed):
+    22	    if fmt not in allowed:
+    23	        raise AppctlError(f"Invalid format: {fmt}. Supported formats: {', '.join(allowed)}.")
+    24	
+    25	
+    26	def select_fields(requested, default_fields, available):
+    27	    """Resolve ``--fields`` (comma separated) against the known fields."""
+    28	    if not requested or requested is True:
+    29	        return list(default_fields)
+    30	    fields = [f.strip() for f in str(requested).split(",") if f.strip()]
+    31	    for name in fields:
+    32	        if name not in available:
+    33	            raise AppctlError(f"Invalid field: {name}.")
+    34	    return fields
+    35	
+    36	
+    37	def _table(headers, rows):
+    38	    widths = [len(h) for h in headers]
+    39	    for row in rows:
+    40	        widths = [max(w, len(cell)) for w, cell in zip(widths, row)]
+    41	    border = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+    42	
+    43	    def render(cells):
+    44	        return "|" + "|".join(f" {c.ljust(w)} " for c, w in zip(cells, widths)) + "|"
+    45	
+    46	    lines = [border, render(headers), border]
+    47	    lines += [render(row) for row in rows]
+    48	    lines.append(border)
+    49	    return "\n".join(lines)
+    50	
+    51	
+    52	def _csv(headers, rows):
+    53	    buffer = io.StringIO()
+    54	    writer = csv.writer(buffer, lineterminator="\n")
+    55	    writer.writerow(headers)
+    56	    writer.writerows(rows)
+    57	    return buffer.getvalue().rstrip("\n")
+    58	
+    59	
+    60	def _yaml_scalar(value):
+    61	    text = _text(value)
+    62	    if text == "" or any(ch in text for ch in ":#'\"{}[],&*!|>%@`") or text.strip() != text:
+    63	        return json.dumps(text)
+    64	    return text
+    65	
+    66	
+    67	def format_items(items, fields, fmt="table", id_field="id"):
+    68	    _check_format(fmt, LIST_FORMATS)
+    69	    if fmt == "count":
+    70	        return str(len(items))
+    71	    if fmt == "ids":
+    72	        return " ".join(_text(item.get(id_field)) for item in items)
+    73	    if fmt == "json":
+    74	        return json.dumps([{f: item.get(f) for f in fields} for item in items])
+    75	    if fmt == "yaml":
+    76	        if not items:
+    77	            return "--- []"
+    78	        lines = ["---"]
+    79	        for item in items:
+    80	            for index, name in enumerate(fields):
+    81	                prefix = "- " if index == 0 else "  "
+    82	                lines.append(f"{prefix}{name}: {_yaml_scalar(item.get(name))}")
+    83	        return "\n".join(lines)
+    84	    rows = [[_text(item.get(f)) for f in fields] for item in items]
+    85	    if fmt == "csv":
+    86	        return _csv(fields, rows)
+    87	    return _table(fields, rows)
+    88	
+    89	
+    90	def format_item(item, fields, fmt="table"):
+    91	    _check_format(fmt, ITEM_FORMATS)
+    92	    if fmt == "json":
+    93	        return json.dumps({f: item.get(f) for f in fields})
+    94	    if fmt == "yaml":
+    95	        return "\n".join(["---"] + [f"{f}: {_yaml_scalar(item.get(f))}" for f in fields])
+    96	    rows = [[f, _text(item.get(f))] for f in fields]
+    97	    if fmt == "csv":
+    98	        return _csv(["Field", "Value"], rows)
+    99	    return _table(["Field", "Value"], rows)
+   100	
+   101	
+   102	def format_value(value, fmt="plaintext"):
+   103	    if fmt == "json":
+   104	        return json.dumps(value)
+   105	    if fmt == "plaintext":
+   106	        return _text(value)
+   107	    raise AppctlError(f"Invalid format: {fmt}. Supported formats: plaintext, json.")
+=== appctl_cli/help.py
+     1	"""Rendering of help text and usage lines."""
+     2	
+     3	from . import PROGRAM_NAME
+     4	from .command import sort_key
+     5	
+     6	INDENT = "  "
+     7	
+     8	
+     9	def command_line(command):
+    10	    """``appctl <path> <synopsis>`` for a runnable command."""
+    11	    parts = [PROGRAM_NAME] + command.path
+    12	    if command.synopsis:
+    13	        parts.append(command.synopsis)
+    14	    return " ".join(parts)
+    15	
+    16	
+    17	def composite_line(command):
+    18	    return " ".join([PROGRAM_NAME] + command.path + ["<command>"])
+    19	
+    20	
+    21	def usage_lines(command):
+    22	    """All invocation forms of a command, sorted by full command path."""
+    23	    lines = []
+    24	    if command.is_runnable:
+    25	        lines.append(command_line(command))
+    26	    for sub in command.sorted_subcommands():
+    27	        if sub.has_subcommands and not sub.is_runnable:
+    28	            lines.append(composite_line(sub))
+    29	        else:
+    30	            lines.append(command_line(sub))
+    31	    return lines
+    32	
+    33	
+    34	def render_usage(command):
+    35	    """The usage block printed when a command is invoked incorrectly."""
+    36	    if not command.has_subcommands:
+    37	        return f"usage: {command_line(command)}"
+    38	    lines = usage_lines(command)
+    39	    out = [f"usage: {lines[0]}"] + [f"   or: {line}" for line in lines[1:]]
+    40	    out.append("")
+    41	    out.append(
+    42	        f"See '{PROGRAM_NAME} help {command.full_name} <command>' "
+    43	        "for more information on a specific command."
+    44	    )
+    45	    return "\n".join(out)
+    46	
+    47	
+    48	def render_listing(commands):
+    49	    """Column-aligned ``name  description`` rows, alphabetically sorted."""
+    50	    commands = sorted(commands, key=lambda c: sort_key(c.name))
+    51	    if not commands:
+    52	        return []
+    53	    width = max(len(c.name) for c in commands)
+    54	    return [f"{INDENT}{c.name.ljust(width)}  {c.description}".rstrip() for c in commands]
+    55	
+    56	
+    57	def render_root_help(root):
+    58	    lines = [
+    59	        f"usage: {PROGRAM_NAME} <command> [<subcommand>] [<args>] [--<flags>]",
+    60	        "",
+    61	        "Available commands:",
+    62	        "",
+    63	    ]
+    64	    lines.extend(render_listing(root.subcommands.values()))
+    65	    lines.append("")
+    66	    lines.append(
+    67	        f"See '{PROGRAM_NAME} help <command>' for more information on a specific command."
+    68	    )
+    69	    return "\n".join(lines)
+    70	
+    71	
+    72	def _section(title, body_lines):
+    73	    return [title, ""] + body_lines + [""]
+    74	
+    75	
+    76	def _default_text(value):
+    77	    if isinstance(value, bool):
+    78	        return "true" if value else "false"
+    79	    return str(value)
+    80	
+    81	
+    82	def _option_lines(command):
+    83	    lines = []
+    84	    for token in command.tokens:
+    85	        lines.append(f"{INDENT}{token.token}")
+    86	        description = command.options.get(token.name) if token.name else None
+    87	        if description:
+    88	            lines.append(f"{INDENT * 2}{description}")
+    89	        if token.name and token.name in command.defaults:
+    90	            lines.append(f"{INDENT * 2}---")
+    91	            lines.append(f"{INDENT * 2}default: {_default_text(command.defaults[token.name])}")
+    92	            lines.append(f"{INDENT * 2}---")
+    93	        lines.append("")
+    94	    return lines[:-1]
+    95	
+    96	
+    97	def render_command_help(command):
+    98	    if command.is_root:
+    99	        return render_root_help(command)
+   100	    lines = []
+   101	    lines += _section("NAME", [f"{INDENT}{PROGRAM_NAME} {command.full_name}"])
+   102	    if command.description:
+   103	        lines += _section("DESCRIPTION", [f"{INDENT}{command.description}"])
+   104	    if command.longdesc:
+   105	        lines += [f"{INDENT}{line}".rstrip() for line in command.longdesc.splitlines()] + [""]
+   106	    synopsis = []
+   107	    if command.is_runnable:
+   108	        synopsis.append(f"{INDENT}{command_line(command)}")
+   109	    if command.has_subcommands:
+   110	        synopsis.append(f"{INDENT}{composite_line(command)}")
+   111	    lines += _section("SYNOPSIS", synopsis)
+   112	    if command.is_runnable and command.tokens:
+   113	        lines += _section("OPTIONS", _option_lines(command))
+   114	    if command.has_subcommands:
+   115	        lines += _section("SUBCOMMANDS", render_listing(command.subcommands.values()))
+   116	    if command.alias:
+   117	        lines += _section("ALIAS", [f"{INDENT}{command.alias}"])
+   118	    return "\n".join(lines).rstrip("\n")
+=== appctl_cli/output.py
+     1	"""Writers for the different kinds of user-facing output."""
+     2	
+     3	import sys
+     4	
+     5	
+     6	class Output:
+     7	    """Routes messages to STDOUT/STDERR, honouring --quiet and --debug."""
+     8	
+     9	    def __init__(self, quiet=False, debug=False, stdout=None, stderr=None):
+    10	        self.quiet = quiet
+    11	        self.debug_enabled = debug
+    12	        self._stdout = stdout
+    13	        self._stderr = stderr
+    14	
+    15	    @property
+    16	    def stdout(self):
+    17	        return self._stdout or sys.stdout
+    18	
+    19	    @property
+    20	    def stderr(self):
+    21	        return self._stderr or sys.stderr
+    22	
+    23	    def line(self, text=""):
+    24	        """Print a line on STDOUT unconditionally."""
+    25	        print(text, file=self.stdout)
+    26	
+    27	    def log(self, text):
+    28	        """Print an informational line on STDOUT unless --quiet."""
+    29	        if not self.quiet:
+    30	            print(text, file=self.stdout)
+    31	
+    32	    def success(self, text):
+    33	        if not self.quiet:
+    34	            print(f"Success: {text}", file=self.stdout)
+    35	
+    36	    def warning(self, text):
+    37	        if not self.quiet:
+    38	            print(f"Warning: {text}", file=self.stderr)
+    39	
+    40	    def error(self, text):
+    41	        print(f"Error: {text}", file=self.stderr)
+    42	
+    43	    def debug(self, text):
+    44	        if self.debug_enabled:
+    45	            print(f"Debug: {text}", file=self.stderr)
+=== appctl_cli/registry.py
+     1	"""Registration of commands into a tree rooted at the program command."""
+     2	
+     3	from . import PROGRAM_NAME
+     4	from .command import Command
+     5	
+     6	
+     7	class CommandRegistry:
+     8	    """Builds the command tree from multi-level command paths."""
+     9	
+    10	    def __init__(self, description=""):
+    11	        self.root = Command(PROGRAM_NAME, description=description)
+    12	
+    13	    def add(self, path, handler=None, **attributes):
+    14	        """Register ``path`` (e.g. ``"site create"``) and return the command.
+    15	
+    16	        Parent commands must be registered before their subcommands.
+    17	        """
+    18	        parts = path.split()
+    19	        if not parts:
+    20	            raise ValueError("A command path cannot be empty")
+    21	        parent = self.root
+    22	        for index, part in enumerate(parts[:-1]):
+    23	            child = parent.subcommands.get(part)
+    24	            if child is None:
+    25	                missing = " ".join(parts[: index + 1])
+    26	                raise ValueError(f"Parent command '{missing}' must be registered before '{path}'")
+    27	            parent = child
+    28	        return parent.add_subcommand(Command(parts[-1], handler=handler, **attributes))
+    29	
+    30	    def get(self, path):
+    31	        node = self.root
+    32	        for part in path.split():
+    33	            node = node.subcommands[part]
+    34	        return node
+=== appctl_cli/remote.py
+     1	"""Execution of a command on a remote endpoint (SSH, Docker, Vagrant)."""
+     2	
+     3	import json
+     4	import os
+     5	import re
+     6	import shlex
+     7	import subprocess
+     8	import sys
+     9	
+    10	from . import PROGRAM_NAME
+    11	from .arguments import END_OF_OPTIONS, is_assoc_token, parse_assoc_token
+    12	from .errors import AppctlError
+    13	
+    14	SSH_PRE_CMD_ENV = "APPCTL_SSH_PRE_CMD"
+    15	SSH_BINARY_ENV = "APPCTL_SSH_BINARY"
+    16	CONNECTION_FAILED = 255
+    17	
+    18	SSH_URL_RE = re.compile(
+    19	    r"^(?:(?P<scheme>docker|docker-compose|docker-compose-run|ssh|vagrant):(?://)?)?"
+    20	    r"(?:(?P<user>[^@:/]+)@)?"
+    21	    r"(?P<host>[^:/~]+)"
+    22	    r"(?::(?P<port>\d*))?"
+    23	    r"(?P<path>[/~].*)?$"
+    24	)
+    25	
+    26	
+    27	def parse_ssh_url(url):
+    28	    """Split ``[scheme:][user@]host[:port][path]`` into its components."""
+    29	    match = SSH_URL_RE.match(str(url).strip())
+    30	    if not match:
+    31	        raise AppctlError(f"Invalid SSH connection string '{url}'.")
+    32	    return {k: v for k, v in match.groupdict().items() if v}
+    33	
+    34	
+    35	def _strip_ssh_flags(argv):
+    36	    stripped = []
+    37	    end_of_options = False
+    38	    for token in argv:
+    39	        if token == END_OF_OPTIONS:
+    40	            end_of_options = True
+    41	        elif not end_of_options and is_assoc_token(token) and parse_assoc_token(token)[0] == "ssh":
+    42	            continue
+    43	        stripped.append(token)
+    44	    return stripped
+    45	
+    46	
+    47	def build_remote_command(argv, environ, alias=None, alias_params=None, path=None):
+    48	    """The shell command run on the remote side."""
+    49	    binary = environ.get(SSH_BINARY_ENV) or PROGRAM_NAME
+    50	    prefix = ""
+    51	    pre_cmd = (environ.get(SSH_PRE_CMD_ENV) or "").strip().rstrip(";").strip()
+    52	    if pre_cmd:
+    53	        prefix = pre_cmd + "; "
+    54	    words = []
+    55	    if alias:
+    56	        forwarded = {k: v for k, v in (alias_params or {}).items() if k != "ssh"}
+    57	        if forwarded:
+    58	            encoded = json.dumps({alias: forwarded}, separators=(",", ":"))
+    59	            prefix += f"APPCTL_RUNTIME_ALIAS={shlex.quote(encoded)} "
+    60	            words.append(alias)
+    61	    words.extend(_strip_ssh_flags(argv))
+    62	    if path:
+    63	        words.append(f"--path={path}")
+    64	    return prefix + " ".join([binary] + [shlex.quote(w) for w in words])
+    65	
+    66	
+    67	def build_transport(bits, remote_command, tty=False, proxyjump=None, key=None):
+    68	    """argv of the local process that carries ``remote_command``."""
+    69	    scheme = bits.get("scheme", "ssh")
+    70	    host = bits["host"]
+    71	    user = bits.get("user")
+    72	    if scheme == "docker":
+    73	        argv = ["docker", "exec"]
+    74	        if user:
+    75	            argv += ["--user", user]
+    76	        argv += ["-it" if tty else "-i", host, "sh", "-c", remote_command]
+    77	        return argv
+    78	    if scheme in ("docker-compose", "docker-compose-run"):
+    79	        argv = ["docker-compose", "exec" if scheme == "docker-compose" else "run"]
+    80	        if user:
+    81	            argv += ["--user", user]
+    82	        if not tty:
+    83	            argv.append("-T")
+    84	        if scheme == "docker-compose-run":
+    85	            argv.append("--rm")
+    86	        argv += [host, "sh", "-c", remote_command]
+    87	        return argv
+    88	    if scheme == "vagrant":
+    89	        return ["vagrant", "ssh", "-c", remote_command, host]
+    90	    argv = ["ssh", "-q"]
+    91	    if proxyjump:
+    92	        argv += ["-J", str(proxyjump)]
+    93	    if key:
+    94	        argv += ["-i", str(key)]
+    95	    if bits.get("port"):
+    96	        argv += ["-p", str(int(bits["port"]))]
+    97	    argv.append("-t" if tty else "-T")
+    98	    argv.append(f"{user}@{host}" if user else host)
+    99	    argv.append(remote_command)
+   100	    return argv
+   101	
+   102	
+   103	def _real_stream(stream, default):
+   104	    return stream is None or stream is default
+   105	
+   106	
+   107	def run_remote(ssh, argv, environ, output, alias=None, alias_params=None, skip_tty=False):
+   108	    """Run the command remotely and return its exit code."""
+   109	    bits = parse_ssh_url(ssh)
+   110	    alias_params = alias_params or {}
+   111	    remote_command = build_remote_command(argv, environ, alias, alias_params, bits.get("path"))
+   112	    passthrough = _real_stream(output.stdout, sys.stdout) and _real_stream(output.stderr, sys.stderr)
+   113	    tty = bool(passthrough and not skip_tty and sys.stdout.isatty() and sys.stdin.isatty())
+   114	    transport = build_transport(bits, remote_command, tty=tty,
+   115	                                proxyjump=alias_params.get("proxyjump"),
+   116	                                key=alias_params.get("key"))
+   117	    output.debug("Running SSH command: " + " ".join(shlex.quote(a) for a in transport))
+   118	    output.stdout.flush()
+   119	    output.stderr.flush()
+   120	    try:
+   121	        if passthrough:
+   122	            code = subprocess.run(transport, env=dict(environ)).returncode
+   123	        else:
+   124	            result = subprocess.run(transport, env=dict(environ), capture_output=True, text=True)
+   125	            output.stdout.write(result.stdout)
+   126	            output.stderr.write(result.stderr)
+   127	            code = result.returncode
+   128	    except OSError:
+   129	        code = CONNECTION_FAILED
+   130	    if code == CONNECTION_FAILED:
+   131	        raise AppctlError("Cannot connect over SSH using provided configuration.", CONNECTION_FAILED)
+   132	    return code
+=== appctl_cli/resolver.py
+     1	"""Hierarchical resolution of positional tokens to a command."""
+     2	
+     3	from . import PROGRAM_NAME
+     4	from .errors import CommandNotFoundError
+     5	from .suggest import get_suggestion
+     6	
+     7	
+     8	def _with_suggestion(message, typed, parent):
+     9	    suggestion = get_suggestion(typed, parent.subcommand_names())
+    10	    if suggestion:
+    11	        message += f"\nDid you mean '{suggestion}'?"
+    12	    return message
+    13	
+    14	
+    15	def not_found_error(typed, parent):
+    16	    if parent.is_root:
+    17	        message = (
+    18	            f"'{typed}' is not a registered {PROGRAM_NAME} command. "
+    19	            f"See '{PROGRAM_NAME} help' for available commands."
+    20	        )
+    21	    else:
+    22	        name = parent.full_name
+    23	        message = (
+    24	            f"'{typed}' is not a registered subcommand of '{name}'. "
+    25	            f"See '{PROGRAM_NAME} help {name}' for available subcommands."
+    26	        )
+    27	    return CommandNotFoundError(_with_suggestion(message, typed, parent))
+    28	
+    29	
+    30	def resolve(root, tokens):
+    31	    """Walk the tree and return ``(command, remaining_tokens)``.
+    32	
+    33	    Tokens keep matching subcommands (by name or alias) until the deepest
+    34	    command is found. If the next token does not match, a command with a
+    35	    handler receives it as an argument; otherwise it is an error.
+    36	    """
+    37	    command = root
+    38	    index = 0
+    39	    while index < len(tokens) and command.has_subcommands:
+    40	        child = command.find_subcommand(tokens[index])
+    41	        if child is None:
+    42	            if command.is_runnable and not command.is_root:
+    43	                break
+    44	            raise not_found_error(tokens[index], command)
+    45	        command = child
+    46	        index += 1
+    47	    return command, list(tokens[index:])
+    48	
+    49	
+    50	def try_resolve(root, tokens):
+    51	    """Like :func:`resolve` but return ``None`` instead of raising."""
+    52	    try:
+    53	        return resolve(root, tokens)
+    54	    except CommandNotFoundError:
+    55	        return None
+=== appctl_cli/rewrites.py
+     1	"""Argument rewrites applied before dispatch.
+     2	
+     3	* ``<command> --help`` becomes ``help <command>``.
+     4	* ``--version`` (with no command) becomes ``cli version``.
+     5	"""
+     6	
+     7	from .arguments import END_OF_OPTIONS, is_assoc_token, parse_assoc_token
+     8	from .runtime_config import is_global_parameter
+     9	
+    10	
+    11	def _split_options(argv):
+    12	    """Return ``(head, tail)``; ``tail`` holds tokens after ``--``."""
+    13	    if END_OF_OPTIONS in argv:
+    14	        index = argv.index(END_OF_OPTIONS)
+    15	        return argv[:index], argv[index + 1:]
+    16	    return argv, []
+    17	
+    18	
+    19	def rewrite_help(argv):
+    20	    head, tail = _split_options(argv)
+    21	    if "--help" not in head:
+    22	        return argv
+    23	    positional = [t for t in head if not is_assoc_token(t)] + tail
+    24	    # Keep global parameters (ahead of 'help' so they stay global in strict
+    25	    # mode); command-specific parameters are irrelevant to help output.
+    26	    global_flags = [
+    27	        t for t in head
+    28	        if t != "--help" and is_assoc_token(t) and is_global_parameter(parse_assoc_token(t)[0])
+    29	    ]
+    30	    return global_flags + ["help"] + positional
+    31	
+    32	
+    33	def rewrite_version(argv):
+    34	    head, tail = _split_options(argv)
+    35	    if "--version" not in head or tail or any(not is_assoc_token(t) for t in head):
+    36	        return argv
+    37	    rewritten = []
+    38	    for token in head:
+    39	        rewritten.extend(["cli", "version"] if token == "--version" else [token])
+    40	    return rewritten
+    41	
+    42	
+    43	def apply_rewrites(argv):
+    44	    return rewrite_version(rewrite_help(list(argv)))
+=== appctl_cli/runtime_config.py
+     1	"""Global runtime configuration parameters."""
+     2	
+     3	import copy
+     4	from dataclasses import dataclass
+     5	
+     6	STRICT_ARGS_ENV = "APPCTL_STRICT_ARGS_MODE"
+     7	
+     8	
+     9	@dataclass(frozen=True)
+    10	class GlobalParameter:
+    11	    name: str
+    12	    synopsis: str
+    13	    description: str
+    14	    default: object = None
+    15	    runtime: bool = True
+    16	    file: bool = True
+    17	    multiple: bool = False
+    18	    deprecated: str = None
+    19	    hidden: bool = False
+    20	
+    21	
+    22	def _file_only(name, description, default=None):
+    23	    return GlobalParameter(name, "", description, default, runtime=False, file=True)
+    24	
+    25	
+    26	GLOBAL_PARAMETERS = {
+    27	    p.name: p
+    28	    for p in (
+    29	        GlobalParameter("path", "--path=<path>", "Path to the application files.", None),
+    30	        GlobalParameter("url", "--url=<url>", "Pretend request came from given URL.", None),
+    31	        GlobalParameter("ssh", "--ssh=<[scheme:][user@]host|container>[:port][path]",
+    32	                        "Perform operation against a remote server over SSH.", None),
+    33	        GlobalParameter("http", "--http=<http>", "Perform operation against a remote install over HTTP.", None),
+    34	        GlobalParameter("user", "--user=<id|login|email>", "Set the user for the current request.", None),
+    35	        GlobalParameter("skip-plugins", "--skip-plugins[=<plugins>]", "Skip loading all or some plugins.", False),
+    36	        GlobalParameter("skip-themes", "--skip-themes[=<themes>]", "Skip loading all or some themes.", False),
+    37	        GlobalParameter("skip-packages", "--skip-packages", "Skip loading all installed packages.", False),
+    38	        GlobalParameter("require", "--require=<path>", "Load a file before running the command.", None),
+    39	        GlobalParameter("exec", "--exec=<php-code>", "Execute code before running the command.", None),
+    40	        GlobalParameter("context", "--context=<context>", "Load the application in a given context.", "cli"),
+    41	        _file_only("disabled_commands", "(Sub)commands to disable.", []),
+    42	        _file_only("projects_path", "Path where projects are stored."),
+    43	        _file_only("locale", "Locale to use.", "en_US"),
+    44	        _file_only("cert-email", "Email address used for certificate registration."),
+    45	        _file_only("env", "Environment the tool runs in."),
+    46	        _file_only("admin-email", "Email address of the administrator."),
+    47	        _file_only("sysctl", "Kernel parameters applied to containers."),
+    48	        _file_only("skip-tty", "Never allocate a TTY for remote commands.", False),
+    49	        _file_only("custom-compose", "Path to a custom compose file."),
+    50	        _file_only("installer_version", "Release channel of the installer.", "stable"),
+    51	        GlobalParameter("color", "--[no-]color", "Whether to colorize the output.", "auto"),
+    52	        GlobalParameter("debug", "--debug[=<group>]", "Show all errors and debug messages.", False,
+    53	                        file=False),
+    54	        GlobalParameter("prompt", "--prompt[=<assoc>]", "Prompt the user to enter values for all arguments.",
+    55	                        False, file=False),
+    56	        GlobalParameter("quiet", "--quiet", "Suppress informational messages.", False, file=False),
+    57	    )
+    58	}
+    59	
+    60	
+    61	def is_global_parameter(key):
+    62	    """True for global parameters that may be given as runtime flags."""
+    63	    param = GLOBAL_PARAMETERS.get(key)
+    64	    return param is not None and param.runtime
+    65	
+    66	
+    67	def is_file_parameter(key):
+    68	    param = GLOBAL_PARAMETERS.get(key)
+    69	    return param is not None and param.file
+    70	
+    71	
+    72	def visible_parameters():
+    73	    """Global parameters that may be shown in help output."""
+    74	    return {name: p for name, p in GLOBAL_PARAMETERS.items() if not p.hidden}
+    75	
+    76	
+    77	def deprecation_warnings(supplied):
+    78	    """Warning lines for every deprecated parameter used as a runtime flag."""
+    79	    return [
+    80	        f"Warning: The --{key} global parameter is deprecated."
+    81	        for key in supplied
+    82	        if key in GLOBAL_PARAMETERS and GLOBAL_PARAMETERS[key].deprecated is not None
+    83	    ]
+    84	
+    85	
+    86	def is_strict_mode(environ):
+    87	    return bool(environ.get(STRICT_ARGS_ENV))
+    88	
+    89	
+    90	def _arrayify(value):
+    91	    if value is None:
+    92	        return []
+    93	    return list(value) if isinstance(value, (list, tuple)) else [value]
+    94	
+    95	
+    96	def build_runtime_config(supplied, *layers):
+    97	    """Merge configuration over the defaults.
+    98	
+    99	    ``layers`` are file-derived mappings from lowest to highest precedence
+   100	    (e.g. global config, project config, alias); only recognized
+   101	    file parameters are taken from them. ``supplied`` holds the runtime
+   102	    flags, which win over everything.
+   103	    """
+   104	    config = {name: copy.deepcopy(param.default) for name, param in GLOBAL_PARAMETERS.items()}
+   105	    for layer in layers:
+   106	        for key, value in (layer or {}).items():
+   107	            if is_file_parameter(key):
+   108	                config[key] = value
+   109	    config.update(supplied)
+   110	    config["disabled_commands"] = [str(c) for c in _arrayify(config.get("disabled_commands"))]
+   111	    return config
+=== appctl_cli/suggest.py
+     1	"""Deterministic "Did you mean?" suggestions."""
+     2	
+     3	DEFAULT_THRESHOLD = 2
+     4	
+     5	# Curated synonyms for common command-name variants. A synonym is only
+     6	# suggested when its target is one of the registered options.
+     7	SYNONYMS = {
+     8	    "add": "create",
+     9	    "check": "check-update",
+    10	    "capability": "cap",
+    11	    "clear": "flush",
+    12	    "decrement": "decr",
+    13	    "del": "delete",
+    14	    "directory": "dir",
+    15	    "exec": "eval",
+    16	    "exec-file": "eval-file",
+    17	    "increment": "incr",
+    18	    "language": "locale",
+    19	    "lang": "locale",
+    20	    "new": "create",
+    21	    "number": "count",
+    22	    "remove": "delete",
+    23	    "regen": "regenerate",
+    24	    "rep": "replace",
+    25	    "repl": "replace",
+    26	    "rm": "delete",
+    27	    "trash": "delete",
+    28	    "v": "version",
+    29	}
+    30	
+    31	
+    32	def levenshtein(source, target):
+    33	    """Return the edit distance between two strings."""
+    34	    if source == target:
+    35	        return 0
+    36	    if not source:
+    37	        return len(target)
+    38	    if not target:
+    39	        return len(source)
+    40	    previous = list(range(len(target) + 1))
+    41	    for i, s_char in enumerate(source, start=1):
+    42	        current = [i]
+    43	        for j, t_char in enumerate(target, start=1):
+    44	            current.append(min(
+    45	                previous[j] + 1,
+    46	                current[j - 1] + 1,
+    47	                previous[j - 1] + (s_char != t_char),
+    48	            ))
+    49	        previous = current
+    50	    return previous[-1]
+    51	
+    52	
+    53	def get_suggestion(target, options, threshold=DEFAULT_THRESHOLD):
+    54	    """Return the closest option to ``target`` or ``None``.
+    55	
+    56	    Synonyms win over edit distance. A match must be within ``threshold``
+    57	    edits and must not replace every character of ``target``. Ties are
+    58	    broken alphabetically (case-insensitively) so the result is stable.
+    59	    """
+    60	    candidates = sorted(set(options), key=lambda o: (o.lower(), o))
+    61	    if not candidates:
+    62	        return None
+    63	
+    64	    synonym = SYNONYMS.get(target)
+    65	    if synonym is not None and synonym in candidates:
+    66	        return synonym
+    67	
+    68	    best_distance, best = None, None
+    69	    for option in candidates:
+    70	        distance = levenshtein(target, option)
+    71	        if best_distance is None or distance < best_distance:
+    72	            best_distance, best = distance, option
+    73	
+    74	    if best_distance <= threshold and best_distance < len(target) and best != target:
+    75	        return best
+    76	    return None
+=== appctl_cli/synopsis.py
+     1	"""Parsing and classification of command synopsis strings."""
+     2	
+     3	import re
+     4	from dataclasses import dataclass
+     5	from typing import Optional
+     6	
+     7	POSITIONAL = "positional"
+     8	ASSOC = "assoc"
+     9	FLAG = "flag"
+    10	GENERIC = "generic"
+    11	UNKNOWN = "unknown"
+    12	
+    13	GENERIC_TOKEN = "--<field>=<value>"
+    14	
+    15	_NAME = r"[a-z0-9_-]+"
+    16	_VALUE = r"[a-zA-Z0-9_|,-]+"
+    17	_POSITIONAL_RE = re.compile(rf"^<({_VALUE})>$")
+    18	_PARAM_RE = re.compile(rf"^--(\[no-\])?({_NAME})")
+    19	_VALUE_RE = re.compile(rf"^=<({_VALUE})>$")
+    20	
+    21	
+    22	@dataclass(frozen=True)
+    23	class SynopsisToken:
+    24	    """One classified token of a synopsis string."""
+    25	
+    26	    token: str
+    27	    type: str
+    28	    name: Optional[str] = None
+    29	    optional: bool = False
+    30	    repeating: bool = False
+    31	    value_name: Optional[str] = None
+    32	    value_optional: bool = False
+    33	    negatable: bool = False
+    34	
+    35	    @property
+    36	    def is_positional(self):
+    37	        return self.type == POSITIONAL
+    38	
+    39	    @property
+    40	    def is_parameter(self):
+    41	        """True for named ``--key=<value>`` and ``--flag`` tokens."""
+    42	        return self.type in (ASSOC, FLAG)
+    43	
+    44	
+    45	def _strip_optional(text):
+    46	    if len(text) >= 2 and text.startswith("[") and text.endswith("]"):
+    47	        return True, text[1:-1]
+    48	    return False, text
+    49	
+    50	
+    51	def _strip_repeating(text):
+    52	    if text.endswith("..."):
+    53	        return True, text[:-3]
+    54	    return False, text
+    55	
+    56	
+    57	def classify_token(token):
+    58	    """Classify a single synopsis token."""
+    59	    optional, body = _strip_optional(token)
+    60	    repeating, body = _strip_repeating(body)
+    61	    unknown = SynopsisToken(token=token, type=UNKNOWN)
+    62	
+    63	    if body == GENERIC_TOKEN:
+    64	        return SynopsisToken(token, GENERIC, optional=optional, repeating=repeating)
+    65	
+    66	    match = _POSITIONAL_RE.match(body)
+    67	    if match:
+    68	        return SynopsisToken(token, POSITIONAL, name=match.group(1),
+    69	                             optional=optional, repeating=repeating)
+    70	
+    71	    match = _PARAM_RE.match(body)
+    72	    if not match:
+    73	        return unknown
+    74	    negatable = bool(match.group(1))
+    75	    name = match.group(2)
+    76	    rest = body[match.end():]
+    77	
+    78	    if rest == "":
+    79	        # Boolean flags are by nature optional.
+    80	        if not optional:
+    81	            return unknown
+    82	        return SynopsisToken(token, FLAG, name=name, optional=True,
+    83	                             repeating=repeating, negatable=negatable)
+    84	
+    85	    if negatable:
+    86	        return unknown
+    87	    value_optional, rest = _strip_optional(rest)
+    88	    value_match = _VALUE_RE.match(rest)
+    89	    if not value_match:
+    90	        return unknown
+    91	    return SynopsisToken(token, ASSOC, name=name, optional=optional,
+    92	                         repeating=repeating, value_name=value_match.group(1),
+    93	                         value_optional=value_optional)
+    94	
+    95	
+    96	def parse_synopsis(synopsis):
+    97	    """Split a synopsis string into classified tokens."""
+    98	    return [classify_token(token) for token in (synopsis or "").split()]
+    99	
+   100	
+   101	def invalid_tokens(tokens):
+   102	    """Return the raw text of every malformed token."""
+   103	    return [t.token for t in tokens if t.type == UNKNOWN]
+=== appctl_cli/validator.py
+     1	"""Validation of supplied arguments against a command's synopsis."""
+     2	
+     3	from .errors import AppctlError, UsageError
+     4	from .help import render_usage
+     5	from .suggest import get_suggestion
+     6	from .synopsis import ASSOC, FLAG, GENERIC, POSITIONAL
+     7	
+     8	
+     9	class ArgumentValidator:
+    10	    """Checks positional and associative arguments for one command."""
+    11	
+    12	    def __init__(self, command):
+    13	        self.command = command
+    14	        self.positionals = command.tokens_of_type(POSITIONAL)
+    15	        self.parameters = command.tokens_of_type(ASSOC, FLAG)
+    16	        self.accepts_any_assoc = bool(command.tokens_of_type(GENERIC))
+    17	
+    18	    # -- positional -----------------------------------------------------
+    19	
+    20	    def enough_positionals(self, args):
+    21	        required = sum(1 for t in self.positionals if not t.optional)
+    22	        return len(args) >= required
+    23	
+    24	    def unknown_positionals(self, args):
+    25	        if any(t.repeating for t in self.positionals):
+    26	            return []
+    27	        return list(args[len(self.positionals):])
+    28	
+    29	    # -- associative ----------------------------------------------------
+    30	
+    31	    def assoc_errors(self, assoc, warn):
+    32	        """Return fatal errors; drop optional keyed params given no value."""
+    33	        errors = []
+    34	        for param in self.parameters:
+    35	            key = param.name
+    36	            if param.type != ASSOC:
+    37	                continue
+    38	            value = assoc.get(key)
+    39	            if not param.optional:
+    40	                if value is None or value is True or value is False or value == "":
+    41	                    errors.append(f"missing --{key} parameter")
+    42	            elif value is True and not param.value_optional:
+    43	                warn(f"--{key} parameter needs a value")
+    44	                del assoc[key]
+    45	        for key in self.unknown_assoc(assoc):
+    46	            message = f"unknown --{key} parameter"
+    47	            suggestion = get_suggestion(key, [p.name for p in self.parameters])
+    48	            if suggestion:
+    49	                message += f"\nDid you mean '--{suggestion}'?"
+    50	            errors.append(message)
+    51	        return errors
+    52	
+    53	    def unknown_assoc(self, assoc):
+    54	        if self.accepts_any_assoc:
+    55	            return []
+    56	        known = {p.name for p in self.parameters}
+    57	        return [key for key in assoc if key not in known]
+    58	
+    59	    # -- defaults -------------------------------------------------------
+    60	
+    61	    def apply_defaults(self, args, assoc):
+    62	        defaults = self.command.defaults
+    63	        for index, token in enumerate(self.positionals):
+    64	            if index < len(args):
+    65	                continue
+    66	            if token.name in defaults and len(args) == index:
+    67	                args.append(defaults[token.name])
+    68	            else:
+    69	                break
+    70	        for param in self.parameters:
+    71	            if param.name not in assoc and param.name in defaults:
+    72	                assoc[param.name] = defaults[param.name]
+    73	
+    74	    # -- entry point ----------------------------------------------------
+    75	
+    76	    def validate(self, args, assoc, warn=lambda message: None):
+    77	        """Validate and return ``(args, assoc)`` with defaults applied."""
+    78	        args = list(args)
+    79	        assoc = dict(assoc)
+    80	        if not self.enough_positionals(args):
+    81	            raise UsageError(render_usage(self.command))
+    82	        extra = self.unknown_positionals(args)
+    83	        if extra:
+    84	            raise AppctlError("Too many positional arguments: " + " ".join(extra))
+    85	        errors = self.assoc_errors(assoc, warn)
+    86	        if errors:
+    87	            raise AppctlError("Parameter errors:\n" + "\n".join(f" {e}" for e in errors))
+    88	        self.apply_defaults(args, assoc)
+    89	        return args, assoc

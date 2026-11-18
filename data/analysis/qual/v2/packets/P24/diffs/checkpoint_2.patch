@@ -1,0 +1,1703 @@
+### DESIGN.md (deleted)
+--- DESIGN.md
++++ DESIGN.md
+@@ -1,31 +0,0 @@
+-# appctl — design by [redacted]
+-
+-Each entry below is a design decision that is hard to make or likely to
+-change. Each one lives in exactly one module (under `appctl_core/`), and that
+-module's *secret* is the decision. Other modules depend only on the module's
+-interface, which stays valid if the secret changes. No module hands its
+-internal data structures to another: interfaces exchange strings, numbers,
+-plain lists/dicts built fresh for the caller, or opaque objects with methods.
+-
+-| # | Decision (likely to change) | Module | Secret (one sentence) | Interface |
+-|---|-----------------------------|--------|-----------------------|-----------|
+-| 1 | Lexical syntax of a command line | `tokens.py` | How raw argv strings are split into option tokens (`--k=v`, `--flag`) and positional words, including the `--` terminator. | `lex(argv)`, `positional(text)`, `Token.is_option() / .name / .value / .text` |
+-| 2 | Convenience argv rewrites | `rewrites.py` | Which shortcut spellings (`<cmd> --help`, `--version`) are rewritten into canonical commands, and how. | `apply(tokens) -> tokens` |
+-| 3 | Global runtime parameters and strict mode | `runtime_config.py` | Which global parameters exist, which env var turns on strict mode, and which argv positions may supply globals. | `extract(tokens, env) -> (RuntimeConfig, tokens)`; `RuntimeConfig` getters |
+-| 4 | Synopsis grammar | `synopsis.py` | The textual grammar of synopsis strings and how each part is classified (positional, keyed, flag, negatable flag, generic, malformed, optional, repeating). | `Synopsis(text)` query methods + `interpret(name, value)` |
+-| 5 | Validation policy and default application | `binding.py` | The order in which argument checks run, which conditions are errors, how errors are batched, and when defaults are filled in. | `bind(path, synopsis, defaults, words, options) -> BoundArguments`; raises `MissingPositional` / `CliError` |
+-| 6 | Similarity algorithm for suggestions | `suggest.py` | The distance metric, threshold and tie-breaking that pick a single deterministic "Did you mean" candidate. | `suggest(target, candidates) -> str or None` |
+-| 7 | Curated synonym table | `synonyms.py` | Which common command-name variants map to which canonical names. | `synonym_for(word) -> str or None` |
+-| 8 | Command storage, alias lookup and ordering | `command_tree.py` | How commands are stored as a tree, how names and aliases are matched, and how children are ordered. | `CommandTree.register/find/root`, `CommandNode` query methods |
+-| 9 | Command resolution algorithm | `dispatch.py` | How positional words are walked down the tree and when leftover words become arguments rather than unknown subcommands. | `resolve(tree, words) -> (node, remaining_words)` |
+-| 10 | User-facing message wording | `messages.py` | The exact text of every error/notice and the program's display name. | One function per message |
+-| 11 | Help and usage layout | `help_text.py` | How help listings, command help pages and usage lines are laid out (ordering, column alignment, sections). | `top_level_help`, `command_help`, `usage_line`, `composite_usage` |
+-| 12 | Output streams and prefixes | `output.py` | Which stream each kind of output goes to, its prefix, and how `--quiet` / `--debug` affect it. | `Output.error/warning/success/log/line/usage/debug` |
+-| 13 | Record rendering formats | `formatter.py` | How lists of records are rendered as table/json/csv/yaml/ids/count. | `render(records, fields, fmt) -> str`, `supported_formats()` |
+-| 14 | Which commands exist and what they do | `catalog.py` | The set of built-in commands, their synopses, aliases, defaults, descriptions and handler behavior. | `register_all(tree)` |
+-| 15 | Wiring of the pipeline | `app.py` | The order the stages run in (lex → rewrite → globals → resolve → bind → run) and how failures map to exit codes. | `run(argv, env, stdout, stderr) -> int` |
+-
+-`errors.py` holds the shared exception types (`CliError`, `MissingPositional`)
+-that make up part of several interfaces. It has no secret of its own.
+-
+-`appctl.py` is the executable entry point and just calls `app.run`.
+
+### appctl_core/aliases.py (created)
+--- appctl_core/aliases.py
++++ appctl_core/aliases.py
+@@ -0,0 +1,104 @@
++"""Alias registry.
++
++Secret: the alias name syntax, how runtime aliases override file aliases,
++when ``@all`` is registered automatically, how groups are expanded and
++validated, and the order in which broadcast targets run.
++"""
++
++import json
++import re
++
++from . import messages as _messages
++from .errors import CliError
++from .suggest import suggest
++
++_ALIAS_NAME = re.compile(r"^@[A-Za-z0-9_.\-]+$")
++_RUNTIME_ENV = "APPCTL_RUNTIME_ALIAS"
++ALL = "@all"
++_AUTO_ALL = "Run command against every registered alias."
++
++
++def is_alias_name(text):
++    return isinstance(text, str) and bool(_ALIAS_NAME.match(text))
++
++
++def _sort_key(name):
++    return (name.casefold(), name)
++
++
++def runtime_aliases(env):
++    """Alias definitions from the runtime environment variable."""
++    raw = env.get(_RUNTIME_ENV)
++    if not raw:
++        return {}
++    try:
++        decoded = json.loads(raw)
++    except ValueError:
++        return {}
++    if not isinstance(decoded, dict):
++        return {}
++    result = {}
++    for name, value in decoded.items():
++        if not is_alias_name(name):
++            continue
++        if isinstance(value, list):
++            result[name] = [str(v) for v in value if v is not None]
++        elif isinstance(value, dict):
++            result[name] = dict(value)
++        elif value is None:
++            result[name] = {}
++    return result
++
++
++class Target:
++    """Resolution of an alias: either a connection or a group of aliases."""
++
++    def __init__(self, name, connection=None, members=None):
++        self.name = name
++        self.connection = connection
++        self.members = members
++
++    def is_group(self):
++        return self.members is not None
++
++
++class AliasRegistry:
++    def __init__(self, file_aliases, runtime=None):
++        self._defs = dict(file_aliases)
++        self._defs.update(runtime or {})
++        if self._defs and ALL not in self._defs:
++            self._defs[ALL] = _AUTO_ALL
++
++    def names(self):
++        return sorted(self._defs, key=_sort_key)
++
++    def is_registered(self, name):
++        return name in self._defs
++
++    def definitions(self):
++        return dict(self._defs)
++
++    def definition(self, name):
++        return self._defs.get(name)
++
++    def _broadcast_members(self):
++        return [name for name in self.names()
++                if name != ALL and isinstance(self._defs[name], dict)]
++
++    def resolve(self, name):
++        """Return the ``Target`` for alias ``name`` or raise ``CliError``."""
++        if name == ALL and not self._defs:
++            raise CliError(_messages.alias_all_without_aliases())
++        if name not in self._defs:
++            raise CliError(_messages.alias_not_found(
++                name, suggest(name, list(self._defs))))
++        value = self._defs[name]
++        if name == ALL and value == _AUTO_ALL:
++            return Target(name, members=self._broadcast_members())
++        if isinstance(value, list):
++            members = list(dict.fromkeys(value))
++            invalid = [m for m in members if m not in self._defs]
++            if invalid:
++                raise CliError(_messages.alias_group_invalid(name, invalid))
++            return Target(name, members=members)
++        return Target(name, connection=dict(value) if isinstance(value, dict) else {})
+
+### appctl_core/app.py (modified)
+--- appctl_core/app.py
++++ appctl_core/app.py
+@@ -1,10 +1,14 @@
+ """Pipeline wiring.
+ 
+-Secret: the order in which the stages run (lex, rewrite, extract globals,
+-resolve, bind, run) and how failures map to output and exit codes.
++Secret: the order in which the stages run (alias split, lex, rewrite,
++extract globals, load config, expand aliases, resolve, bind, run or hand
++off to a remote transport) and how failures map to output and exit codes.
+ """
+ 
+-from . import binding, catalog, dispatch, help_text, rewrites, runtime_config, tokens
++import os
++
++from . import (aliases, binding, catalog, config_files, dispatch, help_text,
++               remote, rewrites, runtime_config, tokens)
+ from .command_tree import CommandTree
+ from .errors import CliError, MissingPositional
+ from .output import Output
+@@ -27,34 +31,108 @@
+     return tree
+ 
+ 
+-def run(argv, env, stdout, stderr, tree=None):
++def _split_alias(argv):
++    """Remove a leading ``@alias`` word; return ``(alias, argv)``."""
++    for index, raw in enumerate(argv):
++        if raw == "--":
++            break
++        if raw.startswith("--") and len(raw) > 2:
++            continue
++        if aliases.is_alias_name(raw):
++            return raw, argv[:index] + argv[index + 1:]
++        break
++    return None, argv
++
++
++class _Invocation:
++    def __init__(self, argv, env, stdout, stderr, tree, cwd):
++        self.argv = argv
++        self.env = env
++        self.stdout = stdout
++        self.stderr = stderr
++        self.tree = tree
++        self.cwd = cwd
++
++    def start(self, alias):
++        out = Output(self.stdout, self.stderr)
++        try:
++            items = rewrites.apply(tokens.lex(self.argv))
++            self.runtime, self.items = runtime_config.extract(items, self.env)
++        except CliError as exc:
++            out.error(exc.message)
++            return exc.exit_code
++        self.out = out = Output(self.stdout, self.stderr,
++                                quiet=self.runtime.quiet(), debug=self.runtime.debug())
++        for warning in self.runtime.warnings:
++            out.warning(warning)
++        try:
++            self.locations = config_files.Locations(self.env)
++            self.loaded = config_files.load(self.locations, self.cwd)
++            self.registry = aliases.AliasRegistry(
++                self.loaded.aliases, aliases.runtime_aliases(self.env))
++            for path in self.loaded.files:
++                out.debug(f"Loaded config file: {path}")
++            return self.execute(alias, ())
++        except CliError as exc:
++            out.error(exc.message)
++            return exc.exit_code
++
++    def execute(self, alias, stack):
++        if alias is None:
++            return self.invoke({})
++        target = self.registry.resolve(alias)
++        if not target.is_group():
++            return self.invoke(target.connection)
++        code = 0
++        for member in target.members:
++            if member == alias or member in stack:
++                continue
++            self.out.log(member)
++            try:
++                result = self.execute(member, stack + (alias,))
++            except CliError as exc:
++                self.out.error(exc.message)
++                result = exc.exit_code
++            code = result or code
++        return code
++
++    def invoke(self, connection):
++        config = runtime_config.layer(
++            self.runtime, self.loaded.values, connection,
++            locations=self.locations, loaded=self.loaded, aliases=self.registry)
++        if config.ssh():
++            return remote.run(config.ssh(), self.argv, connection,
++                              self.runtime.values, config, self.env, self.out,
++                              self.stdout, self.stderr)
++        return self.run_local(config)
++
++    def run_local(self, config):
++        out = self.out
++        if self.tree is None:
++            self.tree = build_tree()
++        tree = self.tree
++        items = self.items
++        words = [t.text for t in items if not t.is_option()] or ["help"]
++        options = [(t.name, t.value) for t in items if t.is_option()]
++        node = None
++        try:
++            node, remaining = dispatch.resolve(tree, words, config.disabled_commands())
++            out.debug(f"Resolved command '{node.path}' with arguments {remaining}")
++            if not node.is_runnable():
++                out.usage(help_text.composite_usage(node))
++                return 0
++            bound = binding.bind(node.path, node.synopsis, node.defaults(),
++                                 remaining, options)
++            result = node.run(CommandContext(node, bound, out, config, tree))
++            return int(result or 0)
++        except MissingPositional:
++            out.usage(help_text.usage_line(node))
++            return 1
++
++
++def run(argv, env, stdout, stderr, tree=None, cwd=None):
+     """Run one invocation and return its exit code."""
+-    out = Output(stdout, stderr)
+-    try:
+-        items = rewrites.apply(tokens.lex(argv))
+-        config, items = runtime_config.extract(items, env)
+-    except CliError as exc:
+-        out.error(exc.message)
+-        return exc.exit_code
+-    out = Output(stdout, stderr, quiet=config.quiet(), debug=config.debug())
+-    tree = tree if tree is not None else build_tree()
+-
+-    words = [t.text for t in items if not t.is_option()] or ["help"]
+-    options = [(t.name, t.value) for t in items if t.is_option()]
+-    node = None
+-    try:
+-        node, remaining = dispatch.resolve(tree, words)
+-        out.debug(f"Resolved command '{node.path}' with arguments {remaining}")
+-        if not node.is_runnable():
+-            out.usage(help_text.composite_usage(node))
+-            return 0
+-        bound = binding.bind(node.path, node.synopsis, node.defaults(),
+-                             remaining, options)
+-        result = node.run(CommandContext(node, bound, out, config, tree))
+-        return int(result or 0)
+-    except MissingPositional:
+-        out.usage(help_text.usage_line(node))
+-        return 1
+-    except CliError as exc:
+-        out.error(exc.message)
+-        return exc.exit_code
++    alias, argv = _split_alias(list(argv))
++    invocation = _Invocation(argv, env, stdout, stderr, tree,
++                             cwd if cwd is not None else os.getcwd())
++    return invocation.start(alias)
+
+### appctl_core/catalog.py (modified)
+--- appctl_core/catalog.py
++++ appctl_core/catalog.py
+@@ -4,8 +4,11 @@
+ defaults, descriptions and what each handler does.
+ """
+ 
+-from . import dispatch, formatter, help_text
++import json
++
++from . import config_spec, dispatch, formatter, help_text, messages, yaml_lite
+ from .errors import CliError
++from .suggest import suggest
+ 
+ VERSION = "1.0.0"
+ 
+@@ -133,6 +136,63 @@
+     return 0 if ctx.tree.find(words) is not None else 1
+ 
+ 
++def _cli_param_dump(ctx):
++    dump = {}
++    for param in config_spec.visible():
++        entry = {
++            "runtime": param.runtime or False,
++            "file": param.file,
++            "default": param.default,
++            "desc": param.description,
++        }
++        if param.deprecated:
++            entry["deprecated"] = True
++        if ctx.args.option("with-values"):
++            entry["current"] = ctx.config.get(param.name)
++        dump[param.name] = entry
++    return _dump_structure(ctx, dump)
++
++
++def _dump_structure(ctx, data):
++    fmt = ctx.args.option("format")
++    if fmt == "json":
++        ctx.out.line(json.dumps(data))
++    elif fmt == "yaml":
++        ctx.out.line("---\n" + yaml_lite.dump(data) if data else "--- {}")
++    else:
++        raise CliError(f"Invalid format: {fmt}. Supported formats: json, yaml")
++    return 0
++
++
++def _alias_definitions(ctx):
++    registry = ctx.config.aliases()
++    return registry.definitions() if registry is not None else {}
++
++
++def _cli_alias_list(ctx):
++    definitions = _alias_definitions(ctx)
++    ordered = {name: definitions[name]
++               for name in sorted(definitions, key=lambda n: (n.casefold(), n))}
++    return _dump_structure(ctx, ordered)
++
++
++def _cli_alias_get(ctx):
++    name = ctx.args.positional(0)
++    definitions = _alias_definitions(ctx)
++    if name not in definitions:
++        raise CliError(messages.alias_not_found(name, suggest(name, list(definitions))))
++    value = definitions[name]
++    if isinstance(value, dict):
++        for key, item in value.items():
++            ctx.out.line(f"{key}: {item}")
++    elif isinstance(value, list):
++        for item in value:
++            ctx.out.line(f"- {item}")
++    else:
++        ctx.out.line(str(value))
++    return 0
++
++
+ # --- config ---------------------------------------------------------------
+ 
+ def _config_get(ctx):
+@@ -379,11 +439,18 @@
+       defaults={"group": "default", "expiration": "0"})
+ 
+     r("cli", description="Reviews current appctl info and checks registered commands.")
++    r("cli alias", description="Retrieves aliases.")
++    r("cli alias get", _cli_alias_get, synopsis="<key>",
++      description="Gets the value for an alias.")
++    r("cli alias list", _cli_alias_list, synopsis="[--format=<format>]",
++      description="Lists available aliases.", defaults={"format": "yaml"})
+     r("cli has-command", _cli_has_command, synopsis="<command-name>...",
+       description="Detects if a command exists.")
+     r("cli info", _cli_info, synopsis="[--format=<format>]",
+       description="Prints various details about the appctl environment.",
+       defaults={"format": "list"})
++    r("cli param-dump", _cli_param_dump, synopsis="[--with-values] [--format=<format>]",
++      description="Dumps the list of global parameters.", defaults={"format": "json"})
+     r("cli version", _cli_version, description="Prints appctl version.")
+ 
+     r("config", alias="cfg", description="Generates and reads the configuration file.")
+
+### appctl_core/config_files.py (created)
+--- appctl_core/config_files.py
++++ appctl_core/config_files.py
+@@ -0,0 +1,221 @@
++"""Configuration sources.
++
++Secret: where the global and project config files live, how YAML
++inheritance (``_: {inherit, merge}``) and array merging work, how alias
++definitions are collected from files, and how missing global defaults are
++written back to the global config file.
++"""
++
++import errno
++import os
++
++from . import config_spec, messages, yaml_lite
++from .aliases import is_alias_name
++from .errors import CliError
++
++_PROJECT_FILES = ("appctl.local.yml", "appctl.yml")
++_AUTO_DEFAULTS = (("locale", "en_US"), ("installer_version", "stable"))
++_META_KEY = "_"
++
++
++class Locations:
++    """Filesystem locations derived from the environment."""
++
++    def __init__(self, env):
++        root = env.get("APPCTL_ROOT_DIR") or ""
++        config = env.get("APPCTL_CONFIG_PATH") or ""
++        self.explicit = bool(root or config)
++        if not root:
++            home = env.get("HOME") or os.path.expanduser("~")
++            root = os.path.join(home, ".appctl")
++        self.root_dir = _clean(root)
++        self.global_config_path = (_clean(config) if config else
++                                   os.path.join(self.root_dir, "config", "config.yml"))
++        packages = env.get("APPCTL_PACKAGES_DIR") or ""
++        self.packages_dir = (_clean(packages) if packages else
++                             os.path.join(self.root_dir, "packages"))
++
++
++def _clean(path):
++    path = os.path.expanduser(path)
++    stripped = path.rstrip(os.sep)
++    return stripped or path
++
++
++def find_project_config(cwd):
++    """Search upward from ``cwd`` for a project config file."""
++    directory = os.path.abspath(cwd)
++    while True:
++        for name in _PROJECT_FILES:
++            candidate = os.path.join(directory, name)
++            if os.path.isfile(candidate):
++                return candidate
++        parent = os.path.dirname(directory)
++        if parent == directory:
++            return None
++        directory = parent
++
++
++def _absolutize(path, base):
++    path = os.path.expanduser(path)
++    if os.path.isabs(path):
++        return path
++    return os.path.normpath(os.path.join(base, path))
++
++
++def _arrayify(value):
++    if value is None:
++        return []
++    if isinstance(value, (list, tuple)):
++        return list(value)
++    return [value]
++
++
++def _combine(old, new, merge):
++    if merge and isinstance(old, list) and isinstance(new, list):
++        return old + new
++    return new
++
++
++def _parse(path, text):
++    try:
++        data = yaml_lite.load(text)
++    except yaml_lite.YamlError as exc:
++        raise CliError(messages.config_unparsable(path, exc)) from None
++    return data if isinstance(data, dict) else ({} if data is None else None)
++
++
++def _read(path, tolerant=False):
++    """Return the mapping stored at ``path`` or ``None`` if absent."""
++    if not os.path.exists(path):
++        return None
++    try:
++        with open(path, encoding="utf-8") as handle:
++            text = handle.read()
++    except OSError as exc:
++        if tolerant:
++            return None
++        raise CliError(messages.config_unreadable(path, exc)) from None
++    data = _parse(path, text)
++    return {} if data is None else data
++
++
++class LoadedConfig:
++    """Values, aliases and other keys collected from config files."""
++
++    def __init__(self):
++        self.values = {}
++        self.aliases = {}
++        self.extra = {}
++        self.global_config_path = None
++        self.project_config_path = None
++        self.files = []
++
++    def merge_file(self, path, tolerant=False, chain=()):
++        real = os.path.realpath(path)
++        if real in chain:
++            return
++        data = _read(path, tolerant)
++        if data is None:
++            return
++        meta = data.get(_META_KEY)
++        meta = meta if isinstance(meta, dict) else {}
++        base = os.path.dirname(os.path.abspath(path))
++        inherit = meta.get("inherit")
++        if isinstance(inherit, str) and inherit:
++            self.merge_file(_inherit_path(inherit, base), tolerant, chain + (real,))
++        merge = bool(meta.get("merge"))
++        self.files.append(path)
++        for key, value in data.items():
++            if key == _META_KEY:
++                continue
++            key = str(key)
++            if is_alias_name(key):
++                self._merge_alias(key, value, base, merge)
++            elif config_spec.file_param(key) is not None:
++                self._merge_param(key, value, base, merge)
++            else:
++                self.extra[key] = _combine(self.extra.get(key), value, merge)
++
++    def _merge_alias(self, name, value, base, merge):
++        if isinstance(value, list):
++            definition = [str(v) for v in value if v is not None]
++        elif isinstance(value, dict):
++            definition = {str(k): v for k, v in value.items()}
++            path = definition.get("path")
++            if isinstance(path, str) and path and "ssh" not in definition:
++                definition["path"] = _absolutize(path, base)
++        elif value is None:
++            definition = {}
++        else:
++            return
++        self.aliases[name] = _combine(self.aliases.get(name), definition, merge)
++
++    def _merge_param(self, key, value, base, merge):
++        param = config_spec.file_param(key)
++        if param.kind == "list":
++            value = _arrayify(value)
++        if key == "path" and isinstance(value, str) and value:
++            value = _absolutize(value, base)
++        self.values[key] = _combine(self.values.get(key), value, merge)
++
++
++def _inherit_path(inherit, base):
++    inherit = os.path.expanduser(inherit)
++    if os.path.isabs(inherit):
++        return inherit
++    relative = os.path.join(base, inherit)
++    if not os.path.exists(relative) and os.path.exists(inherit):
++        return os.path.abspath(inherit)
++    return os.path.normpath(relative)
++
++
++def ensure_global_defaults(locations):
++    """Write missing auto-created keys into the global config file."""
++    path = locations.global_config_path
++    try:
++        text = ""
++        if os.path.exists(path):
++            if not os.path.isfile(path):
++                raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), path)
++            with open(path, encoding="utf-8") as handle:
++                text = handle.read()
++        data = _parse(path, text)
++        if data is None:
++            return
++        missing = [(k, v) for k, v in _AUTO_DEFAULTS if k not in data]
++        if not missing:
++            return
++        expected = dict(data, **dict(missing))
++        separator = "\n" if text and not text.endswith("\n") else ""
++        updated = text + separator + "".join(
++            yaml_lite.scalar_line(k, v) for k, v in missing)
++        try:
++            if yaml_lite.load(updated) != expected:
++                raise yaml_lite.YamlError("append changed meaning")
++        except yaml_lite.YamlError:
++            updated = yaml_lite.dump(expected)
++        directory = os.path.dirname(path)
++        if directory:
++            os.makedirs(directory, exist_ok=True)
++        with open(path, "w", encoding="utf-8") as handle:
++            handle.write(updated)
++    except OSError as exc:
++        if locations.explicit:
++            raise CliError(messages.config_unwritable(path, exc)) from None
++
++
++def load(locations, cwd):
++    """Load the global config file then the project config file."""
++    loaded = LoadedConfig()
++    ensure_global_defaults(locations)
++    global_path = locations.global_config_path
++    if os.path.isfile(global_path):
++        loaded.global_config_path = global_path
++        loaded.merge_file(global_path, tolerant=not locations.explicit)
++    project = find_project_config(cwd)
++    if project and not (loaded.global_config_path and
++                        os.path.realpath(project) == os.path.realpath(global_path)):
++        loaded.project_config_path = project
++        loaded.merge_file(project)
++    return loaded
+
+### appctl_core/config_spec.py (created)
+--- appctl_core/config_spec.py
++++ appctl_core/config_spec.py
+@@ -0,0 +1,92 @@
++"""Global parameter specification.
++
++Secret: which global parameters exist, whether each may be given as a
++runtime flag and/or in a config file, their defaults, runtime syntax, and
++which are deprecated or hidden.
++"""
++
++from .synopsis import Synopsis
++
++
++class Param:
++    __slots__ = ("name", "runtime", "file", "default", "kind", "deprecated",
++                 "hidden", "description")
++
++    def __init__(self, name, *, runtime=None, file=True, default=None,
++                 kind="value", deprecated=False, hidden=False, description=""):
++        self.name = name
++        self.runtime = runtime        # synopsis fragment, or None
++        self.file = file
++        self.default = default
++        self.kind = kind              # "value", "list" or "bool"
++        self.deprecated = deprecated
++        self.hidden = hidden
++        self.description = description
++
++
++_PARAMS = [
++    Param("path", runtime="[--path=<path>]",
++          description="Path to the application files."),
++    Param("url", runtime="[--url=<url>]",
++          description="Pretend request came from given URL."),
++    Param("user", runtime="[--user=<id>]",
++          description="Set the user."),
++    Param("ssh", runtime="[--ssh=<ssh>]",
++          description="Perform operation against a remote server over SSH "
++                      "(or a container using scheme of \"docker\", "
++                      "\"docker-compose\", \"docker-compose-run\", \"vagrant\")."),
++    Param("disabled_commands", default=[], kind="list",
++          description="(Sub)commands to disable."),
++    Param("projects_path", description="Directory in which projects are stored."),
++    Param("locale", default="en_US", description="Locale to use."),
++    Param("cert-email", description="E-mail address used for certificates."),
++    Param("env", description="Environment name."),
++    Param("admin-email", description="Administrator e-mail address."),
++    Param("sysctl", description="Kernel parameters to apply."),
++    Param("skip-tty", default=False, kind="bool",
++          description="Do not allocate a TTY for remote commands."),
++    Param("custom-compose", description="Custom compose file."),
++    Param("installer_version", default="stable",
++          description="Installer release channel."),
++    Param("color", runtime="[--[no-]color]", default="auto",
++          description="Whether to colorize the output."),
++    Param("debug", runtime="[--debug[=<group>]]", file=False, default=False,
++          description="Show all errors and add verbosity to bootstrap."),
++    Param("quiet", runtime="[--quiet]", file=False, default=False,
++          kind="bool", description="Suppress informational messages."),
++]
++
++_BY_NAME = {p.name: p for p in _PARAMS}
++
++
++def params():
++    return list(_PARAMS)
++
++
++def get(name):
++    return _BY_NAME.get(name)
++
++
++def defaults():
++    return {p.name: (list(p.default) if isinstance(p.default, list) else p.default)
++            for p in _PARAMS}
++
++
++def file_param(name):
++    """The parameter named ``name`` if it may be set from a config file."""
++    param = _BY_NAME.get(name)
++    return param if param is not None and param.file else None
++
++
++def runtime_synopsis():
++    return Synopsis(" ".join(p.runtime for p in _PARAMS if p.runtime))
++
++
++def is_deprecated(name):
++    param = _BY_NAME.get(name)
++    return bool(param and param.deprecated)
++
++
++def visible():
++    """Parameters that may be shown in help output."""
++    return [p for p in _PARAMS if not p.hidden]
+
+### appctl_core/dispatch.py (modified)
+--- appctl_core/dispatch.py
++++ appctl_core/dispatch.py
+@@ -10,13 +10,14 @@
+ from .suggest import suggest
+ 
+ 
+-def resolve(tree, words):
++def resolve(tree, words, disabled=()):
+     """Find the deepest command matching the leading ``words``.
+ 
+     Returns ``(node, remaining_words)``. Raises ``CliError`` for an unknown
+-    top-level command, or an unknown subcommand under a group that cannot
+-    itself run.
++    top-level command, an unknown subcommand under a group that cannot
++    itself run, or a command whose path is listed in ``disabled``.
+     """
++    disabled = set(disabled)
+     node = tree.root
+     words = list(words)
+     consumed = 0
+@@ -34,4 +35,6 @@
+                 word, node.path, suggestion))
+         node = child
+         consumed += 1
++        if node.path in disabled:
++            raise CliError(_messages.command_disabled(node.path))
+     return node, words[consumed:]
+
+### appctl_core/messages.py (modified)
+--- appctl_core/messages.py
++++ appctl_core/messages.py
+@@ -69,3 +69,44 @@
+     if needs_value:
+         return f"The --{key} global parameter needs a value."
+     return f"The --{key} global parameter does not accept a value."
++
++
++def command_disabled(path):
++    return f"The '{path}' command has been disabled."
++
++
++def deprecated_global_parameter(key):
++    return f"The --{key} global parameter is deprecated."
++
++
++def alias_not_found(name, suggestion=None):
++    return _with_suggestion(f"Alias '{name}' not found.", suggestion)
++
++
++def alias_group_invalid(group, invalid):
++    return (f"Group '{group}' contains one or more invalid aliases: "
++            + ", ".join(invalid) + ".")
++
++
++def alias_all_without_aliases():
++    return "Cannot use '@all' when no aliases are registered."
++
++
++def ssh_connection_failed():
++    return "Cannot connect over SSH using provided configuration."
++
++
++def _reason(exc):
++    return getattr(exc, "strerror", None) or str(exc)
++
++
++def config_unwritable(path, exc):
++    return f"Unable to write the global config file '{path}': {_reason(exc)}."
++
++
++def config_unreadable(path, exc):
++    return f"Unable to read the config file '{path}': {_reason(exc)}."
++
++
++def config_unparsable(path, exc):
++    return f"Unable to parse the config file '{path}': {exc}"
+
+### appctl_core/remote.py (created)
+--- appctl_core/remote.py
++++ appctl_core/remote.py
+@@ -0,0 +1,152 @@
++"""Remote execution.
++
++Secret: the syntax of ``ssh`` connection strings, how each transport
++(ssh, docker, docker-compose, docker-compose-run, vagrant) builds its
++command line, how the remote appctl command is assembled (pre-command,
++working directory, forwarded arguments) and how transport failures are
++reported.
++"""
++
++import re
++import shlex
++import shutil
++import subprocess
++
++from . import messages as _messages
++
++_REMOTE_BINARY = "appctl"
++_PRE_CMD_ENV = "APPCTL_SSH_PRE_CMD"
++_STRICT_ENV = "APPCTL_STRICT_ARGS_MODE"
++_CONNECT_FAILURE = 255
++_SSH_URL = re.compile(
++    r"^((?P<scheme>docker|docker-compose|docker-compose-run|ssh|vagrant):)?"
++    r"(//)?((?P<user>[^@:]+)@)?(?P<host>[^:/~]+)(:(?P<port>\d*))?"
++    r"(?P<path>[/~].*)?$")
++# Connection keys forwarded to the remote invocation as runtime flags.
++_FORWARDED = ("path", "url", "user")
++
++
++def parse(url):
++    """Split a connection string into its parts (missing parts are None)."""
++    match = _SSH_URL.match(url or "")
++    if not match:
++        return {"scheme": None, "user": None, "host": url, "port": None, "path": None}
++    bits = match.groupdict()
++    return {key: (value or None) for key, value in bits.items()}
++
++
++def _quote_path(path):
++    if path == "~":
++        return path
++    if path.startswith("~/"):
++        return "~/" + shlex.quote(path[2:])
++    return shlex.quote(path)
++
++
++def remote_command(args, bits, env):
++    """The shell command run on the remote side."""
++    parts = []
++    pre = (env.get(_PRE_CMD_ENV) or "").strip().rstrip(";").strip()
++    if pre:
++        parts.append(pre + ";")
++    if bits.get("path"):
++        parts.append(f"cd {_quote_path(bits['path'])};")
++    if env.get(_STRICT_ENV):
++        parts.append(f"{_STRICT_ENV}=1")
++    parts.append(_REMOTE_BINARY)
++    parts.extend(shlex.quote(a) for a in args)
++    return " ".join(parts)
++
++
++def transport_argv(bits, command, args, tty, debug):
++    """The local command line that runs ``command`` remotely."""
++    scheme = bits.get("scheme") or "ssh"
++    host, user, port = bits.get("host") or "", bits.get("user"), bits.get("port")
++    if scheme == "docker":
++        argv = ["docker", "exec"]
++        if user:
++            argv += ["--user", user]
++        if tty:
++            argv.append("-t")
++        return argv + [host, "sh", "-c", command]
++    if scheme == "docker-compose":
++        argv = ["docker-compose", "exec"]
++        if user:
++            argv += ["--user", user]
++        if not tty:
++            argv.append("-T")
++        return argv + [host, "sh", "-c", command]
++    if scheme == "docker-compose-run":
++        argv = ["docker-compose", "run"]
++        if user:
++            argv += ["--user", user]
++        if not tty:
++            argv.append("-T")
++        return argv + [host] + list(args)
++    if scheme == "vagrant":
++        return ["vagrant", "ssh", "-c", command, host]
++    argv = ["ssh"]
++    if port:
++        argv += ["-p", str(int(port))]
++    argv.append("-t" if tty else "-T")
++    argv.append("-vvv" if debug else "-q")
++    argv.append(f"{user}@{host}" if user else host)
++    return argv + [command]
++
++
++def _fileno(stream):
++    try:
++        return stream.fileno()
++    except (AttributeError, OSError, ValueError):
++        return None
++
++
++def _isatty(stream):
++    try:
++        return stream.isatty()
++    except (AttributeError, ValueError):
++        return False
++
++
++def forwarded_args(raw_args, connection, runtime_values):
++    """Arguments for the remote appctl: the local ones minus ``--ssh``, plus
++    connection parameters that were not given at runtime."""
++    args = [a for a in raw_args if not (a == "--ssh" or a.startswith("--ssh="))]
++    for key in _FORWARDED:
++        value = connection.get(key)
++        if value not in (None, "") and key not in runtime_values:
++            args.append(f"--{key}={value}")
++    return args
++
++
++def run(ssh, raw_args, connection, runtime_values, config, env, out, stdout, stderr):
++    """Run the command through the configured transport; return exit code."""
++    bits = parse(ssh)
++    args = forwarded_args(raw_args, connection, runtime_values)
++    tty = not config.get("skip-tty") and _isatty(stdout)
++    command = remote_command(args, bits, env)
++    argv = transport_argv(bits, command, args, tty, config.debug())
++    out.debug(f"Running remote command: {shlex.join(argv)}")
++    for stream in (stdout, stderr):
++        if hasattr(stream, "flush"):
++            stream.flush()
++    executable = shutil.which(argv[0], path=env.get("PATH"))
++    if executable is None:
++        out.error(_messages.ssh_connection_failed())
++        return _CONNECT_FAILURE
++    out_fd, err_fd = _fileno(stdout), _fileno(stderr)
++    try:
++        proc = subprocess.run(
++            [executable] + argv[1:], env=dict(env),
++            stdout=out_fd if out_fd is not None else subprocess.PIPE,
++            stderr=err_fd if err_fd is not None else subprocess.PIPE)
++    except OSError:
++        out.error(_messages.ssh_connection_failed())
++        return _CONNECT_FAILURE
++    if out_fd is None and proc.stdout:
++        stdout.write(proc.stdout.decode(errors="replace"))
++    if err_fd is None and proc.stderr:
++        stderr.write(proc.stderr.decode(errors="replace"))
++    if proc.returncode == _CONNECT_FAILURE:
++        out.error(_messages.ssh_connection_failed())
++    return proc.returncode
+
+### appctl_core/runtime_config.py (modified)
+--- appctl_core/runtime_config.py
++++ appctl_core/runtime_config.py
+@@ -1,27 +1,51 @@
+ """Global runtime parameters.
+ 
+-Secret: which global parameters exist, which environment variable enables
+-strict arguments mode, and which argv positions may supply global
+-parameters in each mode.
++Secret: which environment variable enables strict arguments mode, which
++argv positions may supply global parameters in each mode, and how the
++runtime flags, config files, alias parameters and built-in defaults are
++layered into one configuration.
+ """
+ 
++from . import config_spec
+ from . import messages as _messages
+ from .errors import CliError
+ from .synopsis import Synopsis
+ 
+ _STRICT_ENV = "APPCTL_STRICT_ARGS_MODE"
+-_GLOBALS = Synopsis(
+-    "[--path=<path>] [--url=<url>] [--user=<id>] [--[no-]color] "
+-    "[--debug[=<group>]] [--quiet]"
+-)
++_GLOBALS = config_spec.runtime_synopsis()
++
++
++class RuntimeValues:
++    """Global parameters given on the command line."""
++
++    def __init__(self, values, strict, warnings):
++        self.values = dict(values)
++        self.strict = strict
++        self.warnings = list(warnings)
++
++    def debug(self):
++        return bool(self.values.get("debug", False))
++
++    def quiet(self):
++        return bool(self.values.get("quiet", False))
+ 
+ 
+ class RuntimeConfig:
+-    """Read-only view of the global runtime configuration."""
++    """Read-only view of the effective global configuration."""
+ 
+-    def __init__(self, values, strict):
+-        self._values = dict(values)
++    def __init__(self, values, strict, locations=None, loaded=None, aliases=None):
++        self._values = config_spec.defaults()
++        self._values.update(values)
+         self._strict = strict
++        self._locations = locations
++        self._loaded = loaded
++        self._aliases = aliases
++
++    def get(self, name, default=None):
++        return self._values.get(name, default)
++
++    def values(self):
++        return dict(self._values)
+ 
+     def path(self):
+         return self._values.get("path")
+@@ -32,8 +56,11 @@
+     def user(self):
+         return self._values.get("user")
+ 
++    def ssh(self):
++        return self._values.get("ssh")
++
+     def color(self):
+-        return self._values.get("color", True)
++        return self._values.get("color")
+ 
+     def debug(self):
+         return bool(self._values.get("debug", False))
+@@ -44,6 +71,28 @@
+     def strict(self):
+         return self._strict
+ 
++    def disabled_commands(self):
++        entries = self._values.get("disabled_commands") or []
++        if not isinstance(entries, list):
++            entries = [entries]
++        return [" ".join(str(e).split()) for e in entries if e is not None]
++
++    def aliases(self):
++        """The alias registry, or ``None`` when none was loaded."""
++        return self._aliases
++
++    def global_config_path(self):
++        return self._loaded.global_config_path if self._loaded else None
++
++    def project_config_path(self):
++        return self._loaded.project_config_path if self._loaded else None
++
++    def packages_dir(self):
++        return self._locations.packages_dir if self._locations else None
++
++    def root_dir(self):
++        return self._locations.root_dir if self._locations else None
++
+     def as_dict(self):
+         return {
+             "path": self.path(),
+@@ -53,17 +102,21 @@
+             "debug": self.debug(),
+             "quiet": self.quiet(),
+             "strict_args_mode": self.strict(),
++            "global_config_path": self.global_config_path(),
++            "project_config_path": self.project_config_path(),
++            "packages_dir": self.packages_dir(),
+         }
+ 
+ 
+ def extract(items, env):
+     """Split global parameters out of ``items``.
+ 
+-    Returns ``(RuntimeConfig, remaining_tokens)``. In strict mode only tokens
++    Returns ``(RuntimeValues, remaining_tokens)``. In strict mode only tokens
+     before the first positional word are considered global.
+     """
+     strict = bool(env.get(_STRICT_ENV, ""))
+     values = {}
++    warnings = []
+     remaining = []
+     seen_positional = False
+     for token in items:
+@@ -79,7 +132,23 @@
+             remaining.append(token)
+         elif status == Synopsis.OK:
+             values[key] = value
++            if config_spec.is_deprecated(key):
++                warnings.append(_messages.deprecated_global_parameter(key))
+         else:
+             raise CliError(_messages.global_parameter_error(
+                 key, needs_value=(status == Synopsis.NEEDS_VALUE)))
+-    return RuntimeConfig(values, strict), remaining
++    return RuntimeValues(values, strict, list(dict.fromkeys(warnings))), remaining
++
++
++def layer(runtime, file_values=None, alias_values=None, **context):
++    """Combine the sources: runtime > alias > config files > defaults."""
++    values = {}
++    for key, value in (file_values or {}).items():
++        param = config_spec.get(key)
++        if param is not None and param.file:
++            values[key] = value
++    for key, value in (alias_values or {}).items():
++        if config_spec.get(key) is not None and key not in ("debug", "quiet"):
++            values[key] = value
++    values.update(runtime.values)
++    return RuntimeConfig(values, runtime.strict, **context)
+
+### appctl_core/yaml_lite.py (created)
+--- appctl_core/yaml_lite.py
++++ appctl_core/yaml_lite.py
+@@ -0,0 +1,304 @@
++"""YAML reading and writing.
++
++Secret: whether PyYAML is used or the built-in parser for the subset of
++YAML that config files need (block mappings and sequences, flow
++collections, quoted and plain scalars, comments).
++"""
++
++import json
++import re
++
++try:  # pragma: no cover - depends on the environment
++    import yaml as _yaml
++except ImportError:  # pragma: no cover
++    _yaml = None
++
++
++class YamlError(ValueError):
++    pass
++
++
++def load(text):
++    """Parse ``text`` and return the resulting Python value."""
++    if _yaml is not None:
++        try:
++            return _yaml.safe_load(text)
++        except _yaml.YAMLError as exc:
++            raise YamlError(str(exc).replace("\n", " ")) from None
++    return _Parser(text).parse()
++
++
++def dump(data):
++    """Serialise a mapping as YAML text."""
++    if _yaml is not None:
++        return _yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
++    return json.dumps(data, indent=2) + "\n"
++
++
++def scalar_line(key, value):
++    """A single ``key: value`` line for plain string scalars."""
++    return f"{key}: {value}\n"
++
++
++# --- fallback parser ------------------------------------------------------
++
++_NULLS = {"", "~", "null", "Null", "NULL"}
++_TRUES = {"true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"}
++_FALSES = {"false", "False", "FALSE", "no", "No", "NO", "off", "Off", "OFF"}
++_INT = re.compile(r"^[-+]?(0|[1-9][0-9_]*)$")
++_FLOAT = re.compile(r"^[-+]?(\d[\d_]*\.\d*|\.\d+)([eE][-+]?\d+)?$")
++_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "a": "\a", "b": "\b",
++            "e": "\x1b", "f": "\f", "v": "\v", " ": " ", "/": "/"}
++
++
++def _resolve(text):
++    text = text.strip()
++    if text in _NULLS:
++        return None
++    if text in _TRUES:
++        return True
++    if text in _FALSES:
++        return False
++    if _INT.match(text):
++        return int(text.replace("_", ""))
++    if _FLOAT.match(text):
++        return float(text.replace("_", ""))
++    return text
++
++
++def _strip_comment(line):
++    quote = None
++    for index, char in enumerate(line):
++        if quote:
++            if char == quote:
++                quote = None
++            elif char == "\\" and quote == '"':
++                continue
++        elif char in "\"'" and (index == 0 or line[index - 1] in " \t[{,:-"):
++            quote = char
++        elif char == "#" and (index == 0 or line[index - 1] in " \t"):
++            return line[:index].rstrip()
++    return line.rstrip()
++
++
++def _read_quoted(text, start):
++    """Parse a quoted string starting at ``start``; return (value, end)."""
++    quote = text[start]
++    index = start + 1
++    chars = []
++    while index < len(text):
++        char = text[index]
++        if quote == "'" and char == "'":
++            if text[index + 1:index + 2] == "'":
++                chars.append("'")
++                index += 2
++                continue
++            return "".join(chars), index + 1
++        if quote == '"' and char == "\\":
++            code = text[index + 1:index + 2]
++            width = {"x": 2, "u": 4, "U": 8}.get(code)
++            if width:
++                try:
++                    chars.append(chr(int(text[index + 2:index + 2 + width], 16)))
++                except ValueError:
++                    raise YamlError("invalid escape sequence") from None
++                index += 2 + width
++                continue
++            chars.append(_ESCAPES.get(code, code))
++            index += 2
++            continue
++        if quote == '"' and char == '"':
++            return "".join(chars), index + 1
++        chars.append(char)
++        index += 1
++    raise YamlError("unterminated quoted string")
++
++
++def _is_seq_item(content):
++    return content == "-" or content.startswith("- ")
++
++
++def _split_key(content):
++    """Split a ``key: rest`` line; return (key, rest) or None."""
++    if content[:1] in "\"'":
++        key, end = _read_quoted(content, 0)
++        rest = content[end:].lstrip()
++        if not rest.startswith(":"):
++            return None
++        return key, rest[1:].strip()
++    depth = 0
++    for index, char in enumerate(content):
++        if char in "[{":
++            depth += 1
++        elif char in "]}":
++            depth -= 1
++        elif char == ":" and depth == 0 and (
++                index + 1 == len(content) or content[index + 1] in " \t"):
++            return _resolve_key(content[:index]), content[index + 1:].strip()
++    return None
++
++
++def _resolve_key(text):
++    value = _resolve(text)
++    return text.strip() if value is None or isinstance(value, bool) else value
++
++
++class _Flow:
++    def __init__(self, text):
++        self.text = text
++        self.pos = 0
++
++    def skip(self):
++        while self.pos < len(self.text) and self.text[self.pos] in " \t":
++            self.pos += 1
++
++    def peek(self):
++        self.skip()
++        return self.text[self.pos] if self.pos < len(self.text) else ""
++
++    def value(self, stops):
++        char = self.peek()
++        if char == "[":
++            return self.sequence()
++        if char == "{":
++            return self.mapping()
++        if char in "\"'":
++            value, self.pos = _read_quoted(self.text, self.pos)
++            return value
++        start = self.pos
++        while self.pos < len(self.text):
++            char = self.text[self.pos]
++            if char in stops:
++                break
++            if char == ":" and ":" in stops and (
++                    self.pos + 1 == len(self.text) or self.text[self.pos + 1] in " ,]}"):
++                break
++            self.pos += 1
++        return _resolve(self.text[start:self.pos])
++
++    def expect(self, char):
++        if self.peek() != char:
++            raise YamlError(f"expected '{char}' in flow collection")
++        self.pos += 1
++
++    def sequence(self):
++        self.expect("[")
++        items = []
++        while self.peek() != "]":
++            if not self.peek():
++                raise YamlError("unterminated flow sequence")
++            items.append(self.value(",]"))
++            if self.peek() == ",":
++                self.pos += 1
++        self.pos += 1
++        return items
++
++    def mapping(self):
++        self.expect("{")
++        result = {}
++        while self.peek() != "}":
++            if not self.peek():
++                raise YamlError("unterminated flow mapping")
++            key = self.value(":,}")
++            value = None
++            if self.peek() == ":":
++                self.pos += 1
++                value = self.value(",}")
++            result[key] = value
++            if self.peek() == ",":
++                self.pos += 1
++        self.pos += 1
++        return result
++
++
++def _inline(text):
++    text = text.strip()
++    if text[:1] in "[{\"'":
++        flow = _Flow(text)
++        value = flow.value("")
++        if flow.peek():
++            raise YamlError(f"unexpected content after value: {text!r}")
++        return value
++    if text[:1] in "|>&*!%@`":
++        if text[:1] != "@":
++            raise YamlError(f"unsupported YAML construct: {text!r}")
++    return _resolve(text)
++
++
++class _Parser:
++    def __init__(self, text):
++        self.lines = []
++        for raw in text.splitlines():
++            if raw.strip() in ("---", "..."):
++                continue
++            content = _strip_comment(raw)
++            if not content.strip():
++                continue
++            if "\t" in content[:len(content) - len(content.lstrip())]:
++                raise YamlError("tabs are not allowed for indentation")
++            stripped = content.lstrip(" ")
++            self.lines.append([len(content) - len(stripped), stripped])
++
++    def parse(self):
++        if not self.lines:
++            return None
++        if len(self.lines) == 1 and _split_key(self.lines[0][1]) is None \
++                and not _is_seq_item(self.lines[0][1]):
++            return _inline(self.lines[0][1])
++        value, index = self.block(0, self.lines[0][0])
++        if index < len(self.lines):
++            raise YamlError(f"unexpected content: {self.lines[index][1]!r}")
++        return value
++
++    def block(self, index, indent):
++        if _is_seq_item(self.lines[index][1]):
++            return self.sequence(index, indent)
++        return self.mapping(index, indent)
++
++    def nested(self, index, indent, allow_same_indent_seq):
++        """Parse the block following a line ending in ':' or '-'."""
++        if index < len(self.lines):
++            next_indent, content = self.lines[index]
++            if next_indent > indent or (
++                    allow_same_indent_seq and next_indent == indent
++                    and _is_seq_item(content)):
++                return self.block(index, next_indent)
++        return None, index
++
++    def sequence(self, index, indent):
++        items = []
++        while index < len(self.lines):
++            line_indent, content = self.lines[index]
++            if line_indent != indent or not _is_seq_item(content):
++                break
++            rest = content[1:].lstrip(" ")
++            if not rest:
++                value, index = self.nested(index + 1, indent, False)
++            elif _split_key(rest) is not None or _is_seq_item(rest):
++                self.lines[index] = [indent + len(content) - len(rest), rest]
++                value, index = self.block(index, self.lines[index][0])
++            else:
++                value, index = _inline(rest), index + 1
++            items.append(value)
++        return items, index
++
++    def mapping(self, index, indent):
++        result = {}
++        while index < len(self.lines):
++            line_indent, content = self.lines[index]
++            if line_indent < indent:
++                break
++            if line_indent > indent:
++                raise YamlError(f"bad indentation: {content!r}")
++            if _is_seq_item(content):
++                break
++            pair = _split_key(content)
++            if pair is None:
++                raise YamlError(f"expected 'key: value', got {content!r}")
++            key, rest = pair
++            if rest:
++                value, index = _inline(rest), index + 1
++            else:
++                value, index = self.nested(index + 1, indent, True)
++            result[key] = value
++        return result, index
+
+### requirements.txt (modified)
+--- requirements.txt
++++ requirements.txt
+@@ -1 +1,2 @@
+ pytest>=8.0
++PyYAML>=6.0
+
+### tests/test_config.py (created)
+--- tests/test_config.py
++++ tests/test_config.py
+@@ -0,0 +1,262 @@
++import io
++import json
++import os
++import stat
++import subprocess
++import sys
++
++import pytest
++
++from appctl_core import yaml_lite
++from appctl_core.app import run
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++
++
++@pytest.fixture
++def home(tmp_path):
++    root = tmp_path / "root"
++    project = tmp_path / "project"
++    project.mkdir()
++    return root, project
++
++
++def call(*argv, root, cwd, env=None):
++    out, err = io.StringIO(), io.StringIO()
++    full_env = {"APPCTL_ROOT_DIR": str(root), "PATH": os.environ.get("PATH", "")}
++    full_env.update(env or {})
++    code = run(list(argv), full_env, out, err, cwd=str(cwd))
++    return code, out.getvalue(), err.getvalue()
++
++
++def info(root, cwd, *extra, env=None):
++    code, out, err = call("cli", "info", "--format=json", *extra,
++                          root=root, cwd=cwd, env=env)
++    assert code == 0, err
++    return json.loads(out)
++
++
++def write(path, text):
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(text)
++
++
++# --- loading and precedence ------------------------------------------------
++
++def test_global_config_auto_created(home):
++    root, project = home
++    call("cli", "version", root=root, cwd=project)
++    data = yaml_lite.load((root / "config" / "config.yml").read_text())
++    assert data == {"locale": "en_US", "installer_version": "stable"}
++
++
++def test_auto_create_preserves_existing_values(home, tmp_path):
++    root, project = home
++    config = tmp_path / "custom.yml"
++    write(config, "color: false\nlocale: fr_FR")
++    call("cli", "version", root=root, cwd=project,
++         env={"APPCTL_CONFIG_PATH": str(config)})
++    assert yaml_lite.load(config.read_text()) == {
++        "color": False, "locale": "fr_FR", "installer_version": "stable"}
++
++
++def test_unwritable_global_config(tmp_path):
++    locked = tmp_path / "locked"
++    locked.mkdir()
++    locked.chmod(stat.S_IRUSR | stat.S_IXUSR)
++    try:
++        if os.access(locked, os.W_OK):
++            pytest.skip("running with privileges that ignore permissions")
++        code, _, err = call("cli", "version", root=tmp_path, cwd=tmp_path,
++                            env={"APPCTL_CONFIG_PATH": str(locked / "c.yml")})
++    finally:
++        locked.chmod(stat.S_IRWXU)
++    assert code == 1 and err.startswith("Error: ")
++
++
++def test_precedence_runtime_project_global_default(home):
++    root, project = home
++    assert info(root, project)["color"] == "auto"
++    write(root / "config" / "config.yml", "color: true\n")
++    assert info(root, project)["color"] is True
++    write(project / "appctl.yml", "color: false\n")
++    assert info(root, project)["color"] is False
++    assert info(root, project, "--color")["color"] is True
++
++
++def test_project_config_search_and_local_priority(home):
++    root, project = home
++    nested = project / "a" / "b"
++    nested.mkdir(parents=True)
++    write(project / "appctl.yml", "color: true\n")
++    assert info(root, nested)["project_config_path"] == str(project / "appctl.yml")
++    write(project / "appctl.local.yml", "color: false\n")
++    data = info(root, nested)
++    assert data["project_config_path"] == str(project / "appctl.local.yml")
++    assert data["color"] is False
++    write(project / "a" / "appctl.yml", "{}\n")
++    assert info(root, nested)["project_config_path"] == str(project / "a" / "appctl.yml")
++
++
++def test_file_cannot_set_runtime_only_params(home):
++    root, project = home
++    write(project / "appctl.yml", "quiet: true\ndebug: true\n")
++    data = info(root, project)
++    assert data["quiet"] is False and data["debug"] is False
++
++
++def test_packages_dir(home):
++    root, project = home
++    assert info(root, project)["packages_dir"] == str(root / "packages")
++    data = info(root, project, env={"APPCTL_PACKAGES_DIR": "/opt/pkgs"})
++    assert data["packages_dir"] == "/opt/pkgs"
++
++
++def test_inherit_and_merge(home):
++    root, project = home
++    write(project / "base.yml", "disabled_commands: [site list]\ncolor: true\n")
++    write(project / "appctl.yml",
++          "_:\n  inherit: base.yml\n  merge: true\ndisabled_commands: [plugin list]\n")
++    assert call("site", "list", root=root, cwd=project)[0] == 1
++    assert call("plugin", "list", root=root, cwd=project)[0] == 1
++    assert info(root, project)["color"] is True
++    write(project / "appctl.yml",
++          "_:\n  inherit: base.yml\ndisabled_commands: [plugin list]\ncolor: false\n")
++    assert call("site", "list", root=root, cwd=project)[0] == 0
++    assert info(root, project)["color"] is False
++
++
++# --- disabled commands ----------------------------------------------------
++
++def test_disabled_command(home):
++    root, project = home
++    write(project / "appctl.yml", "disabled_commands:\n  - site delete\n  - cache\n")
++    code, out, err = call("site", "rm", "x", "--yes", root=root, cwd=project)
++    assert (code, out, err) == (1, "", "Error: The 'site delete' command has been disabled.\n")
++    assert call("cache", "flush", root=root, cwd=project)[2] == \
++        "Error: The 'cache' command has been disabled.\n"
++    assert call("site", "list", root=root, cwd=project)[0] == 0
++
++
++# --- aliases --------------------------------------------------------------
++
++ALIASES = """
++"@staging":
++  ssh: ssh://deploy@staging.example.com
++"@beta":
++  path: relative/beta
++"@Alpha":
++  url: alpha.example.com
++"@deploy-all":
++  - "@staging"
++  - "@nonexistent"
++"@pair":
++  - "@beta"
++  - "@Alpha"
++  - "@beta"
++"""
++
++
++def test_all_without_aliases(home):
++    root, project = home
++    assert call("@all", "site", "list", root=root, cwd=project) == (
++        1, "", "Error: Cannot use '@all' when no aliases are registered.\n")
++
++
++def test_group_with_invalid_member(home):
++    root, project = home
++    write(project / "appctl.yml", ALIASES)
++    assert call("@deploy-all", "site", "list", root=root, cwd=project) == (
++        1, "", "Error: Group '@deploy-all' contains one or more invalid "
++               "aliases: @nonexistent.\n")
++
++
++def test_unknown_alias_with_and_without_suggestion(home):
++    root, project = home
++    write(project / "appctl.yml", ALIASES)
++    assert call("@stagin", "site", "list", root=root, cwd=project)[2] == (
++        "Error: Alias '@stagin' not found.\nDid you mean '@staging'?\n")
++    assert call("@zzzzzzz", "site", "list", root=root, cwd=project)[2] == (
++        "Error: Alias '@zzzzzzz' not found.\n")
++
++
++def test_local_alias_path_absolutized(home):
++    root, project = home
++    write(project / "appctl.yml", ALIASES)
++    code, out, _ = call("@beta", "cli", "info", "--format=json", root=root, cwd=project)
++    assert json.loads(out)["path"] == str(project / "relative" / "beta")
++
++
++def test_group_runs_each_member_once_in_order(home):
++    root, project = home
++    write(project / "appctl.yml", ALIASES)
++    code, out, _ = call("@pair", "cli", "info", "--format=json", root=root, cwd=project)
++    lines = out.splitlines()
++    assert code == 0 and lines[0] == "@beta" and lines[2] == "@Alpha" and len(lines) == 4
++    assert json.loads(lines[3])["url"] == "alpha.example.com"
++
++
++def test_all_runs_in_case_insensitive_order(home):
++    root, project = home
++    write(project / "appctl.yml", '"@b": {url: b}\n"@A": {url: a}\n"@c": {url: c}\n')
++    code, out, _ = call("@all", "cli", "info", "--format=json", root=root, cwd=project)
++    assert [l for l in out.splitlines() if l.startswith("@")] == ["@A", "@b", "@c"]
++
++
++def test_runtime_alias_overrides_file_alias(home):
++    root, project = home
++    write(project / "appctl.yml", ALIASES)
++    env = {"APPCTL_RUNTIME_ALIAS": json.dumps({"@Alpha": {"url": "rt"}})}
++    code, out, _ = call("@Alpha", "cli", "info", "--format=json",
++                        root=root, cwd=project, env=env)
++    assert json.loads(out)["url"] == "rt"
++
++
++def _fake_ssh(tmp_path, exit_code):
++    bindir = tmp_path / "bin"
++    bindir.mkdir(exist_ok=True)
++    script = bindir / "ssh"
++    script.write_text('#!/bin/sh\nfor a in "$@"; do echo "$a"; done\n'
++                      f"exit {exit_code}\n")
++    script.chmod(0o755)
++    return str(bindir) + os.pathsep + os.environ.get("PATH", "")
++
++
++def test_remote_execution_with_pre_command(home, tmp_path):
++    root, project = home
++    write(project / "appctl.yml", ALIASES)
++    env = {"PATH": _fake_ssh(tmp_path, 0), "APPCTL_SSH_PRE_CMD": "echo hi"}
++    code, out, err = call("@staging", "site", "list", root=root, cwd=project, env=env)
++    assert code == 0 and err == ""
++    lines = out.splitlines()
++    assert "deploy@staging.example.com" in lines
++    assert lines[-1] == "echo hi; appctl site list"
++
++
++def test_remote_connection_failure(home, tmp_path):
++    root, project = home
++    write(project / "appctl.yml", ALIASES)
++    env = {"PATH": _fake_ssh(tmp_path, 255)}
++    code, _, err = call("@staging", "site", "list", root=root, cwd=project, env=env)
++    assert code == 255
++    assert err == "Error: Cannot connect over SSH using provided configuration.\n"
++
++
++def test_subprocess_alias_error(tmp_path):
++    env = dict(os.environ, APPCTL_ROOT_DIR=str(tmp_path / "root"))
++    proc = subprocess.run([sys.executable, os.path.join(ROOT, "appctl.py"),
++                           "@all", "site", "list"],
++                          capture_output=True, text=True, env=env, cwd=tmp_path)
++    assert proc.returncode == 1 and proc.stdout == ""
++    assert proc.stderr == "Error: Cannot use '@all' when no aliases are registered.\n"
++
++
++# --- fallback YAML parser ---------------------------------------------------
++
++def test_fallback_parser_matches_expected():
++    text = ('# c\n"@a":\n  ssh: ssh://u@h:22/p  # x\n"@g":\n- "@a"\n'
++            "_: {inherit: base.yml, merge: true}\nlist: [a, 'b c']\nflag: yes\n")
++    assert yaml_lite._Parser(text).parse() == {
++        "@a": {"ssh": "ssh://u@h:22/p"}, "@g": ["@a"],
++        "_": {"inherit": "base.yml", "merge": True},
++        "list": ["a", "b c"], "flag": True}
+

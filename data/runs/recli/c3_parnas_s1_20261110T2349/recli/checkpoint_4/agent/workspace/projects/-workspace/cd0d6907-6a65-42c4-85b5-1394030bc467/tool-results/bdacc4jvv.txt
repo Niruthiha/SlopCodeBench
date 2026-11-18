@@ -1,0 +1,1410 @@
+"""Command resolution.
+
+Secret: how positional words are walked down the command tree, and when
+leftover words become arguments of the matched command rather than unknown
+subcommands.
+"""
+
+from . import messages as _messages
+from .errors import CliError
+from .suggest import suggest
+
+
+def resolve(tree, words, disabled=()):
+    """Find the deepest command matching the leading ``words``.
+
+    Returns ``(node, remaining_words)``. Raises ``CliError`` for an unknown
+    top-level command, an unknown subcommand under a group that cannot
+    itself run, or a command whose path is listed in ``disabled``.
+    """
+    disabled = set(disabled)
+    node = tree.root
+    words = list(words)
+    consumed = 0
+    for word in words:
+        if not node.has_children():
+            break
+        child = node.find_child(word)
+        if child is None:
+            if node.is_runnable() and not node.is_root():
+                break
+            suggestion = suggest(word, node.child_names())
+            if node.is_root():
+                raise CliError(_messages.unregistered_command(word, suggestion))
+            raise CliError(_messages.unregistered_subcommand(
+                word, node.path, suggestion))
+        node = child
+        consumed += 1
+        if node.path in disabled:
+            raise CliError(_messages.command_disabled(node.path))
+    return node, words[consumed:]
+"""Built-in command catalog.
+
+Secret: which commands exist, together with their synopses, aliases,
+defaults, descriptions and what each handler does.
+"""
+
+import json
+import secrets
+import shlex
+
+from . import config_spec, dispatch, formatter, help_text, messages, yaml_lite
+from .errors import CliError
+from .suggest import suggest
+
+VERSION = "1.0.0"
+
+_SITES = [
+    {"name": "main", "type": "standard", "title": "Main Site", "status": "active"},
+    {"name": "blog", "type": "blog", "title": "Company Blog", "status": "active"},
+    {"name": "shop", "type": "store", "title": "Shop", "status": "archived"},
+]
+_PLUGINS = [
+    {"name": "akismet", "status": "active", "version": "5.3"},
+    {"name": "hello-dolly", "status": "inactive", "version": "1.7.2"},
+]
+_USERS = [
+    {"ID": 1, "user_login": "admin", "user_email": "admin@example.com", "roles": "administrator"},
+    {"ID": 2, "user_login": "editor", "user_email": "editor@example.com", "roles": "editor"},
+]
+_POSTS = [
+    {"ID": 1, "post_title": "Hello world!", "post_status": "publish", "post_type": "post"},
+    {"ID": 2, "post_title": "Sample Page", "post_status": "publish", "post_type": "page"},
+]
+_OPTIONS = {"blogname": "My Site", "siteurl": "https://example.com", "admin_email": "admin@example.com"}
+_CONFIG = {"DB_NAME": "app", "DB_HOST": "localhost", "DEBUG": "false"}
+
+
+# --- shared helpers -------------------------------------------------------
+
+def _render(ctx, records, default_fields, prefix=None):
+    args = ctx.args
+    display = formatter.Formatter(args.option("format", "table"),
+                                  field=args.option("field"),
+                                  fields=args.option("fields"),
+                                  prefix=prefix, default_fields=default_fields)
+    ctx.out.line(display.display(records))
+    return 0
+
+
+def _each(ctx, verb, noun):
+    items = ctx.args.positionals
+    for item in items:
+        ctx.out.log(f"{verb} {noun} '{item}'.")
+    ctx.out.success(f"{verb} {len(items)} of {len(items)} {noun}s.")
+    return 0
+
+
+def _filtered(records, key, value):
+    return [r for r in records if value is None or str(r.get(key)) == str(value)]
+
+
+def _require_targets_or_all(ctx, noun):
+    if not ctx.args.positionals and not ctx.args.option("all"):
+        raise CliError(f"Please specify one or more {noun}s, or use --all.")
+    if ctx.args.option("all"):
+        return [p["name"] for p in _PLUGINS]
+    return ctx.args.positionals
+
+
+# --- cache ----------------------------------------------------------------
+
+def _cache_set(verb):
+    def handler(ctx):
+        key, value, group, expiration = ctx.args.positionals[:4]
+        ctx.out.success(f"{verb} object '{key}' in group '{group}' "
+                        f"(expires: {expiration}): {value}")
+        return 0
+    return handler
+
+
+def _cache_step(sign):
+    def handler(ctx):
+        key, offset, group = ctx.args.positionals[:3]
+        try:
+            amount = int(offset)
+        except ValueError:
+            raise CliError(f"Offset must be an integer, got '{offset}'.")
+        ctx.out.line(str(sign * amount))
+        ctx.out.log(f"Adjusted '{key}' in group '{group}' by {sign * amount}.")
+        return 0
+    return handler
+
+
+def _cache_get(ctx):
+    key, group = ctx.args.positionals[:2]
+    raise CliError(f"Object with key '{key}' and group '{group}' not found.")
+
+
+def _cache_delete(ctx):
+    key, group = ctx.args.positionals[:2]
+    ctx.out.success(f"Object '{key}' deleted from group '{group}'.")
+    return 0
+
+
+def _cache_flush(ctx):
+    ctx.out.success("The cache was flushed.")
+    return 0
+
+
+# --- cli ------------------------------------------------------------------
+
+def _cli_version(ctx):
+    ctx.out.line(f"appctl {VERSION}")
+    return 0
+
+
+def _cli_info(ctx):
+    info = dict(ctx.config.as_dict(), version=VERSION)
+    fmt = ctx.args.option("format")
+    try:
+        ctx.out.line(formatter.render_mapping(info, fmt))
+    except ValueError:
+        raise CliError(f"Invalid format: {fmt}. Supported formats: "
+                       + ", ".join(formatter.supported_mapping_formats()))
+    return 0
+
+
+def _cli_has_command(ctx):
+    words = " ".join(ctx.args.positionals).split()
+    return 0 if ctx.tree.find(words) is not None else 1
+
+
+def _completions(tree, line):
+    """Candidate words completing the last word of ``line``."""
+    try:
+        words = shlex.split(line)
+    except ValueError:
+        words = line.split()
+    prefix = words.pop() if words and line and not line[-1].isspace() else ""
+    node = tree.root
+    for word in words[1:]:
+        if word.startswith("-"):
+            continue
+        child = node.find_child(word)
+        if child is None:
+            if node.is_runnable() and not node.is_root():
+                continue
+            return []
+        node = child
+    if node.has_children() and not prefix.startswith("-"):
+        candidates = node.child_names()
+    elif node.is_root():
+        candidates = []
+    else:
+        candidates = [f"--{name}" for name in node.synopsis.option_names()]
+        candidates += [f"--{p.name}" for p in config_spec.params() if p.runtime]
+    return [c for c in dict.fromkeys(candidates) if c.startswith(prefix)]
+
+
+def _cli_completion(ctx):
+    line = ctx.args.option("line")
+    point = ctx.args.option("point")
+    if point is not None:
+        try:
+            line = line[:int(point)]
+        except ValueError:
+            raise CliError(f"Point must be an integer, got '{point}'.")
+    for candidate in _completions(ctx.tree, line):
+        ctx.out.line(candidate)
+    return 0
+
+
+def _cli_param_dump(ctx):
+    dump = {}
+    for param in config_spec.visible():
+        entry = {
+            "runtime": param.runtime or False,
+            "file": param.file,
+            "default": param.default,
+            "desc": param.description,
+        }
+        if param.deprecated:
+            entry["deprecated"] = True
+        if ctx.args.option("with-values"):
+            entry["current"] = ctx.config.get(param.name)
+        dump[param.name] = entry
+    return _dump_structure(ctx, dump)
+
+
+def _dump_structure(ctx, data):
+    fmt = ctx.args.option("format")
+    if fmt == "json":
+        ctx.out.line(json.dumps(data))
+    elif fmt == "yaml":
+        ctx.out.line("---\n" + yaml_lite.dump(data) if data else "--- {}")
+    else:
+        raise CliError(f"Invalid format: {fmt}. Supported formats: json, yaml")
+    return 0
+
+
+def _alias_definitions(ctx):
+    registry = ctx.config.aliases()
+    return registry.definitions() if registry is not None else {}
+
+
+def _cli_alias_list(ctx):
+    definitions = _alias_definitions(ctx)
+    ordered = {name: definitions[name]
+               for name in sorted(definitions, key=lambda n: (n.casefold(), n))}
+    return _dump_structure(ctx, ordered)
+
+
+def _cli_alias_get(ctx):
+    name = ctx.args.positional(0)
+    definitions = _alias_definitions(ctx)
+    if name not in definitions:
+        raise CliError(messages.alias_not_found(name, suggest(name, list(definitions))))
+    value = definitions[name]
+    if isinstance(value, dict):
+        for key, item in value.items():
+            ctx.out.line(f"{key}: {item}")
+    elif isinstance(value, list):
+        for item in value:
+            ctx.out.line(f"- {item}")
+    else:
+        ctx.out.line(str(value))
+    return 0
+
+
+# --- config ---------------------------------------------------------------
+
+def _config_get(ctx):
+    name = ctx.args.positional(0)
+    if name not in _CONFIG:
+        raise CliError(f"The constant or variable '{name}' is not defined in the config file.")
+    ctx.out.line(_CONFIG[name])
+    return 0
+
+
+def _config_set(ctx):
+    name, value = ctx.args.positionals[:2]
+    kind = ctx.args.option("type")
+    raw = " (raw)" if ctx.args.option("raw") else ""
+    ctx.out.success(f"Updated the {kind} '{name}' in the config file "
+                    f"with the value '{value}'{raw}.")
+    return 0
+
+
+def _config_delete(ctx):
+    name = ctx.args.positional(0)
+    if name not in _CONFIG:
+        raise CliError(f"The {ctx.args.option('type')} '{name}' is not defined in the config file.")
+    ctx.out.success(f"Deleted '{name}' from the config file.")
+    return 0
+
+
+def _config_list(ctx):
+    filters = ctx.args.positionals
+    strict = ctx.args.option("strict")
+    records = [{"name": k, "value": v} for k, v in _CONFIG.items()
+               if not filters or any((f == k) if strict else (f in k) for f in filters)]
+    return _render(ctx, records, ["name", "value"])
+
+
+# --- help -----------------------------------------------------------------
+
+def _help(ctx):
+    words = ctx.args.positionals
+    if not words:
+        ctx.out.usage(help_text.top_level_help(ctx.tree))
+        return 0
+    node, _ = dispatch.resolve(ctx.tree, words)
+    ctx.out.usage(help_text.command_help(node))
+    return 0
+
+
+# --- option ---------------------------------------------------------------
+
+def _option_get(ctx):
+    key = ctx.args.positional(0)
+    if key not in _OPTIONS:
+        raise CliError(f"Could not get '{key}' option. Does it exist?")
+    value = _OPTIONS[key]
+    ctx.out.line(json.dumps(value, indent=4) if ctx.args.option("format") == "json" else value)
+    return 0
+
+
+def _option_write(verb):
+    def handler(ctx):
+        key = ctx.args.positional(0)
+        value = ctx.read_value(1)
+        if value is None:
+            raise CliError("Please provide a value for the option.")
+        ctx.out.success(f"{verb} '{key}' option (autoload: {ctx.args.option('autoload')}).")
+        return 0
+    return handler
+
+
+def _option_list(ctx):
+    search = ctx.args.option("search")
+    exclude = ctx.args.option("exclude")
+    records = [{"option_name": k, "option_value": v} for k, v in _OPTIONS.items()
+               if (search is None or search in k) and (exclude is None or exclude not in k)]
+    return _render(ctx, records, ["option_name", "option_value"], prefix="option")
+
+
+# --- plugin ---------------------------------------------------------------
+
+def _plugin_bulk(verb):
+    def handler(ctx):
+        names = _require_targets_or_all(ctx, "plugin")
+        for name in names:
+            ctx.out.log(f"Plugin '{name}' {verb}.")
+        ctx.out.success(f"{verb.capitalize()} {len(names)} of {len(names)} plugins.")
+        return 0
+    return handler
+
+
+def _plugin_install(ctx):
+    version = ctx.args.option("version")
+    for name in ctx.args.positionals:
+        suffix = f" (version {version})" if version else ""
+        ctx.out.log(f"Installing {name}{suffix}...")
+        if ctx.args.option("activate"):
+            ctx.out.log(f"Plugin '{name}' activated.")
+    count = len(ctx.args.positionals)
+    ctx.out.success(f"Installed {count} of {count} plugins.")
+    return 0
+
+
+def _plugin_list(ctx):
+    records = _filtered(_PLUGINS, "status", ctx.args.option("status"))
+    return _render(ctx, records, ["name", "status", "version"])
+
+
+# --- post -----------------------------------------------------------------
+
+def _post_create(ctx):
+    args = ctx.args
+    if args.option("porcelain"):
+        ctx.out.line("3")
+    else:
+        ctx.out.success(f"Created {args.option('type')} 3 "
+                        f"'{args.option('title', '')}' with status {args.option('status')}.")
+    return 0
+
+
+def _post_get(ctx):
+    post_id = ctx.args.positional(0)
+    records = _filtered(_POSTS, "ID", post_id)
+    if not records:
+        raise CliError(f"Could not find the post with ID {post_id}.")
+    return _render(ctx, records, list(records[0]), prefix="post")
+
+
+def _post_list(ctx):
+    records = list(_POSTS)
+    for key, value in ctx.args.options().items():
+        if key not in ("format", "field", "fields"):
+            records = _filtered(records, key, value)
+    return _render(ctx, records, ["ID", "post_title", "post_status", "post_type"],
+                   prefix="post")
+
+
+def _update_fields(noun):
+    def handler(ctx):
+        fields = {k: v for k, v in ctx.args.options().items()
+                  if k not in ("skip-email",)}
+        if not fields:
+            raise CliError("Need some fields to update.")
+        changes = ", ".join(f"{k}={v}" for k, v in sorted(fields.items()))
+        for target in ctx.args.positionals:
+            ctx.out.success(f"Updated {noun} '{target}': {changes}.")
+        return 0
+    return handler
+
+
+# --- site -----------------------------------------------------------------
+
+def _site_create(ctx):
+    args = ctx.args
+    name = args.positional(0)
+    if args.option("porcelain"):
+        ctx.out.line(name)
+        return 0
+    visibility = "private" if args.option("private") else "public"
+    title = args.option("title", name)
+    ctx.out.success(f"Site '{name}' created (type: {args.option('type')}, "
+                    f"title: {title}, visibility: {visibility}).")
+    return 0
+
+
+def _site_delete(ctx):
+    name = ctx.args.positional(0)
+    if not ctx.out.confirm(f"Are you sure you want to delete the site '{name}'?",
+                           ctx.args.option("yes")):
+        return 0
+    tables = " Tables were kept." if ctx.args.option("keep-tables") else ""
+    ctx.out.success(f"Site '{name}' deleted.{tables}")
+    return 0
+
+
+def _site_empty(ctx):
+    name = ctx.args.positional(0)
+    if not ctx.out.confirm(f"Are you sure you want to empty the site '{name}'?",
+                           ctx.args.option("yes")):
+        return 0
+    ctx.out.success(f"Site '{name}' emptied.")
+    return 0
+
+
+def _site_list(ctx):
+    return _render(ctx, list(_SITES), ["name", "type", "title", "status"])
+
+
+# --- user -----------------------------------------------------------------
+
+def _user_create(ctx):
+    args = ctx.args
+    if args.option("porcelain"):
+        ctx.out.line("3")
+        return 0
+    ctx.out.success(f"Created user 3 '{args.positional(0)}' <{args.option('email')}> "
+                    f"with role {args.option('role')}.")
+    return 0
+
+
+def _user_delete(ctx):
+    users = ", ".join(f"'{u}'" for u in ctx.args.positionals)
+    if not ctx.out.confirm(f"Are you sure you want to delete {users}?",
+                           ctx.args.option("yes")):
+        return 0
+    reassign = ctx.args.option("reassign")
+    for user in ctx.args.positionals:
+        note = f" Posts reassigned to {reassign}." if reassign else ""
+        ctx.out.success(f"Removed user '{user}'.{note}")
+    return 0
+
+
+def _find_user(user):
+    records = [u for u in _USERS
+               if str(user) in (str(u["ID"]), u["user_login"], u["user_email"])]
+    if not records:
+        raise CliError(f"Invalid user ID, email or login: '{user}'")
+    return records
+
+
+def _user_get(ctx):
+    records = _find_user(ctx.args.positional(0))
+    return _render(ctx, records, list(records[0]), prefix="user")
+
+
+def _user_list(ctx):
+    records = _filtered(_USERS, "roles", ctx.args.option("role"))
+    return _render(ctx, records, ["ID", "user_login", "user_email", "roles"],
+                   prefix="user")
+
+
+def _user_reset_password(ctx):
+    users = [_find_user(u)[0]["user_login"] for u in ctx.args.positionals]
+    password = ctx.args.option("password") or secrets.token_urlsafe(18)
+    for user in users:
+        if ctx.args.option("porcelain"):
+            ctx.out.line(password)
+            continue
+        ctx.out.success(f"Reset password for {user}.")
+        if ctx.args.option("show-password"):
+            ctx.out.log(f"Password: {password}", sensitive=True)
+    return 0
+
+
+# --- registration ---------------------------------------------------------
+
+_LIST_FORMAT = "[--field=<field>] [--fields=<fields>] [--format=<format>]"
+
+
+def register_all(tree):
+    """Register every built-in command on ``tree``."""
+    r = tree.register
+
+    r("cache", description="Adds, removes, fetches, and flushes the object cache.")
+    r("cache add", _cache_set("Added"), synopsis="<key> <value> [<group>] [<expiration>]",
+      description="Adds a value to the object cache.",
+      defaults={"group": "default", "expiration": "0"})
+    r("cache decr", _cache_step(-1), synopsis="<key> [<offset>] [<group>]",
+      description="Decrements a value in the object cache.",
+      defaults={"offset": "1", "group": "default"})
+    r("cache delete", _cache_delete, synopsis="<key> [<group>]",
+      description="Removes a value from the object cache.", defaults={"group": "default"})
+    r("cache flush", _cache_flush, description="Flushes the object cache.")
+    r("cache get", _cache_get, synopsis="<key> [<group>]",
+      description="Gets a value from the object cache.", defaults={"group": "default"})
+    r("cache incr", _cache_step(1), synopsis="<key> [<offset>] [<group>]",
+      description="Increments a value in the object cache.",
+      defaults={"offset": "1", "group": "default"})
+    r("cache set", _cache_set("Set"), synopsis="<key> <value> [<group>] [<expiration>]",
+      description="Sets a value to the object cache, regardless of whether it already exists.",
+      defaults={"group": "default", "expiration": "0"})
+
+    r("cli", description="Reviews current appctl info and checks registered commands.")
+    r("cli alias", description="Retrieves aliases.")
+    r("cli alias get", _cli_alias_get, synopsis="<key>",
+      description="Gets the value for an alias.")
+    r("cli alias list", _cli_alias_list, synopsis="[--format=<format>]",
+      description="Lists available aliases.", defaults={"format": "yaml"})
+    r("cli completion", _cli_completion, synopsis="--line=<line> [--point=<point>]",
+      description="Generates tab completion strings.")
+    r("cli has-command", _cli_has_command, synopsis="<command-name>...",
+      description="Detects if a command exists.")
+    r("cli info", _cli_info, synopsis="[--format=<format>]",
+      description="Prints various details about the appctl environment.",
+      defaults={"format": "list"})
+    r("cli param-dump", _cli_param_dump, synopsis="[--with-values] [--format=<format>]",
+      description="Dumps the list of global parameters.", defaults={"format": "json"})
+    r("cli version", _cli_version, description="Prints appctl version.")
+
+    r("config", alias="cfg", description="Generates and reads the configuration file.")
+    r("config delete", _config_delete, synopsis="<name> [--type=<type>]",
+      description="Deletes a specific constant or variable from the config file.",
+      defaults={"type": "all"})
+    r("config get", _config_get, synopsis="<name> [--type=<type>]",
+      description="Gets the value of a specific constant or variable defined in the config file.",
+      defaults={"type": "all"})
+    r("config list", _config_list, synopsis=f"[<filter>...] {_LIST_FORMAT} [--strict]",
+      description="Lists variables, constants, and file includes defined in the config file.",
+      defaults={"format": "table"})
+    r("config set", _config_set,
+      synopsis="<name> <value> [--add] [--[no-]raw] [--anchor=<anchor>] [--type=<type>]",
+      description="Sets the value of a specific constant or variable defined in the config file.",
+      defaults={"type": "constant"})
+
+    r("help", _help, synopsis="[<command>...] [--<field>=<value>]",
+      description="Gets help for appctl commands.")
+
+    r("option", description="Retrieves and sets site options.")
+    r("option add", _option_write("Added"),
+      synopsis="<key> [<value>] [--format=<format>] [--autoload=<autoload>]",
+      description="Adds a new option value.", defaults={"autoload": "yes", "format": "plaintext"})
+    r("option delete", _each_factory("Deleted", "option"), synopsis="<key>...",
+      description="Deletes an option.")
+    r("option get", _option_get, synopsis="<key> [--format=<format>]",
+      description="Gets the value for an option.", defaults={"format": "var_export"})
+    r("option list", _option_list,
+      synopsis=f"[--search=<pattern>] [--exclude=<pattern>] [--autoload=<value>] {_LIST_FORMAT}",
+      description="Lists options and their values.", defaults={"format": "table"})
+    r("option update", _option_write("Updated"),
+      synopsis="<key> [<value>] [--autoload=<autoload>] [--format=<format>]",
+      description="Updates an option value.", defaults={"autoload": "yes", "format": "plaintext"})
+
+    r("plugin", description="Manages plugins, including installs, activations, and updates.")
+    r("plugin activate", _plugin_bulk("activated"), synopsis="[<plugin>...] [--all] [--network]",
+      description="Activates one or more plugins.")
+    r("plugin deactivate", _plugin_bulk("deactivated"),
+      synopsis="[<plugin>...] [--uninstall] [--all] [--network]",
+      description="Deactivates one or more plugins.")
+    r("plugin delete", _plugin_bulk("deleted"), synopsis="[<plugin>...] [--all]",
+      description="Deletes plugin files without deactivating or uninstalling.")
+    r("plugin install", _plugin_install,
+      synopsis="<plugin|zip|url>... [--version=<version>] [--force] [--activate]",
+      description="Installs one or more plugins.")
+    r("plugin list", _plugin_list, synopsis=f"[--status=<status>] {_LIST_FORMAT}",
+      description="Gets a list of plugins.", defaults={"format": "table"})
+    r("plugin uninstall", _plugin_bulk("uninstalled"),
+      synopsis="[<plugin>...] [--deactivate] [--skip-delete] [--all]",
+      description="Uninstalls one or more plugins.")
+
+    r("post", description="Manages posts, content, and meta.")
+    r("post create", _post_create,
+      synopsis="[--title=<title>] [--content=<content>] [--status=<status>] "
+               "[--type=<type>] [--porcelain]",
+      description="Creates a new post.", defaults={"status": "draft", "type": "post"})
+    r("post delete", _each_factory("Deleted", "post"), synopsis="<id>... [--force]",
+      description="Deletes an existing post.")
+    r("post get", _post_get, synopsis=f"<id> {_LIST_FORMAT}",
+      description="Gets details about a post.", defaults={"format": "table"})
+    r("post list", _post_list, synopsis=f"[--<field>=<value>] {_LIST_FORMAT}",
+      description="Gets a list of posts.", defaults={"format": "table"})
+    r("post update", _update_fields("post"), synopsis="<id>... [--<field>=<value>]",
+      description="Updates one or more existing posts.")
+
+    r("site", description="Creates, deletes, empties, archives, and lists sites.")
+    r("site archive", _each_factory("Archived", "site"), synopsis="<site-name>...",
+      description="Archives one or more sites.")
+    r("site create", _site_create, alias="new",
+      synopsis="<site-name> [--type=<type>] [--title=<title>] [--email=<email>] "
+               "[--private] [--porcelain]",
+      description="Creates a site.", defaults={"type": "standard"})
+    r("site delete", _site_delete, alias="rm",
+      synopsis="<site-name> [--yes] [--keep-tables]",
+      description="Deletes a site.")
+    r("site empty", _site_empty, synopsis="<site-name> [--uploads] [--yes]",
+      description="Empties a site of its content.")
+    r("site list", _site_list, alias="ls", synopsis=_LIST_FORMAT,
+      description="Lists all sites.", defaults={"format": "table"})
+    r("site update", _update_fields("site"), synopsis="<site-name> [--<field>=<value>]",
+      description="Updates fields of a site.")
+
+    r("user", description="Manages users, along with their roles and meta.")
+    r("user create", _user_create,
+      synopsis="<user-login> --email=<email> [--role=<role>] "
+               "[--display-name=<name>] [--send-email] [--porcelain]",
+      description="Creates a new user.", defaults={"role": "subscriber"})
+    r("user delete", _user_delete, synopsis="<user>... [--reassign=<user-id>] [--yes]",
+      description="Deletes one or more users.")
+    r("user get", _user_get, synopsis=f"<user> {_LIST_FORMAT}",
+      description="Gets details about a user.", defaults={"format": "table"})
+    r("user list", _user_list, synopsis=f"[--role=<role>] {_LIST_FORMAT}",
+      description="Lists users.", defaults={"format": "table"})
+    r("user reset-password", _user_reset_password,
+      synopsis="<user>... [--password=<password>] [--show-password] [--porcelain] "
+               "[--skip-email]",
+      description="Resets the password for one or more users.")
+    r("user update", _update_fields("user"),
+      synopsis="<user>... [--<field>=<value>] [--skip-email]",
+      description="Updates an existing user.")
+
+
+def _each_factory(verb, noun):
+    return lambda ctx: _each(ctx, verb, noun)
+"""Global runtime parameters.
+
+Secret: which environment variable enables strict arguments mode, which
+argv positions may supply global parameters in each mode, and how the
+runtime flags, config files, alias parameters and built-in defaults are
+layered into one configuration.
+"""
+
+from . import config_spec
+from . import messages as _messages
+from .errors import CliError
+from .synopsis import Synopsis
+
+_STRICT_ENV = "APPCTL_STRICT_ARGS_MODE"
+_GLOBALS = config_spec.runtime_synopsis()
+
+
+class RuntimeValues:
+    """Global parameters given on the command line."""
+
+    def __init__(self, values, strict, warnings):
+        self.values = dict(values)
+        self.strict = strict
+        self.warnings = list(warnings)
+
+    def debug(self):
+        return bool(self.values.get("debug", False))
+
+    def quiet(self):
+        return bool(self.values.get("quiet", False))
+
+
+class RuntimeConfig:
+    """Read-only view of the effective global configuration."""
+
+    def __init__(self, values, strict, locations=None, loaded=None, aliases=None):
+        self._values = config_spec.defaults()
+        self._values.update(values)
+        self._strict = strict
+        self._locations = locations
+        self._loaded = loaded
+        self._aliases = aliases
+
+    def get(self, name, default=None):
+        return self._values.get(name, default)
+
+    def values(self):
+        return dict(self._values)
+
+    def path(self):
+        return self._values.get("path")
+
+    def url(self):
+        return self._values.get("url")
+
+    def user(self):
+        return self._values.get("user")
+
+    def ssh(self):
+        return self._values.get("ssh")
+
+    def color(self):
+        return self._values.get("color")
+
+    def debug(self):
+        return bool(self._values.get("debug", False))
+
+    def quiet(self):
+        return bool(self._values.get("quiet", False))
+
+    def strict(self):
+        return self._strict
+
+    def disabled_commands(self):
+        entries = self._values.get("disabled_commands") or []
+        if not isinstance(entries, list):
+            entries = [entries]
+        return [" ".join(str(e).split()) for e in entries if e is not None]
+
+    def aliases(self):
+        """The alias registry, or ``None`` when none was loaded."""
+        return self._aliases
+
+    def global_config_path(self):
+        return self._loaded.global_config_path if self._loaded else None
+
+    def project_config_path(self):
+        return self._loaded.project_config_path if self._loaded else None
+
+    def packages_dir(self):
+        return self._locations.packages_dir if self._locations else None
+
+    def root_dir(self):
+        return self._locations.root_dir if self._locations else None
+
+    def as_dict(self):
+        return {
+            "path": self.path(),
+            "url": self.url(),
+            "user": self.user(),
+            "color": self.color(),
+            "debug": self.debug(),
+            "quiet": self.quiet(),
+            "strict_args_mode": self.strict(),
+            "global_config_path": self.global_config_path(),
+            "project_config_path": self.project_config_path(),
+            "packages_dir": self.packages_dir(),
+        }
+
+
+def extract(items, env):
+    """Split global parameters out of ``items``.
+
+    Returns ``(RuntimeValues, remaining_tokens)``. In strict mode only tokens
+    before the first positional word are considered global.
+    """
+    strict = bool(env.get(_STRICT_ENV, ""))
+    values = {}
+    warnings = []
+    remaining = []
+    seen_positional = False
+    for token in items:
+        if not token.is_option():
+            seen_positional = True
+            remaining.append(token)
+            continue
+        if strict and seen_positional:
+            remaining.append(token)
+            continue
+        key, value, status = _GLOBALS.interpret(token.name, token.value)
+        if status == Synopsis.UNKNOWN:
+            remaining.append(token)
+        elif status == Synopsis.OK:
+            values[key] = value
+            if config_spec.is_deprecated(key):
+                warnings.append(_messages.deprecated_global_parameter(key))
+        else:
+            raise CliError(_messages.global_parameter_error(
+                key, needs_value=(status == Synopsis.NEEDS_VALUE)))
+    return RuntimeValues(values, strict, list(dict.fromkeys(warnings))), remaining
+
+
+def layer(runtime, file_values=None, alias_values=None, **context):
+    """Combine the sources: runtime > alias > config files > defaults."""
+    values = {}
+    for key, value in (file_values or {}).items():
+        param = config_spec.get(key)
+        if param is not None and param.file:
+            values[key] = value
+    for key, value in (alias_values or {}).items():
+        if config_spec.get(key) is not None and key not in ("debug", "quiet"):
+            values[key] = value
+    values.update(runtime.values)
+    return RuntimeConfig(values, runtime.strict, **context)
+"""Invocation log file.
+
+Secret: where the log file lives, the timestamp format of each entry, the
+delimiter line written at the start of every invocation, and that write
+failures never interrupt the command.
+"""
+
+import os
+from datetime import datetime, timezone
+
+_RELATIVE_PATH = os.path.join("logs", "appctl.log")
+_TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
+_DELIMITER = "========== appctl invocation (pid {pid}) =========="
+
+
+def log_path(root_dir):
+    return os.path.join(root_dir, _RELATIVE_PATH)
+
+
+def timestamp(now=None):
+    """UTC timestamp in ISO 8601 form, e.g. ``2026-01-02T03:04:05Z``."""
+    now = now or datetime.now(timezone.utc)
+    return now.astimezone(timezone.utc).strftime(_TIMESTAMP)
+
+
+class LogFile:
+    """Appends timestamped entries to the log file (or does nothing when
+    disabled)."""
+
+    def __init__(self, path, enabled=True):
+        self.path = path
+        self.enabled = bool(enabled and path)
+
+    def _append(self, lines):
+        if not self.enabled:
+            return
+        try:
+            directory = os.path.dirname(self.path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            with open(self.path, "a", encoding="utf-8") as handle:
+                handle.write("".join(line + "\n" for line in lines))
+        except OSError:
+            pass
+
+    def start_invocation(self):
+        self.write(_DELIMITER.format(pid=os.getpid()))
+
+    def write(self, text):
+        """Append ``text``; every line carries the same timestamp."""
+        stamp = timestamp()
+        self._append(f"[{stamp}] {line}" for line in str(text).split("\n"))
+
+
+class NullLog(LogFile):
+    def __init__(self):
+        super().__init__(None, enabled=False)
+"""User-facing message wording.
+
+Secret: the exact text of every error and notice, and the program's display
+name.
+"""
+
+_PROGRAM = "appctl"
+
+
+def program_name():
+    return _PROGRAM
+
+
+def _with_suggestion(message, suggestion):
+    if suggestion:
+        return f"{message}\nDid you mean '{suggestion}'?"
+    return message
+
+
+def unregistered_command(name, suggestion=None):
+    return _with_suggestion(
+        f"'{name}' is not a registered {_PROGRAM} command. "
+        f"See '{_PROGRAM} help' for available commands.",
+        suggestion,
+    )
+
+
+def unregistered_subcommand(name, parent, suggestion=None):
+    return _with_suggestion(
+        f"'{name}' is not a registered subcommand of '{parent}'. "
+        f"See '{_PROGRAM} help {parent}' for available subcommands.",
+        suggestion,
+    )
+
+
+def too_many_positionals(words):
+    return "Too many positional arguments: " + " ".join(words)
+
+
+def parameter_errors(lines):
+    return "Parameter errors:" + "".join(f"\n {line}" for line in lines)
+
+
+def missing_parameter(key):
+    return f"missing --{key} parameter"
+
+
+def parameter_needs_value(key):
+    return f"--{key} parameter needs a value"
+
+
+def parameter_takes_no_value(key):
+    return f"--{key} parameter does not accept a value"
+
+
+def unknown_parameter(key, suggestion=None):
+    message = f"unknown --{key} parameter"
+    if suggestion:
+        message += f"\nDid you mean '--{suggestion}'?"
+    return message
+
+
+def invalid_synopsis(path, parts):
+    return (f"The '{path}' command has an invalid synopsis: "
+            + ", ".join(parts))
+
+
+def global_parameter_error(key, needs_value):
+    if needs_value:
+        return f"The --{key} global parameter needs a value."
+    return f"The --{key} global parameter does not accept a value."
+
+
+def command_disabled(path):
+    return f"The '{path}' command has been disabled."
+
+
+def deprecated_global_parameter(key):
+    return f"The --{key} global parameter is deprecated."
+
+
+def alias_not_found(name, suggestion=None):
+    return _with_suggestion(f"Alias '{name}' not found.", suggestion)
+
+
+def alias_group_invalid(group, invalid):
+    return (f"Group '{group}' contains one or more invalid aliases: "
+            + ", ".join(invalid) + ".")
+
+
+def alias_all_without_aliases():
+    return "Cannot use '@all' when no aliases are registered."
+
+
+def ssh_connection_failed():
+    return "Cannot connect over SSH using provided configuration."
+
+
+def _reason(exc):
+    return getattr(exc, "strerror", None) or str(exc)
+
+
+def config_unwritable(path, exc):
+    return f"Unable to write the global config file '{path}': {_reason(exc)}."
+
+
+def config_unreadable(path, exc):
+    return f"Unable to read the config file '{path}': {_reason(exc)}."
+
+
+def config_unparsable(path, exc):
+    return f"Unable to parse the config file '{path}': {exc}"
+
+
+def invalid_field(name):
+    return f"Invalid field: {name}."
+
+
+def invalid_json(raw):
+    return f"Invalid JSON: {raw}"
+
+
+def redacted():
+    return "[redacted]"
+
+
+def operation_cancelled():
+    return "Operation cancelled."
+
+
+def invalid_format(fmt, supported):
+    return f"Invalid format: {fmt}. Supported formats: " + ", ".join(supported)
+"""Exception types shared by several module interfaces."""
+
+
+class CliError(Exception):
+    """A user-facing failure: the message is reported as an error and the
+    process exits with ``exit_code``.
+
+    ``message`` may be a list of lines, which is reported as a multi-line
+    error. A ``sensitive`` error contains user-supplied material that must
+    never reach the log file; ``log_message`` is an optional redacted form
+    that may be logged instead.
+    """
+
+    def __init__(self, message, exit_code=1, sensitive=False, log_message=None):
+        lines = None
+        if isinstance(message, (list, tuple)):
+            lines = [str(line) for line in message]
+            message = "\n".join(lines)
+        super().__init__(message)
+        self.message = message
+        self.lines = lines
+        self.exit_code = exit_code
+        self.sensitive = sensitive
+        self.log_message = log_message
+
+
+class MissingPositional(Exception):
+    """Raised when a command did not receive all of its required positional
+    arguments; the caller is expected to show that command's usage."""
+"""Output streams.
+
+Secret: which stream each kind of output goes to, the prefix it carries and
+its color, which kinds are copied to the log file, how quiet and debug modes
+affect it, and how questions are asked and answered on STDIN.
+"""
+
+import os
+import select
+import stat
+import sys
+import time
+
+from . import messages as _messages
+from .logfile import NullLog
+
+_RESET = "\x1b[0m"
+_PREFIX_COLORS = {
+    "Error": "\x1b[1;31m",    # bold red
+    "Warning": "\x1b[1;33m",  # bold yellow
+    "Success": "\x1b[1;32m",  # bold green
+    "Debug": "\x1b[1;34m",    # bold blue
+}
+_BOX_COLOR = "\x1b[1;37;41m"  # bold white on red
+_STDIN_WAIT = 1.0
+_TRUE = {"true", "yes", "on", "1", "always", "force"}
+_FALSE = {"false", "no", "off", "0", "never", "none"}
+
+
+def _isatty(stream):
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def color_enabled(setting, stream, os_name=None):
+    """Decide whether to colorize: ``setting`` is True, False or ``"auto"``."""
+    if isinstance(setting, bool):
+        return setting
+    text = str(setting).strip().lower() if setting is not None else "auto"
+    if text in _TRUE:
+        return True
+    if text in _FALSE:
+        return False
+    return _isatty(stream) and (os_name or os.name) != "nt"
+
+
+def _pipe_has_data(stream):
+    """False when ``stream`` is a pipe/socket that stays silent for a while."""
+    try:
+        fd = stream.fileno()
+        mode = os.fstat(fd).st_mode
+    except (AttributeError, OSError, ValueError):
+        return True
+    if not (stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)):
+        return True
+    try:
+        ready, _, _ = select.select([fd], [], [], _STDIN_WAIT)
+    except (OSError, ValueError):
+        return True
+    return bool(ready)
+
+
+class Output:
+    def __init__(self, stdout, stderr, quiet=False, debug=False, *, stdin=None,
+                 color=False, log=None, start=None):
+        self._stdout = stdout
+        self._stderr = stderr
+        self._stdin = stdin
+        self._quiet = bool(quiet)
+        self._debug = debug
+        self._color = bool(color)
+        self._log = log or NullLog()
+        self._start = time.monotonic() if start is None else start
+        self._stdin_data = None
+        self._stdin_read = False
+
+    def configure(self, quiet=None, debug=None, color=None):
+        if quiet is not None:
+            self._quiet = bool(quiet)
+        if debug is not None:
+            self._debug = debug
+        if color is not None:
+            self._color = bool(color)
+
+    @property
+    def color(self):
+        return self._color
+
+    # --- writing ----------------------------------------------------------
+
+    def _write(self, stream, text):
+        stream.write(text if text.endswith("\n") else text + "\n")
+
+    def _prefix(self, label):
+        text = f"{label}:"
+        if self._color:
+            return f"{_PREFIX_COLORS[label.split()[0]]}{text}{_RESET}"
+        return text
+
+    def line(self, text=""):
+        """Command result data; always shown, never logged."""
+        self._write(self._stdout, text)
+
+    def usage(self, text):
+        """Help and usage text; always shown."""
+        self._write(self._stdout, text)
+
+    def log(self, text, sensitive=False):
+        """Informational message: STDOUT and the log file, unless quiet.
+
+        Sensitive messages are shown but never written to the log file.
+        """
+        if self._quiet:
+            return
+        self._write(self._stdout, text)
+        if not sensitive:
+            self._log.write(text)
+
+    info = log
+
+    def log_only(self, text):
+        """A note that goes to the log file only."""
+        self._log.write(text)
+
+    def success(self, text):
+        if not self._quiet:
+            self._write(self._stdout, f"{self._prefix('Success')} {text}")
+
+    def warning(self, text):
+        self._write(self._stderr, f"{self._prefix('Warning')} {text}")
+        self._log.write(f"Warning: {text}")
+
+    def error(self, text, sensitive=False, log_text=None):
+        """Report an error on STDERR; log it unless it is sensitive (in which
+        case only ``log_text``, a redacted form, is logged if given)."""
+        self._write(self._stderr, f"{self._prefix('Error')} {text}")
+        if not sensitive:
+            self._log.write(f"Error: {text}")
+        elif log_text:
+            self._log.write(f"Error: {log_text}")
+
+    def error_multi_line(self, lines, sensitive=False, log_text=None):
+        """Report a multi-line error inside a highlighted box on STDERR."""
+        lines = [str(l) for l in lines] or [""]
+        lines[0] = f"Error: {lines[0]}"
+        width = max(len(l) for l in lines)
+        border = "+" + "-" * (width + 2) + "+"
+        body = [border] + [f"| {l.ljust(width)} |" for l in lines] + [border]
+        if self._color:
+            body = [f"{_BOX_COLOR}{row}{_RESET}" for row in body]
+        self._write(self._stderr, "\n".join(body))
+        if not sensitive:
+            self._log.write("\n".join(lines))
+        elif log_text:
+            self._log.write(f"Error: {log_text}")
+
+    def report(self, exc):
+        """Report a ``CliError``."""
+        if exc.lines is not None:
+            self.error_multi_line(exc.lines, exc.sensitive, exc.log_message)
+        else:
+            self.error(exc.message, exc.sensitive, exc.log_message)
+
+    def debug(self, text, group=None):
+        """Debug message, shown when debug mode is on. With ``--debug=<group>``
+        only messages of that group are shown."""
+        active = self._debug
+        if not active:
+            return
+        if isinstance(active, str) and group != active:
+            return
+        label = f"Debug ({group})" if group else "Debug"
+        elapsed = f"({time.monotonic() - self._start:.3f}s)"
+        self._write(self._stderr, f"{self._prefix(label)} {text} {elapsed}")
+        self._log.write(f"{label}: {text} {elapsed}")
+
+    # --- reading ----------------------------------------------------------
+
+    def _input(self):
+        return self._stdin if self._stdin is not None else sys.stdin
+
+    def _flush(self):
+        for stream in (self._stdout, self._stderr):
+            try:
+                stream.flush()
+            except (AttributeError, OSError, ValueError):
+                pass
+
+    def prompt(self, question):
+        """Show ``question``, read one line from STDIN and return it trimmed
+        and lowercased ("" when nothing could be read)."""
+        self._stdout.write(question)
+        self._flush()
+        try:
+            answer = self._input().readline()
+        except (AttributeError, OSError, ValueError):
+            answer = ""
+        return (answer or "").strip().lower()
+
+    def confirm(self, question, assume_yes=False):
+        """Ask a ``[y/n]`` question; anything but ``y`` cancels."""
+        if assume_yes:
+            return True
+        if self.prompt(f"{question} [y/n] ") == "y":
+            return True
+        self.warning(_messages.operation_cancelled())
+        return False
+
+    def read_stdin(self):
+        """All of STDIN without the trailing newline, or ``None`` when STDIN
+        is interactive, unavailable or empty. Read at most once."""
+        if not self._stdin_read:
+            self._stdin_read = True
+            stream = self._input()
+            data = None
+            if stream is not None and not _isatty(stream) and _pipe_has_data(stream):
+                try:
+                    data = stream.read()
+                except (AttributeError, OSError, ValueError):
+                    data = None
+            if isinstance(data, bytes):
+                data = data.decode(errors="replace")
+            data = data.rstrip("\r\n") if data else ""
+            self._stdin_data = data or None
+        return self._stdin_data
+"""Remote execution.
+
+Secret: the syntax of ``ssh`` connection strings, how each transport
+(ssh, docker, docker-compose, docker-compose-run, vagrant) builds its
+command line, how the remote appctl command is assembled (pre-command,
+working directory, forwarded arguments) and how transport failures are
+reported.
+"""
+
+import re
+import shlex
+import shutil
+import subprocess
+
+from . import messages as _messages
+
+_REMOTE_BINARY = "appctl"
+_PRE_CMD_ENV = "APPCTL_SSH_PRE_CMD"
+_STRICT_ENV = "APPCTL_STRICT_ARGS_MODE"
+_CONNECT_FAILURE = 255
+_SSH_URL = re.compile(
+    r"^((?P<scheme>docker|docker-compose|docker-compose-run|ssh|vagrant):)?"
+    r"(//)?((?P<user>[^@:]+)@)?(?P<host>[^:/~]+)(:(?P<port>\d*))?"
+    r"(?P<path>[/~].*)?$")
+# Connection keys forwarded to the remote invocation as runtime flags.
+_FORWARDED = ("path", "url", "user")
+
+
+def parse(url):
+    """Split a connection string into its parts (missing parts are None)."""
+    match = _SSH_URL.match(url or "")
+    if not match:
+        return {"scheme": None, "user": None, "host": url, "port": None, "path": None}
+    bits = match.groupdict()
+    return {key: (value or None) for key, value in bits.items()}
+
+
+def _quote_path(path):
+    if path == "~":
+        return path
+    if path.startswith("~/"):
+        return "~/" + shlex.quote(path[2:])
+    return shlex.quote(path)
+
+
+def remote_command(args, bits, env):
+    """The shell command run on the remote side."""
+    parts = []
+    pre = (env.get(_PRE_CMD_ENV) or "").strip().rstrip(";").strip()
+    if pre:
+        parts.append(pre + ";")
+    if bits.get("path"):
+        parts.append(f"cd {_quote_path(bits['path'])};")
+    if env.get(_STRICT_ENV):
+        parts.append(f"{_STRICT_ENV}=1")
+    parts.append(_REMOTE_BINARY)
+    parts.extend(shlex.quote(a) for a in args)
+    return " ".join(parts)
+
+
+def transport_argv(bits, command, args, tty, debug):
+    """The local command line that runs ``command`` remotely."""
+    scheme = bits.get("scheme") or "ssh"
+    host, user, port = bits.get("host") or "", bits.get("user"), bits.get("port")
+    if scheme == "docker":
+        argv = ["docker", "exec"]
+        if user:
+            argv += ["--user", user]
+        if tty:
+            argv.append("-t")
+        return argv + [host, "sh", "-c", command]
+    if scheme == "docker-compose":
+        argv = ["docker-compose", "exec"]
+        if user:
+            argv += ["--user", user]
+        if not tty:
+            argv.append("-T")
+        return argv + [host, "sh", "-c", command]
+    if scheme == "docker-compose-run":
+        argv = ["docker-compose", "run"]
+        if user:
+            argv += ["--user", user]
+        if not tty:
+            argv.append("-T")
+        return argv + [host] + list(args)
+    if scheme == "vagrant":
+        return ["vagrant", "ssh", "-c", command, host]
+    argv = ["ssh"]
+    if port:
+        argv += ["-p", str(int(port))]
+    argv.append("-t" if tty else "-T")
+    argv.append("-vvv" if debug else "-q")
+    argv.append(f"{user}@{host}" if user else host)
+    return argv + [command]
+
+
+def _fileno(stream):
+    try:
+        return stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _isatty(stream):
+    try:
+        return stream.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def forwarded_args(raw_args, connection, runtime_values):
+    """Arguments for the remote appctl: the local ones minus ``--ssh``, plus
+    connection parameters that were not given at runtime."""
+    args = [a for a in raw_args if not (a == "--ssh" or a.startswith("--ssh="))]
+    for key in _FORWARDED:
+        value = connection.get(key)
+        if value not in (None, "") and key not in runtime_values:
+            args.append(f"--{key}={value}")
+    return args
+
+
+def run(ssh, raw_args, connection, runtime_values, config, env, out, stdout, stderr):
+    """Run the command through the configured transport; return exit code."""
+    bits = parse(ssh)
+    args = forwarded_args(raw_args, connection, runtime_values)
+    tty = not config.get("skip-tty") and _isatty(stdout)
+    command = remote_command(args, bits, env)
+    argv = transport_argv(bits, command, args, tty, config.debug())
+    out.debug(f"Running remote command: {shlex.join(argv)}", group="ssh")
+    for stream in (stdout, stderr):
+        if hasattr(stream, "flush"):
+            stream.flush()
+    executable = shutil.which(argv[0], path=env.get("PATH"))
+    if executable is None:
+        out.error(_messages.ssh_connection_failed())
+        return _CONNECT_FAILURE
+    out_fd, err_fd = _fileno(stdout), _fileno(stderr)
+    try:
+        proc = subprocess.run(
+            [executable] + argv[1:], env=dict(env),
+            stdout=out_fd if out_fd is not None else subprocess.PIPE,
+            stderr=err_fd if err_fd is not None else subprocess.PIPE)
+    except OSError:
+        out.error(_messages.ssh_connection_failed())
+        return _CONNECT_FAILURE
+    if out_fd is None and proc.stdout:
+        stdout.write(proc.stdout.decode(errors="replace"))
+    if err_fd is None and proc.stderr:
+        stderr.write(proc.stderr.decode(errors="replace"))
+    if proc.returncode == _CONNECT_FAILURE:
+        out.error(_messages.ssh_connection_failed())
+    return proc.returncode

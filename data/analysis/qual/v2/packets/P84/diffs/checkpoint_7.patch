@@ -1,0 +1,1470 @@
+### appctl_cli/app.py (modified)
+--- appctl_cli/app.py
++++ appctl_cli/app.py
+@@ -4,7 +4,7 @@
+ import sys
+ import time
+ 
+-from . import config_loader, database
++from . import config_loader, database, upgrade
+ from .arguments import END_OF_OPTIONS, is_assoc_token, parse_argv
+ from .commands import build_command_tree
+ from .context import Context
+@@ -70,6 +70,11 @@
+ def is_completion_request(positional):
+     """Tab completion runs ``cli completions``; it is never logged."""
+     return list(positional[:2]) == ["cli", "completions"]
++
++
++def runs_automatic_upgrade(positional):
++    """Every command upgrades first after a version change, except these two."""
++    return list(positional[:2]) not in (["cli", "completions"], ["cli", "migrate"])
+ 
+ 
+ class Runner:
+@@ -155,7 +160,7 @@
+         )
+         context = Context(root=self.root, command=command, output=self.output,
+                           runtime=runtime, strict=self.strict, config=self.loaded,
+-                          alias=alias, cwd=self.cwd or os.getcwd())
++                          alias=alias, cwd=self.cwd or os.getcwd(), environ=self.environ)
+         return command.handler(context, args, assoc)
+ 
+ 
+@@ -178,9 +183,12 @@
+         print(warning, file=output.stderr)
+ 
+     def start():
+-        database.get_db(environ)
++        db = database.get_db(environ)
+         loaded = config_loader.load(environ, cwd)
+         output.set_color(build_runtime_config(parsed.runtime, loaded.merged)["color"])
++        if runs_automatic_upgrade(parsed.positional) and upgrade.needs_upgrade(db):
++            output.debug("Version changed, running the upgrade.", group="bootstrap")
++            upgrade.run_upgrade(environ, output)
+         output.debug(f"Using global config: {loaded.global_path}", group="bootstrap")
+         if loaded.project_path:
+             output.debug(f"Using project config: {loaded.project_path}", group="bootstrap")
+
+### appctl_cli/commands/cli.py (modified)
+--- appctl_cli/commands/cli.py
++++ appctl_cli/commands/cli.py
+@@ -3,7 +3,7 @@
+ import os
+ import platform
+ 
+-from .. import PROGRAM_NAME, __version__
++from .. import PROGRAM_NAME, __version__, upgrade
+ from ..arguments import is_assoc_token, parse_assoc_token
+ from ..formatter import format_value
+ from ..errors import AppctlError
+@@ -53,6 +53,11 @@
+         raise AppctlError("--path parameter needs a value.")
+     dest = extract_archive(archive, str(dest), ctx.output)
+     ctx.output.success(f"Extracted '{archive}' to '{dest}'.")
++
++
++def migrate(ctx, args, assoc):
++    upgrade.run_upgrade(ctx.environ, ctx.output)
++    ctx.output.success(f"Upgraded to {PROGRAM_NAME} {__version__}.")
+ 
+ 
+ def param_dump(ctx, args, assoc):
+@@ -140,6 +145,10 @@
+                  "path": "Directory to extract into. Defaults to the current directory."},
+     )
+     registry.add(
++        "cli migrate", migrate,
++        description="Runs pending migrations and upgrades containers to the current version.",
++    )
++    registry.add(
+         "cli param-dump", param_dump,
+         synopsis="[--with-values] [--format=<format>]",
+         description="Dumps the list of global parameters, as JSON.",
+
+### appctl_cli/context.py (modified)
+--- appctl_cli/context.py
++++ appctl_cli/context.py
+@@ -13,3 +13,4 @@
+     config: object = None
+     alias: str = None
+     cwd: str = None
++    environ: dict = None
+
+### appctl_cli/database.py (modified)
+--- appctl_cli/database.py
++++ appctl_cli/database.py
+@@ -33,6 +33,14 @@
+         ')',
+         ("migration", "type", "timestamp"),
+     ),
++    "projects": (
++        'CREATE TABLE IF NOT EXISTS projects ('
++        ' name TEXT NOT NULL PRIMARY KEY,'
++        ' path TEXT NOT NULL,'
++        ' created_on TEXT NOT NULL'
++        ')',
++        ("name", "path", "created_on"),
++    ),
+ }
+ 
+ 
+@@ -205,6 +213,25 @@
+                 raise
+         return applied
+ 
++    # -- projects -------------------------------------------------------------
++
++    def add_project(self, name, path):
++        """Record project ``name`` whose compose files live in ``path``."""
++        self._execute(
++            "INSERT INTO projects (name, path, created_on) VALUES (?, ?, ?) "
++            "ON CONFLICT(name) DO UPDATE SET path = excluded.path",
++            (str(name), str(path), utc_now()),
++        )
++        return True
++
++    def get_projects(self):
++        """Recorded projects as ``{"name", "path"}`` mappings, ordered by name."""
++        rows = self._execute("SELECT name, path FROM projects ORDER BY name")
++        return [{"name": name, "path": path} for name, path in rows]
++
++    def remove_project(self, name):
++        return self._execute("DELETE FROM projects WHERE name = ?", (str(name),)).rowcount > 0
++
+ 
+ _instances = {}
+ 
+
+### appctl_cli/img_versions.json (created)
+--- appctl_cli/img_versions.json
++++ appctl_cli/img_versions.json
+@@ -0,0 +1,8 @@
++{
++    "appctl/mariadb": "v1.0.0",
++    "appctl/nginx": "v1.0.0",
++    "appctl/nginx-proxy": "v1.0.0",
++    "appctl/php": "v1.0.0",
++    "appctl/postfix": "v1.0.0",
++    "appctl/redis": "v1.0.0"
++}
+
+### appctl_cli/migrations/README.md (created)
+--- appctl_cli/migrations/README.md
++++ appctl_cli/migrations/README.md
+@@ -0,0 +1,20 @@
++# Migrations
++
++appctl and every installed extension may ship migrations:
++
++    <source>/migrations/db/<sequence>_<name>.py          database migrations
++    <source>/migrations/container/<sequence>_<name>.py   container migrations
++
++`<source>` is this package directory for appctl itself, or an extension
++directory under the packages directory (`<packages>/<extension>` or
++`<packages>/<vendor>/<extension>`). `<sequence>` is a number, usually a
++`YYYYMMDDHHMMSS` timestamp; pending migrations run in ascending
++`(sequence, name, source)` order.
++
++A migration module defines `up()` and optionally `down()` (or a `Migration`
++class with those methods). Both may take one argument, a
++`MigrationContext` giving access to `db`, `output`, `environ`, `root_dir`
++and the migration's `source`, `name`, `type` and `path`.
++
++Applied migrations are recorded in the `migrations` table as
++`<source>:<sequence>_<name>` with their type (`db` or `container`).
+
+### appctl_cli/revertable.py (created)
+--- appctl_cli/revertable.py
++++ appctl_cli/revertable.py
+@@ -0,0 +1,79 @@
++"""Multi-step operations that undo their completed steps when one step fails."""
++
++from dataclasses import dataclass, field
++
++
++@dataclass
++class Step:
++    id: str
++    up: object
++    down: object = None
++    up_args: tuple = field(default_factory=tuple)
++    down_args: tuple = field(default_factory=tuple)
++
++
++class StepFailed(Exception):
++    """A step returned ``False``."""
++
++
++class RevertableStepProcessor:
++    """Runs steps in order; on failure, undoes them in reverse order.
++
++    A step fails when ``up`` raises or returns ``False``. The undo of the
++    failed step runs too, so a step can clean up its own partial work.
++    Undo failures are logged and the rollback continues; steps without an
++    undo action are skipped silently. A processor that succeeded can still
++    be rolled back later with :meth:`rollback`.
++    """
++
++    def __init__(self, output=None, name=None):
++        self.output = output
++        self.name = name
++        self.steps = []
++        self.executed = []
++        self.error = None
++        self.failed_step = None
++
++    def add_step(self, step_id, up, down=None, up_args=(), down_args=()):
++        self.steps.append(Step(str(step_id), up, down, tuple(up_args), tuple(down_args)))
++        return self
++
++    def _log(self, text):
++        if self.output is not None:
++            self.output.debug(text, group="upgrade")
++            if self.output.logger is not None:
++                self.output.logger.write(text)
++
++    def _warn(self, text):
++        if self.output is not None:
++            self.output.warning(text)
++
++    def execute(self):
++        """Run every pending step; return whether all of them succeeded."""
++        pending, self.steps = self.steps, []
++        for step in pending:
++            self._log(f"Executing step: {step.id}")
++            self.executed.append(step)
++            try:
++                if step.up(*step.up_args) is False:
++                    raise StepFailed(f"Step '{step.id}' failed.")
++            except Exception as exc:  # any failure triggers the rollback
++                self.error = exc
++                self.failed_step = step
++                self._log(f"Step '{step.id}' failed: {exc}")
++                self.rollback()
++                return False
++        return True
++
++    def rollback(self):
++        """Undo the executed steps in reverse order; undo failures only warn."""
++        while self.executed:
++            step = self.executed.pop()
++            if step.down is None:
++                continue
++            self._log(f"Rolling back step: {step.id}")
++            try:
++                if step.down(*step.down_args) is False:
++                    raise StepFailed(f"Undo of step '{step.id}' failed.")
++            except Exception as exc:  # keep rolling back the remaining steps
++                self._warn(f"Unable to roll back step '{step.id}': {exc}")
+
+### appctl_cli/upgrade.py (created)
+--- appctl_cli/upgrade.py
++++ appctl_cli/upgrade.py
+@@ -0,0 +1,777 @@
++"""Upgrade orchestration run when the appctl version changes.
++
++The upgrade checks the free disk space, then runs as one revertable
++sequence: database migrations, container migrations, image pulls, the
++compose tool upgrade, the global and per-project container upgrades and
++the persistent state update. When a step fails every completed step is
++undone in reverse order. Pruning old images and networks happens last and
++never fails the upgrade.
++"""
++
++import importlib.util
++import inspect
++import json
++import os
++import platform
++import re
++import shutil
++import stat
++import urllib.request
++from dataclasses import dataclass
++
++from . import PROGRAM_NAME, __version__, container, database
++from .config_loader import packages_dir, root_dir
++from .errors import AppctlError
++from .output import Output
++from .process import exec_command, run_command
++from .revertable import RevertableStepProcessor
++
++VERSION_OPTION = "version"
++MIGRATION_ERROR = "There was some error while migrating. Please check logs."
++
++MIN_DISK_SPACE = 5 * 1024 ** 3
++DISK_SPACE_ERROR = ("Insufficient disk space: minimum 5GB disk space is required to run "
++                    "AppCtl. Please free up some disk space and try again.")
++
++PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
++CORE_SOURCE = PROGRAM_NAME
++CORE_MIGRATIONS_DIR = os.path.join(PACKAGE_DIR, "migrations")
++MIGRATIONS_DIR = "migrations"
++DB_MIGRATION = "db"
++CONTAINER_MIGRATION = "container"
++MIGRATION_TYPES = (DB_MIGRATION, CONTAINER_MIGRATION)
++MIGRATION_FILE_RE = re.compile(r"^(\d+)_([A-Za-z0-9][A-Za-z0-9_.\-]*)\.py$")
++
++IMAGE_VERSIONS_FILE = os.path.join(PACKAGE_DIR, "img_versions.json")
++GLOBAL_SERVICES_DIR = "services"
++GLOBAL_PROJECT = f"{PROGRAM_NAME}-global"
++
++MIN_COMPOSE_VERSION = "2.27.0"
++COMPOSE_UPGRADE_VERSION = "2.29.7"
++COMPOSE_URL_ENV = "APPCTL_COMPOSE_DOWNLOAD_URL"
++COMPOSE_URL = "https://github.com/docker/compose/releases/download/v{version}/docker-compose-{os}-{arch}"
++COMPOSE_PLUGIN = "docker-compose"
++COMPOSE_PLUGIN_DIRS = ("/usr/local/lib/docker/cli-plugins", "/usr/local/libexec/docker/cli-plugins",
++                       "/usr/lib/docker/cli-plugins", "/usr/libexec/docker/cli-plugins")
++
++
++class ReportedError(AppctlError):
++    """A step failure whose details were already shown to the user."""
++
++
++def _output(output):
++    return output if output is not None else Output()
++
++
++# -- disk space ------------------------------------------------------------------
++
++
++def _existing_path(path):
++    """``path`` or its nearest existing ancestor."""
++    path = os.path.abspath(os.path.expanduser(str(path)))
++    while not os.path.exists(path):
++        parent = os.path.dirname(path)
++        if parent == path:
++            break
++        path = parent
++    return path
++
++
++def check_disk_space(environ=None, output=None):
++    """Require 5 GiB free for the appctl root and the container runtime root."""
++    environ = os.environ if environ is None else environ
++    for path in (root_dir(environ), container.runtime_root_dir(output)):
++        try:
++            free = shutil.disk_usage(_existing_path(path)).free
++        except OSError:
++            continue
++        if free < MIN_DISK_SPACE:
++            raise AppctlError(DISK_SPACE_ERROR)
++
++
++# -- semantic versions -------------------------------------------------------------
++
++_SEMVER_RE = re.compile(r"v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.\-]+))?(?:\+[0-9A-Za-z.\-]+)?")
++
++
++def parse_semver(text):
++    """``(release, prerelease)`` of the first version in ``text``, or ``None``."""
++    match = _SEMVER_RE.search(str(text or ""))
++    if not match:
++        return None
++    release = [int(part) for part in match.group(1).split(".")]
++    release += [0] * (3 - len(release))
++    prerelease = tuple(int(p) if p.isdigit() else p for p in (match.group(2) or "").split(".") if p)
++    return tuple(release), prerelease
++
++
++def _prerelease_key(prerelease):
++    # A release sorts after its pre-releases; numeric identifiers before alphanumeric ones.
++    if not prerelease:
++        return (1,)
++    return (0,) + tuple((0, p, "") if isinstance(p, int) else (1, 0, p) for p in prerelease)
++
++
++def compare_semver(left, right):
++    """-1, 0 or 1 as ``left`` is lower than, equal to or greater than ``right``."""
++    a, b = parse_semver(left), parse_semver(right)
++    if a is None or b is None:
++        raise ValueError(f"Invalid version: {left if a is None else right}")
++    width = max(len(a[0]), len(b[0]))
++    key_a = (a[0] + (0,) * (width - len(a[0])), _prerelease_key(a[1]))
++    key_b = (b[0] + (0,) * (width - len(b[0])), _prerelease_key(b[1]))
++    return (key_a > key_b) - (key_a < key_b)
++
++
++# -- migration discovery ------------------------------------------------------------
++
++
++@dataclass(frozen=True)
++class MigrationArtifact:
++    source: str
++    type: str
++    path: str
++    sequence: int
++    name: str
++
++    @property
++    def identity(self):
++        """Record name, unique across sources: ``<source>:<file stem>``."""
++        return f"{self.source}:{self.name}"
++
++    @property
++    def sort_key(self):
++        return (self.sequence, self.name, self.source)
++
++
++def migration_sources(environ=None):
++    """``[(source, migrations_dir)]``: appctl first, then extensions by name.
++
++    Extensions live in ``<packages>/<name>`` or ``<packages>/<vendor>/<name>``
++    and are identified by that relative path.
++    """
++    environ = os.environ if environ is None else environ
++    sources = [(CORE_SOURCE, CORE_MIGRATIONS_DIR)]
++    base = packages_dir(environ)
++    if not os.path.isdir(base):
++        return sources
++    found = []
++    for name in sorted(os.listdir(base)):
++        directory = os.path.join(base, name)
++        if not os.path.isdir(directory):
++            continue
++        if os.path.isdir(os.path.join(directory, MIGRATIONS_DIR)):
++            found.append(name)
++            continue
++        for child in sorted(os.listdir(directory)):
++            if os.path.isdir(os.path.join(directory, child, MIGRATIONS_DIR)):
++                found.append(f"{name}/{child}")
++    for rel in found:
++        source = rel if rel != CORE_SOURCE else f"packages/{rel}"
++        sources.append((source, os.path.join(base, *rel.split("/"), MIGRATIONS_DIR)))
++    return sources
++
++
++def discover_migrations(type, environ=None):
++    """Every migration artifact of ``type``, in ascending migration order."""
++    artifacts = []
++    for source, directory in migration_sources(environ):
++        directory = os.path.join(directory, type)
++        if not os.path.isdir(directory):
++            continue
++        for filename in sorted(os.listdir(directory)):
++            match = MIGRATION_FILE_RE.match(filename)
++            path = os.path.join(directory, filename)
++            if match and os.path.isfile(path):
++                artifacts.append(MigrationArtifact(source, type, path, int(match.group(1)),
++                                                   filename[:-len(".py")]))
++    return sorted(artifacts, key=lambda a: a.sort_key)
++
++
++def pending_migrations(db, type, environ=None):
++    """Discovered migrations of ``type`` not yet in the migration history."""
++    applied = set(db.get_migration_names(type))
++    return [a for a in discover_migrations(type, environ) if a.identity not in applied]
++
++
++# -- migration execution ---------------------------------------------------------------
++
++
++class MigrationFileNotFound(AppctlError):
++    def __init__(self, path):
++        super().__init__(f"Migration file not found: {path}")
++        self.path = path
++
++
++@dataclass
++class MigrationContext:
++    """What a migration's ``up()``/``down()`` receive."""
++
++    db: object
++    output: object
++    environ: object
++    artifact: MigrationArtifact
++
++    @property
++    def root_dir(self):
++        return root_dir(self.environ)
++
++    @property
++    def source(self):
++        return self.artifact.source
++
++    @property
++    def name(self):
++        return self.artifact.name
++
++    @property
++    def type(self):
++        return self.artifact.type
++
++    @property
++    def path(self):
++        return self.artifact.path
++
++
++def _module_name(artifact):
++    return "appctl_migration_" + re.sub(r"\W", "_", f"{artifact.type}_{artifact.source}_"
++                                                      f"{artifact.name}")
++
++
++def load_migration(artifact):
++    """``(up, down)`` callables of the migration file found by its source."""
++    if not os.path.isfile(artifact.path):
++        raise MigrationFileNotFound(artifact.path)
++    spec = importlib.util.spec_from_file_location(_module_name(artifact), artifact.path)
++    if spec is None or spec.loader is None:
++        raise MigrationFileNotFound(artifact.path)
++    module = importlib.util.module_from_spec(spec)
++    try:
++        spec.loader.exec_module(module)
++    except FileNotFoundError as exc:
++        raise MigrationFileNotFound(artifact.path) from exc
++    target = module
++    if inspect.isclass(getattr(module, "Migration", None)):
++        target = module.Migration()
++    up, down = getattr(target, "up", None), getattr(target, "down", None)
++    if not callable(up):
++        raise AppctlError(f"Migration '{artifact.identity}' does not define up().")
++    return up, down if callable(down) else None
++
++
++def _call(function, context):
++    try:
++        parameters = inspect.signature(function).parameters.values()
++    except (TypeError, ValueError):
++        return function(context)
++    accepts = any(p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.VAR_POSITIONAL)
++                  for p in parameters)
++    return function(context) if accepts else function()
++
++
++class MigrationBatch:
++    """Runs pending migrations of one type; a failure rolls back the batch."""
++
++    def __init__(self, type, db, output=None, environ=None):
++        self.type = type
++        self.db = db
++        self.output = _output(output)
++        self.environ = os.environ if environ is None else environ
++        self.processor = RevertableStepProcessor(self.output, f"{type} migrations")
++        self.applied = []
++
++    def run(self):
++        """Apply every pending migration; return the identities that ran."""
++        pending = pending_migrations(self.db, self.type, self.environ)
++        for artifact in pending:
++            state = {}
++            self.processor.add_step(artifact.identity, self._up, self._down,
++                                    (artifact, state), (artifact, state))
++        if self.processor.execute():
++            return list(self.applied)
++        error = self.processor.error
++        if isinstance(error, MigrationFileNotFound):
++            self.output.error(error.message)
++        else:
++            step = self.processor.failed_step
++            reason = error.message if isinstance(error, AppctlError) else str(error) or repr(error)
++            self.output.error(f"Migration '{step.id}' failed: {reason}")
++        raise ReportedError(MIGRATION_ERROR)
++
++    def rollback(self):
++        self.processor.rollback()
++
++    def _context(self, artifact):
++        return MigrationContext(self.db, self.output, self.environ, artifact)
++
++    def _up(self, artifact, state):
++        self.output.debug(f"Running {self.type} migration: {artifact.identity}", group="upgrade")
++        up, state["down"] = load_migration(artifact)
++        _call(up, self._context(artifact))
++        state["done"] = True
++        self.db.record_migration(artifact.identity, self.type)
++        self.applied.append(artifact.identity)
++
++    def _down(self, artifact, state):
++        if not state.pop("done", False):
++            return
++        self.output.debug(f"Reverting {self.type} migration: {artifact.identity}", group="upgrade")
++        try:
++            if state.get("down") is not None:
++                _call(state["down"], self._context(artifact))
++        finally:
++            self.db.remove_migration(artifact.identity, self.type)
++            if artifact.identity in self.applied:
++                self.applied.remove(artifact.identity)
++
++
++# -- image versions ----------------------------------------------------------------------
++
++
++def split_image(reference):
++    """``(repository, tag)`` of an image reference; the tag may be ``None``."""
++    reference = str(reference).split("@", 1)[0]
++    slash, colon = reference.rfind("/"), reference.rfind(":")
++    if colon > slash:
++        return reference[:colon], reference[colon + 1:]
++    return reference, None
++
++
++def target_image_versions(path=None):
++    """``{image: tag}`` of the images managed by this appctl version."""
++    with open(path or IMAGE_VERSIONS_FILE, encoding="utf-8") as handle:
++        data = json.load(handle)
++    return {str(image): str(tag) for image, tag in sorted(data.items())}
++
++
++def local_image_tags(output=None):
++    """``{repository: {tags}}`` of the images present in the container runtime."""
++    result = run_command([container.RUNTIME_BINARY, "images", "--format",
++                          "{{.Repository}}:{{.Tag}}"], output)
++    tags = {}
++    if result.succeeded:
++        for line in result.stdout.splitlines():
++            repository, tag = split_image(line.strip())
++            if repository and tag and tag != "<none>":
++                tags.setdefault(repository, set()).add(tag)
++    return tags
++
++
++def current_image_versions(db, targets, output=None):
++    """Version in use per image: the recorded one, else the one observed locally."""
++    current = {}
++    observed = None
++    for image, target in targets.items():
++        stored = db.get_option(image)
++        if stored is not False:
++            current[image] = stored
++            continue
++        if observed is None:
++            observed = local_image_tags(output) if shutil.which(container.RUNTIME_BINARY) else {}
++        tags = observed.get(image, set())
++        current[image] = target if target in tags else (sorted(tags)[-1] if tags else None)
++    return current
++
++
++def changed_images(current, targets):
++    """Images whose version differs (exact tag comparison), with their new tag, by name."""
++    return {image: tag for image, tag in sorted(targets.items()) if current.get(image) != tag}
++
++
++def pull_images(changed, output=None):
++    """Pull the new images one after the other; stop at the first failure."""
++    output = _output(output)
++    for image, tag in changed.items():
++        reference = f"{image}:{tag}"
++        output.debug(f"Pulling image {reference}", group="upgrade")
++        if not exec_command([container.RUNTIME_BINARY, "pull", reference], output):
++            output.error(f"Unable to pull {reference}. Please check logs for more details.")
++            raise ReportedError(MIGRATION_ERROR)
++
++
++# -- compose projects ------------------------------------------------------------------------
++
++_IMAGE_RE = re.compile(
++    r"(?P<pre>\bimage\s*:\s*(?P<q>[\"']?))(?P<ref>[^\s\"'#,{}\[\]]+?)(?P=q)"
++    r"(?=\s|,|\}|#|$)", re.MULTILINE)
++
++
++def affected_services(config, changed):
++    """``{service: image repository}`` of the services using a changed image."""
++    affected = {}
++    for name, service in ((config or {}).get("services") or {}).items():
++        image = service.get("image") if isinstance(service, dict) else None
++        if image:
++            repository, _ = split_image(image)
++            if repository in changed:
++                affected[str(name)] = repository
++    return affected
++
++
++def rewrite_images(text, changed):
++    """Compose file text with every changed image set to its new tag."""
++    def replace(match):
++        repository, _ = split_image(match.group("ref"))
++        if repository not in changed:
++            return match.group(0)
++        return f"{match.group('pre')}{repository}:{changed[repository]}{match.group('q')}"
++    return _IMAGE_RE.sub(replace, text)
++
++
++class ComposeUpgrade:
++    """Revertable replacement of the services of one compose project using changed images."""
++
++    def __init__(self, label, project_dir, project, changed, output=None):
++        self.label = label
++        self.project_dir = project_dir
++        self.project = project
++        self.changed = changed
++        self.output = _output(output)
++        self.files = container.compose_files(project_dir, output=self.output)
++        self.services = affected_services(container.load_compose_config(self.files), changed)
++        self.originals = {}
++        self.processor = RevertableStepProcessor(self.output, label)
++
++    @property
++    def needed(self):
++        return bool(self.services)
++
++    def run(self):
++        self.processor.add_step(f"{self.label}: update compose files", self._rewrite,
++                                self._restore_files)
++        self.processor.add_step(f"{self.label}: replace containers", self._up,
++                                self._restore_containers)
++        if not self.processor.execute():
++            error = self.processor.error
++            reason = error.message if isinstance(error, AppctlError) else str(error)
++            self.output.error(f"Unable to upgrade the containers of {self.label}: {reason}")
++            raise ReportedError(MIGRATION_ERROR)
++
++    def rollback(self):
++        self.processor.rollback()
++
++    def _rewrite(self):
++        for path in self.files:
++            with open(path, encoding="utf-8") as handle:
++                text = handle.read()
++            updated = rewrite_images(text, self.changed)
++            if updated != text:
++                self.originals[path] = text
++                with open(path, "w", encoding="utf-8") as handle:
++                    handle.write(updated)
++        config = container.load_compose_config(self.files)
++        for service in self.services:
++            image = config["services"][service].get("image")
++            repository, tag = split_image(image)
++            if tag != self.changed[repository]:
++                raise AppctlError(f"Unable to update the image of the '{service}' service.")
++
++    def _restore_files(self):
++        for path, text in self.originals.items():
++            with open(path, "w", encoding="utf-8") as handle:
++                handle.write(text)
++
++    def _up(self):
++        argv = container.compose_command(self.project_dir, output=self.output,
++                                         project=self.project)
++        argv += ["up", "-d", "--no-deps"] + list(self.services)
++        if not exec_command(argv, self.output, cwd=self.project_dir):
++            raise AppctlError(f"Unable to start the services: {', '.join(self.services)}.")
++
++    def _restore_containers(self):
++        self._restore_files()
++        self._up()
++
++
++def global_services_dir(environ=None):
++    environ = os.environ if environ is None else environ
++    return os.path.join(root_dir(environ), GLOBAL_SERVICES_DIR)
++
++
++# -- compose tool ----------------------------------------------------------------------------
++
++
++def compose_version(binary, output=None):
++    """Installed version of the compose tool ``binary`` (an argv prefix), or ``None``."""
++    for arguments in (["version", "--short"], ["version"]):
++        result = run_command(list(binary) + arguments, output)
++        if result.succeeded and parse_semver(result.stdout):
++            return _SEMVER_RE.search(result.stdout).group(0).lstrip("v")
++    return None
++
++
++def compose_download_url(version=COMPOSE_UPGRADE_VERSION, environ=None):
++    environ = os.environ if environ is None else environ
++    template = environ.get(COMPOSE_URL_ENV) or COMPOSE_URL
++    machine = platform.machine().lower()
++    arch = {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
++    return template.format(version=version, os=platform.system().lower(), arch=arch)
++
++
++def compose_tool_path(binary, environ=None):
++    """File to replace: the legacy binary, or the compose CLI plugin."""
++    environ = os.environ if environ is None else environ
++    if binary[0] == container.LEGACY_COMPOSE_BINARY:
++        found = shutil.which(container.LEGACY_COMPOSE_BINARY)
++        return os.path.realpath(found) if found else None
++    config_dir = environ.get("DOCKER_CONFIG") or os.path.join(os.path.expanduser("~"), ".docker")
++    user_dir = os.path.join(config_dir, "cli-plugins")
++    for directory in (user_dir,) + COMPOSE_PLUGIN_DIRS:
++        candidate = os.path.join(directory, COMPOSE_PLUGIN)
++        if os.path.isfile(candidate):
++            return os.path.realpath(candidate)
++    return os.path.join(user_dir, COMPOSE_PLUGIN)
++
++
++def _remove(path):
++    if os.path.lexists(path):
++        os.unlink(path)
++
++
++class ComposeToolUpgrade:
++    """Replaces a compose tool older than the minimum version, keeping a backup."""
++
++    def __init__(self, output=None, environ=None):
++        self.output = _output(output)
++        self.environ = os.environ if environ is None else environ
++        self.processor = None
++        self.path = None
++        self.existed = False
++
++    def run(self):
++        """Upgrade when needed. Failures restore the old tool and only warn."""
++        try:
++            binary = container.compose_binary(self.output)
++        except AppctlError:
++            self.output.debug("No compose tool installed, skipping its upgrade.", group="upgrade")
++            return True
++        installed = compose_version(binary, self.output)
++        if installed is None:
++            self.output.debug("Unable to detect the compose tool version.", group="upgrade")
++            return True
++        if compare_semver(installed, MIN_COMPOSE_VERSION) >= 0:
++            return True
++        self.path = compose_tool_path(binary, self.environ)
++        self.existed = bool(self.path) and os.path.exists(self.path)
++        processor = RevertableStepProcessor(self.output, "compose tool upgrade")
++        processor.add_step("download compose tool", self._download, self._discard)
++        processor.add_step("backup compose tool", self._backup, self._restore)
++        processor.add_step("install compose tool", self._install)
++        processor.add_step("verify compose tool", self._verify)
++        ok = processor.execute()
++        container._compose_binary.clear()
++        if not ok:
++            self.output.warning(
++                f"Unable to upgrade the compose tool from version {installed} to "
++                f"{COMPOSE_UPGRADE_VERSION}: {processor.error}. Keeping the installed version.")
++            return True
++        self.processor = processor
++        return True
++
++    def rollback(self):
++        if self.processor is not None:
++            self.processor.rollback()
++            self.processor = None
++            container._compose_binary.clear()
++
++    def cleanup(self):
++        if self.processor is not None and self.path:
++            try:
++                _remove(self.path + ".backup")
++            except OSError:
++                pass
++
++    @property
++    def _new_path(self):
++        return self.path + ".new"
++
++    def _download(self):
++        if not self.path:
++            raise AppctlError("Unable to locate the compose tool.")
++        directory = os.path.dirname(self.path)
++        os.makedirs(directory, exist_ok=True)
++        url = compose_download_url(environ=self.environ)
++        self.output.debug(f"Downloading the compose tool from {url}", group="upgrade")
++        with urllib.request.urlopen(url, timeout=120) as response, \
++                open(self._new_path, "wb") as handle:
++            shutil.copyfileobj(response, handle)
++        mode = os.stat(self._new_path).st_mode
++        os.chmod(self._new_path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
++        self._check([self._new_path])
++
++    def _discard(self):
++        _remove(self._new_path)
++
++    def _backup(self):
++        if self.existed:
++            shutil.copy2(self.path, self.path + ".backup")
++
++    def _restore(self):
++        if self.existed:
++            os.replace(self.path + ".backup", self.path)
++        else:
++            _remove(self.path)
++
++    def _install(self):
++        os.replace(self._new_path, self.path)
++
++    def _verify(self):
++        container._compose_binary.clear()
++        self._check(container.compose_binary(self.output))
++
++    def _check(self, binary):
++        version = compose_version(binary, self.output)
++        if version is None or compare_semver(version, MIN_COMPOSE_VERSION) < 0:
++            raise AppctlError(f"The new compose tool reports version {version or 'unknown'}.")
++
++
++# -- pruning ---------------------------------------------------------------------------------
++
++
++def prune_images(targets, output=None):
++    """Remove old versions of the managed images and dangling appctl images."""
++    output = _output(output)
++    ok = True
++    tags = local_image_tags(output)
++    for image, target in targets.items():
++        for tag in sorted(tags.get(image, ())):
++            if tag != target:
++                ok = exec_command([container.RUNTIME_BINARY, "rmi", f"{image}:{tag}"],
++                                  output) and ok
++    ok = exec_command([container.RUNTIME_BINARY, "image", "prune", "-f", "--filter",
++                       f"label={container.VENDOR_LABEL}"], output) and ok
++    if not ok:
++        output.warning("Unable to prune some old images.")
++    return ok
++
++
++def prune_networks(output=None):
++    """Remove unused appctl networks."""
++    output = _output(output)
++    ok = exec_command([container.RUNTIME_BINARY, "network", "prune", "-f", "--filter",
++                       f"label={container.VENDOR_LABEL}"], output)
++    if not ok:
++        output.warning("Unable to prune old networks.")
++    return ok
++
++
++# -- orchestration ---------------------------------------------------------------------------
++
++
++def needs_upgrade(db):
++    """Whether a recorded appctl version differs from the running one."""
++    stored = db.get_option(VERSION_OPTION)
++    return stored is not False and stored != __version__
++
++
++class Upgrade:
++    def __init__(self, environ=None, output=None, db=None, targets=None):
++        self.environ = os.environ if environ is None else environ
++        self.output = _output(output)
++        self.db = db or database.get_db(self.environ)
++        self.targets = targets
++        self.changed = {}
++        self.batches = {}
++        self.compose_tool = ComposeToolUpgrade(self.output, self.environ)
++        self.global_upgrade = None
++        self.project_upgrades = []
++        self.previous_state = {}
++
++    def run(self):
++        check_disk_space(self.environ, self.output)
++        if self.targets is None:
++            self.targets = target_image_versions()
++        self.targets = dict(sorted(self.targets.items()))
++        current = current_image_versions(self.db, self.targets, self.output)
++        self.changed = changed_images(current, self.targets)
++        processor = RevertableStepProcessor(self.output, "upgrade")
++        for type in MIGRATION_TYPES:
++            processor.add_step(f"{type} migrations", self._migrate, self._unmigrate,
++                               (type,), (type,))
++        processor.add_step("pull images", pull_images, None, (self.changed, self.output))
++        processor.add_step("compose tool upgrade", self.compose_tool.run,
++                           self.compose_tool.rollback)
++        processor.add_step("global containers", self._upgrade_global, self._revert_global)
++        processor.add_step("project containers", self._upgrade_projects, self._revert_projects)
++        processor.add_step("save versions", self._save_state, self._restore_state)
++        if not processor.execute():
++            error = processor.error
++            if not isinstance(error, ReportedError):
++                reason = error.message if isinstance(error, AppctlError) else str(error)
++                self.output.error(f"{processor.failed_step.id} failed: {reason or repr(error)}")
++            raise AppctlError(MIGRATION_ERROR)
++        self._cleanup()
++        return True
++
++    def _migrate(self, type):
++        self.batches[type] = MigrationBatch(type, self.db, self.output, self.environ)
++        self.batches[type].run()
++
++    def _unmigrate(self, type):
++        if type in self.batches:
++            self.batches.pop(type).rollback()
++
++    def _upgrade_global(self):
++        directory = global_services_dir(self.environ)
++        if not self.changed or not container.find_base_compose_file(directory):
++            return
++        upgrade = ComposeUpgrade("global services", directory, GLOBAL_PROJECT, self.changed,
++                                 self.output)
++        if upgrade.needed:
++            self.global_upgrade = upgrade
++            upgrade.run()
++
++    def _revert_global(self):
++        if self.global_upgrade is not None:
++            self.global_upgrade.rollback()
++            self.global_upgrade = None
++
++    def _upgrade_projects(self):
++        if not self.changed:
++            return
++        for project in self.db.get_projects():
++            path = project["path"]
++            if not os.path.isdir(path) or not container.find_base_compose_file(path):
++                self.output.debug(f"Skipping project {project['name']}: no compose file.",
++                                  group="upgrade")
++                continue
++            upgrade = ComposeUpgrade(f"project {project['name']}", path, project["name"],
++                                     self.changed, self.output)
++            if not upgrade.needed:
++                continue
++            self.project_upgrades.append(upgrade)
++            upgrade.run()
++
++    def _revert_projects(self):
++        while self.project_upgrades:
++            self.project_upgrades.pop().rollback()
++
++    def _save_state(self):
++        keys = list(self.targets) + [VERSION_OPTION]
++        self.previous_state = {key: self.db.get_option(key) for key in keys}
++        for image, tag in self.targets.items():
++            self.db.set_option(image, tag)
++        self.db.set_option(VERSION_OPTION, __version__)
++
++    def _restore_state(self):
++        for key, value in self.previous_state.items():
++            if value is False:
++                self.db.delete_option(key)
++            else:
++                self.db.set_option(key, value)
++
++    def _cleanup(self):
++        """Cleanup-only work: its failures never fail the upgrade."""
++        self.compose_tool.cleanup()
++        if not shutil.which(container.RUNTIME_BINARY):
++            return
++        for action, args in ((prune_images, (self.targets, self.output)),
++                             (prune_networks, (self.output,))):
++            try:
++                action(*args)
++            except Exception as exc:  # pruning is best effort
++                self.output.warning(f"Unable to prune: {exc}")
++
++
++def run_upgrade(environ=None, output=None):
++    return Upgrade(environ, output).run()
+
+### tests/test_upgrade.py (created)
+--- tests/test_upgrade.py
++++ tests/test_upgrade.py
+@@ -0,0 +1,423 @@
++"""Upgrade orchestration: migrations, image pulls, container upgrades and rollback."""
++
++import io
++import os
++import shutil
++import sqlite3
++import stat
++import subprocess
++import sys
++import tempfile
++import textwrap
++import unittest
++from collections import namedtuple
++from unittest import mock
++
++from appctl_cli import __version__, container, database, upgrade
++from appctl_cli.errors import AppctlError
++from appctl_cli.output import Output
++from appctl_cli.revertable import RevertableStepProcessor
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++SCRIPT = os.path.join(ROOT, "appctl.py")
++
++FAKE_DOCKER = textwrap.dedent("""\
++    #!/bin/sh
++    echo "$*" >> "$FAKE_DOCKER_LOG"
++    if [ -n "$FAKE_DOCKER_FAIL" ]; then
++      case "$*" in $FAKE_DOCKER_FAIL) exit 1 ;; esac
++    fi
++    case "$*" in
++      "compose version"*)
++        [ -n "$FAKE_NO_COMPOSE_PLUGIN" ] && exit 1
++        echo "${FAKE_COMPOSE_VERSION:-2.29.7}"; exit 0 ;;
++      "info"*) echo "$FAKE_DOCKER_ROOT"; exit 0 ;;
++      "images"*) printf "%s" "$FAKE_IMAGES"; exit 0 ;;
++    esac
++    exit 0
++""")
++
++MIGRATION = textwrap.dedent("""\
++    import os
++
++    def _log(ctx, text):
++        with open(ctx.environ["MIG_LOG"], "a") as handle:
++            handle.write(text + "\\n")
++
++    def up(ctx):
++        _log(ctx, "up " + ctx.source + " " + ctx.name)
++        if ctx.name in ctx.environ.get("MIG_FAIL", "").split(","):
++            raise RuntimeError("boom")
++
++    def down(ctx):
++        _log(ctx, "down " + ctx.source + " " + ctx.name)
++        if ctx.name in ctx.environ.get("MIG_DOWN_FAIL", "").split(","):
++            raise RuntimeError("down boom")
++""")
++
++TARGETS = {"appctl/nginx-proxy": "v2", "appctl/php": "v2", "appctl/redis": "v1"}
++Usage = namedtuple("Usage", "total used free")
++
++
++def write(path, text, mode=None):
++    os.makedirs(os.path.dirname(path), exist_ok=True)
++    with open(path, "w", encoding="utf-8") as handle:
++        handle.write(text)
++    if mode:
++        os.chmod(path, mode)
++
++
++def read(path):
++    with open(path, encoding="utf-8") as handle:
++        return handle.read()
++
++
++class UpgradeCase(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.mkdtemp()
++        self.addCleanup(shutil.rmtree, self.tmp)
++        self.bin = os.path.join(self.tmp, "bin")
++        write(os.path.join(self.bin, "docker"), FAKE_DOCKER, 0o755)
++        self.root = os.path.join(self.tmp, "home")
++        self.packages = os.path.join(self.tmp, "packages")
++        self.log = os.path.join(self.tmp, "docker.log")
++        self.mig_log = os.path.join(self.tmp, "mig.log")
++        self.env = {
++            "PATH": self.bin + os.pathsep + "/bin:/usr/bin",
++            "HOME": self.tmp,
++            "FAKE_DOCKER_LOG": self.log,
++            "FAKE_DOCKER_ROOT": os.path.join(self.tmp, "docker-root"),
++            "APPCTL_ROOT_DIR": self.root,
++            "APPCTL_PACKAGES_DIR": self.packages,
++            "MIG_LOG": self.mig_log,
++        }
++        patcher = mock.patch.dict(os.environ, self.env)
++        patcher.start()
++        self.addCleanup(patcher.stop)
++        patcher = mock.patch.object(upgrade, "CORE_MIGRATIONS_DIR",
++                                    os.path.join(self.tmp, "core", "migrations"))
++        patcher.start()
++        self.addCleanup(patcher.stop)
++        container._compose_binary.clear()
++        self.addCleanup(container._compose_binary.clear)
++        self.addCleanup(database.close_all)
++        self.stdout, self.stderr = io.StringIO(), io.StringIO()
++        self.output = Output(stdout=self.stdout, stderr=self.stderr)
++        self.db = database.get_db(os.environ)
++
++    def migration(self, source, type, filename):
++        base = (os.path.join(self.tmp, "core") if source == "appctl"
++                else os.path.join(self.packages, *source.split("/")))
++        path = os.path.join(base, "migrations", type, filename)
++        write(path, MIGRATION)
++        return path
++
++    def calls(self):
++        if not os.path.exists(self.log):
++            return []
++        return [line.rstrip("\n") for line in read(self.log).splitlines()
++                if not line.startswith("compose version")]
++
++    def mig_calls(self):
++        return read(self.mig_log).splitlines() if os.path.exists(self.mig_log) else []
++
++    def run_upgrade(self, targets=TARGETS):
++        return upgrade.Upgrade(os.environ, self.output, self.db, dict(targets)).run()
++
++    def compose_project(self, directory, services):
++        lines = ["services:"] + [f"  {name}:\n    image: {image}" for name, image in services]
++        path = os.path.join(directory, "docker-compose.yml")
++        write(path, "\n".join(lines) + "\n")
++        return path
++
++
++class RevertableTest(unittest.TestCase):
++    def test_rollback_reverse_and_continue(self):
++        events = []
++        stderr = io.StringIO()
++        processor = RevertableStepProcessor(Output(stderr=stderr, stdout=io.StringIO()))
++
++        def fail():
++            raise RuntimeError("nope")
++
++        def bad_undo():
++            events.append("undo b")
++            raise RuntimeError("undo failed")
++
++        processor.add_step("a", lambda: events.append("a"), lambda: events.append("undo a"))
++        processor.add_step("b", lambda: events.append("b"), bad_undo)
++        processor.add_step("c", lambda: events.append("c"))
++        processor.add_step("d", fail, lambda: events.append("undo d"))
++        processor.add_step("e", lambda: events.append("e"), lambda: events.append("undo e"))
++        self.assertFalse(processor.execute())
++        self.assertEqual(events, ["a", "b", "c", "undo d", "undo b", "undo a"])
++        self.assertIn("Unable to roll back step 'b': undo failed", stderr.getvalue())
++        self.assertEqual(str(processor.error), "nope")
++
++    def test_false_return_fails(self):
++        processor = RevertableStepProcessor()
++        processor.add_step("x", lambda: False)
++        self.assertFalse(processor.execute())
++
++
++class SemverTest(unittest.TestCase):
++    def test_compare(self):
++        self.assertEqual(upgrade.compare_semver("1.29.2", "2.27.0"), -1)
++        self.assertEqual(upgrade.compare_semver("v2.27.0", "2.27"), 0)
++        self.assertEqual(upgrade.compare_semver("2.100.0", "2.27.0"), 1)
++        self.assertEqual(upgrade.compare_semver("2.27.0-rc.1", "2.27.0"), -1)
++        self.assertEqual(upgrade.compare_semver("2.27.0-rc.2", "2.27.0-rc.10"), -1)
++
++
++class MigrationTest(UpgradeCase):
++    def test_discovery_order_and_sources(self):
++        self.migration("appctl", "db", "20240102000000_b.py")
++        self.migration("ext", "db", "20240101000000_a.py")
++        self.migration("vendor/tool", "db", "20240102000000_b.py")
++        self.migration("ext", "container", "20240101000000_c.py")
++        write(os.path.join(self.packages, "ext", "migrations", "db", "notes.txt"), "")
++        found = upgrade.discover_migrations("db")
++        self.assertEqual([a.identity for a in found],
++                         ["ext:20240101000000_a", "appctl:20240102000000_b",
++                          "vendor/tool:20240102000000_b"])
++        self.db.record_migration("ext:20240101000000_a", "db")
++        self.assertEqual([a.identity for a in upgrade.pending_migrations(self.db, "db")],
++                         ["appctl:20240102000000_b", "vendor/tool:20240102000000_b"])
++
++    def test_success_records(self):
++        self.migration("appctl", "db", "2_second.py")
++        self.migration("ext", "db", "1_first.py")
++        self.migration("ext", "container", "1_first.py")
++        self.run_upgrade({})
++        self.assertEqual(self.mig_calls(), ["up ext 1_first", "up appctl 2_second",
++                                            "up ext 1_first"])
++        records = self.db.get_migrations()
++        self.assertEqual([(r["migration"], r["type"]) for r in records],
++                         [("appctl:2_second", "db"), ("ext:1_first", "container"),
++                          ("ext:1_first", "db")])
++        self.assertTrue(all(r["timestamp"].endswith("Z") for r in records))
++        self.assertEqual(self.db.get_option("version"), __version__)
++        # nothing pending: silent
++        self.stdout.truncate(0)
++        self.run_upgrade({})
++        self.assertEqual(len(self.mig_calls()), 3)
++        self.assertEqual(self.stderr.getvalue(), "")
++
++    def test_failure_rolls_back_batch(self):
++        for name in ("1_a.py", "2_b.py", "3_c.py", "4_d.py"):
++            self.migration("ext", "db", name)
++        os.environ["MIG_FAIL"] = "3_c"
++        os.environ["MIG_DOWN_FAIL"] = "2_b"
++        with self.assertRaises(AppctlError) as ctx:
++            self.run_upgrade({})
++        self.assertEqual(ctx.exception.message, upgrade.MIGRATION_ERROR)
++        self.assertEqual(self.mig_calls(), ["up ext 1_a", "up ext 2_b", "up ext 3_c",
++                                            "down ext 2_b", "down ext 1_a"])
++        self.assertEqual(self.db.get_migrations(), [])
++        self.assertIn("Error: Migration 'ext:3_c' failed: boom", self.stderr.getvalue())
++        self.assertIn("Unable to roll back step 'ext:2_b'", self.stderr.getvalue())
++        self.assertFalse(self.db.get_option("version"))
++
++    def test_container_failure_rolls_back_db_batch(self):
++        self.migration("ext", "db", "1_a.py")
++        self.migration("ext", "container", "1_b.py")
++        os.environ["MIG_FAIL"] = "1_b"
++        with self.assertRaises(AppctlError):
++            self.run_upgrade({})
++        self.assertEqual(self.mig_calls(), ["up ext 1_a", "up ext 1_b", "down ext 1_a"])
++        self.assertEqual(self.db.get_migrations(), [])
++
++    def test_missing_file(self):
++        path = self.migration("ext", "db", "1_a.py")
++        real = upgrade.discover_migrations
++
++        def discover(type, environ=None):
++            found = real(type, environ)
++            os.unlink(path)
++            return found
++
++        with mock.patch.object(upgrade, "discover_migrations", discover):
++            with self.assertRaises(AppctlError):
++                self.run_upgrade({})
++        self.assertIn(f"Error: Migration file not found: {path}", self.stderr.getvalue())
++
++
++class ImageTest(UpgradeCase):
++    def test_pull_changed_sequentially_and_finalize(self):
++        self.db.set_option("appctl/redis", "v1")
++        # php: observed v1 locally; nginx-proxy: target already present; nginx: absent
++        os.environ["FAKE_IMAGES"] = ("appctl/php:v1\nappctl/nginx-proxy:v0\n"
++                                     "appctl/nginx-proxy:v2\n")
++        targets = dict(TARGETS, **{"appctl/nginx": "v2"})
++        self.run_upgrade(targets)
++        calls = self.calls()
++        self.assertEqual([c for c in calls if c.startswith("pull")],
++                         ["pull appctl/nginx:v2", "pull appctl/php:v2"])
++        self.assertEqual({k: self.db.get_option(k) for k in targets}, targets)
++        self.assertIn("rmi appctl/nginx-proxy:v0", calls)
++        self.assertIn("rmi appctl/php:v1", calls)
++        self.assertIn(f"network prune -f --filter label={container.VENDOR_LABEL}", calls)
++        self.assertIn(f"image prune -f --filter label={container.VENDOR_LABEL}", calls)
++
++    def test_pull_failure(self):
++        self.migration("ext", "db", "1_a.py")
++        os.environ["FAKE_DOCKER_FAIL"] = "pull appctl/php*"
++        with self.assertRaises(AppctlError):
++            self.run_upgrade()
++        self.assertIn("Error: Unable to pull appctl/php:v2. Please check logs for more details.",
++                      self.stderr.getvalue())
++        self.assertNotIn("pull appctl/redis:v1", self.calls())
++        self.assertEqual(self.mig_calls(), ["up ext 1_a", "down ext 1_a"])
++        self.assertFalse(self.db.get_option("version"))
++
++    def test_prune_failure_not_fatal(self):
++        os.environ["FAKE_DOCKER_FAIL"] = "network prune*"
++        self.assertTrue(self.run_upgrade())
++        self.assertIn("Warning: Unable to prune old networks.", self.stderr.getvalue())
++        self.assertEqual(self.db.get_option("version"), __version__)
++
++
++class ContainerUpgradeTest(UpgradeCase):
++    def setUp(self):
++        super().setUp()
++        for image, tag in TARGETS.items():
++            self.db.set_option(image, "v1")
++        self.global_dir = os.path.join(self.root, "services")
++        self.global_file = self.compose_project(self.global_dir, [
++            ("proxy", "appctl/nginx-proxy:v1"), ("redis", "appctl/redis:v1")])
++        self.site_a = os.path.join(self.tmp, "sites", "a")
++        self.site_b = os.path.join(self.tmp, "sites", "b")
++        self.file_a = self.compose_project(self.site_a, [("php", "appctl/php:v1"),
++                                                         ("cache", "appctl/redis:v1")])
++        self.file_b = self.compose_project(self.site_b, [("cache", "appctl/redis:v1")])
++        self.db.add_project("a", self.site_a)
++        self.db.add_project("b", self.site_b)
++
++    def ups(self):
++        return [c.split(" -p ")[1] for c in self.calls() if " up -d" in c]
++
++    def test_only_changed(self):
++        self.run_upgrade()
++        self.assertEqual(self.ups(), ["appctlglobal up -d --no-deps proxy",
++                                      "a up -d --no-deps php"])
++        self.assertIn("image: appctl/nginx-proxy:v2", read(self.global_file))
++        self.assertIn("image: appctl/redis:v1", read(self.global_file))
++        self.assertIn("image: appctl/php:v2", read(self.file_a))
++        self.assertNotIn("stop", " ".join(self.calls()))
++
++    def test_project_failure_restores_everything(self):
++        self.migration("ext", "db", "1_a.py")
++        os.environ["FAKE_DOCKER_FAIL"] = "*-p a up*"
++        before = (read(self.global_file), read(self.file_a))
++        with self.assertRaises(AppctlError) as ctx:
++            self.run_upgrade()
++        self.assertEqual(ctx.exception.message, upgrade.MIGRATION_ERROR)
++        self.assertEqual((read(self.global_file), read(self.file_a)), before)
++        # project a: failed up, revert up; global: up, then revert up with old images
++        self.assertEqual(self.ups(), ["appctlglobal up -d --no-deps proxy",
++                                      "a up -d --no-deps php", "a up -d --no-deps php",
++                                      "appctlglobal up -d --no-deps proxy"])
++        self.assertEqual(self.db.get_option("appctl/php"), "v1")
++        self.assertEqual(self.db.get_migrations(), [])
++        self.assertEqual(self.mig_calls(), ["up ext 1_a", "down ext 1_a"])
++
++    def test_flow_style_rewrite(self):
++        text = "services:\n  web: {image: 'appctl/php:v1', ports: [80]}\n  x: {image: other}\n"
++        self.assertEqual(upgrade.rewrite_images(text, {"appctl/php": "v2"}),
++                         "services:\n  web: {image: 'appctl/php:v2', ports: [80]}\n"
++                         "  x: {image: other}\n")
++        self.assertEqual(upgrade.split_image("host:5000/img"), ("host:5000/img", None))
++
++
++class ComposeToolTest(UpgradeCase):
++    def setUp(self):
++        super().setUp()
++        os.environ["FAKE_NO_COMPOSE_PLUGIN"] = "1"
++        self.legacy = os.path.join(self.bin, "docker-compose")
++        self.old = "#!/bin/sh\necho 1.29.2\n"
++        write(self.legacy, self.old, 0o755)
++        self.download = os.path.join(self.tmp, "download", "docker-compose")
++        os.environ[upgrade.COMPOSE_URL_ENV] = "file://" + self.download
++
++    def test_upgrade(self):
++        write(self.download, "#!/bin/sh\necho 2.29.7\n")
++        self.run_upgrade({})
++        self.assertIn("2.29.7", read(self.legacy))
++        self.assertTrue(os.stat(self.legacy).st_mode & stat.S_IXUSR)
++        self.assertFalse(os.path.exists(self.legacy + ".backup"))
++
++    def test_failed_upgrade_keeps_old(self):
++        write(self.download, "#!/bin/sh\necho 1.0.0\n")
++        self.run_upgrade({})
++        self.assertEqual(read(self.legacy), self.old)
++        self.assertIn("Unable to upgrade the compose tool", self.stderr.getvalue())
++        self.assertFalse(os.path.exists(self.legacy + ".new"))
++
++    def test_later_failure_restores_old(self):
++        write(self.download, "#!/bin/sh\necho 2.29.7\n")
++        self.migration("ext", "container", "1_a.py")
++        with mock.patch.object(upgrade.Upgrade, "_save_state", side_effect=RuntimeError("x")):
++            with self.assertRaises(AppctlError):
++                self.run_upgrade({})
++        self.assertEqual(read(self.legacy), self.old)
++
++    def test_current_version_untouched(self):
++        write(self.legacy, "#!/bin/sh\necho 2.27.0\n", 0o755)
++        self.run_upgrade({})
++        self.assertIn("2.27.0", read(self.legacy))
++
++
++class DiskSpaceTest(UpgradeCase):
++    def test_insufficient(self):
++        self.migration("ext", "db", "1_a.py")
++        runtime_root = os.path.join(self.tmp, "docker-root")
++
++        def usage(path):
++            low = path.startswith(runtime_root) or runtime_root.startswith(path + os.sep)
++            return Usage(10, 10, 1024 if low else 10 * 1024 ** 3)
++
++        with mock.patch.object(upgrade.shutil, "disk_usage", usage):
++            with self.assertRaises(AppctlError) as ctx:
++                self.run_upgrade()
++        self.assertIn("minimum 5GB disk space is required", ctx.exception.message)
++        self.assertEqual(self.mig_calls(), [])
++        self.assertEqual([c for c in self.calls() if not c.startswith("info")], [])
++
++
++class CliTest(UpgradeCase):
++    def cli(self, *args):
++        database.close_all()
++        result = subprocess.run([sys.executable, SCRIPT, *args], capture_output=True, text=True,
++                                env=dict(os.environ), cwd=self.tmp)
++        self.db = database.get_db(os.environ)
++        return result
++
++    def test_migrate_failure_exit_code(self):
++        self.migration("ext", "db", "1_a.py")
++        self.migration("ext", "db", "2_b.py")
++        os.environ["MIG_FAIL"] = "2_b"
++        result = self.cli("cli", "migrate")
++        self.assertEqual(result.returncode, 1)
++        self.assertTrue(result.stderr.endswith(
++            "Error: There was some error while migrating. Please check logs.\n"))
++        self.assertEqual(self.mig_calls(), ["up ext 1_a", "up ext 2_b", "down ext 1_a"])
++        count = sqlite3.connect(database.db_path(os.environ)).execute(
++            "SELECT COUNT(*) FROM migrations").fetchone()[0]
++        self.assertEqual(count, 0)
++
++    def test_automatic_on_version_change(self):
++        self.migration("ext", "db", "1_a.py")
++        self.assertEqual(self.cli("cli", "version").returncode, 0)
++        self.assertEqual(self.mig_calls(), [])  # fresh install: nothing automatic
++        self.db.set_option("version", "0.0.1")
++        result = self.cli("cli", "version")
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertEqual(result.stdout, f"appctl {__version__}\n")
++        self.assertEqual(self.mig_calls(), ["up ext 1_a"])
++        self.assertEqual(self.db.get_option("version"), __version__)
++        self.cli("cli", "version")
++        self.assertEqual(self.mig_calls(), ["up ext 1_a"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+

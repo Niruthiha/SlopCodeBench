@@ -1,0 +1,126 @@
+{
+ "run": "runs/metric_transform_lang/c1_planning_s1_20261109T1458",
+ "checkpoints": {
+  "checkpoint_1": {
+   "pass_counts": {
+    "Core": 4,
+    "Functionality": 25,
+    "Regression": 0,
+    "Error": 17
+   },
+   "total_counts": {
+    "Core": 4,
+    "Functionality": 25,
+    "Regression": 0,
+    "Error": 17
+   },
+   "failed": {},
+   "agent_final_message": "I've written `mtl.py`, along with `DESIGN.md` and a `requirements.txt` whose only entry is `tzdata`. It runs in the virtual environment at `.venv`. I tested it by hand from the command line; there is no automated test suite.\n\n**What I checked:** I ran about 40 cases, and each produced the output or exit code I expected:\n- the four output shapes: plain aggregate, `group_by`, `window`, and both together;\n- row ordering and key ordering;\n- `count(*)` returning `0` and other aggregates returning `null` when no rows match;\n- `round` rounding half away from zero (`2.675 \u2192 2.68`, `-2.5 \u2192 -3`);\n- `--tz` and `--timestamp-format`;\n- a `#` inside a quoted string not being treated as a comment;\n- every error type, each printing one `ERROR:<TYPE>:<Message>` line with the right exit code.\n\n**Choices where the spec is ambiguous.** Some of these may not match what your hidden tests expect:\n- **Arithmetic is supported.** The spec mentions \"numeric ops\" and \"division by zero in user expression\", so `apply` and `filter` accept `+ - * / %`. Dividing by zero, or any result that isn't a finite number, exits with code 4.\n- **Empty windows are left out.** Only time windows that contain events appear in the output; gaps between them don't produce rows with `count: 0`.\n- **Which errors get which codes:**\n  - An unknown column, or `sum(*)`, is a type error (exit 2).\n  - An unknown function, the wrong number of arguments, a bad duration, a duplicate alias, or an alias that clashes with an output key is a DSL error (exit 1).\n  - A CSV missing one of the seven required columns is an I/O error (exit 3).\n  - An unparseable timestamp or price is a type error (exit 2).\n  - Invalid command-line arguments and an unknown timezone are I/O errors (exit 3). I didn't use argparse's default exit code of 2 because that is the type-error code.\n- **Statement order:** `filter` and `apply` run in the order written. `group_by`, `window` and `aggregate` apply to the final rows wherever they appear.\n- **Extra columns get an inferred type:** whole numbers, then decimals, then `true`/`false`, then timestamps (values must include a time), otherwise text.\n- **Empty cells** in non-text columns are treated as missing: aggregates skip them and comparisons with them are false.\n- **`day`, `month` and `year`** are worked out in the `--tz` timezone.\n- **`in` must be written as `'literal' in column`.** Comparisons can't be chained (`a < b < c` is a DSL error).\n- **Multi-line statements:** a statement carries on to the next line while brackets are still open or the line ends with a comma. That is what makes the multi-line `aggregate` example in the spec work.\n\nTo run it: `.venv/bin/python mtl.py --csv events.csv --dsl pipeline.mtl [--out result.json]`"
+  },
+  "checkpoint_2": {
+   "pass_counts": {
+    "Core": 3,
+    "Functionality": 37,
+    "Regression": 46,
+    "Error": 12
+   },
+   "total_counts": {
+    "Core": 3,
+    "Functionality": 37,
+    "Regression": 46,
+    "Error": 12
+   },
+   "failed": {},
+   "agent_final_message": "I've extended `mtl.py` to handle the full Part 2 spec, and Part 1 still works. A Part 1 pipeline gives byte-identical output to before, from a file and from stdin. I ran about 35 hand-written cases, covering the spec's example and each error rule, and all gave the expected output and exit code. I had no official test suite, so that's the only testing. No new dependencies, so `requirements.txt` is unchanged.\n\n**What's supported:**\n- **Schemas:** a child schema inherits from its base and can override field types. Same type or `int`\u2192`float` is allowed; any other change exits 2. Circular inheritance, unknown base schemas and multiple inheritance (`extends A, B`) exit 1. A calculated field that refers to an unknown, later-declared or self field exits 1.\n- **CSV columns:** a file with schema blocks loads only the physical fields of the schema used by the pipeline, with their declared types. A missing column exits 3, and extra CSV columns are ignored.\n- **Params:** missing with no default exits 1; a `--param` value that won't parse as its declared type exits 2; last value wins. Both `--param a=1 --param b=2` and `--param a=1 b=2` work.\n- **`calc` statements:** `pre` calcs are computed per row before anything else; `post_agg` calcs run after the final sort, in the order declared, and can use group/window keys, aggregate aliases and earlier post-agg calcs. Mismatched declared types and post-agg references to per-row fields (e.g. `day(timestamp)`) exit 2. Name collisions and aggregate aliases used in `pre` calcs exit 1.\n- **`lag`/`lead`:** these run over the whole sorted result with no partitioning, and return `null` past either end. Using them outside `post_agg` or with a literal `k` \u2264 0 exits 1, and a non-`int` `k` exits 2.\n- **New expressions:** `param(\"x\")`, `coalesce`, `cast(x as type)`, `starts_with`/`ends_with`/`contains` (as functions or infix, as in the spec's example), and double-quoted strings.\n- **Output keys** follow the spec: window keys, group keys, aliases sorted, then post-agg calcs sorted. Pre-stage calcs only appear when they're group keys.\n\n**Decisions where the spec is silent (worth checking against your tests):**\n- A declared `float` accepts an `int` expression and converts it; other mismatches exit 2.\n- A param with no type but a default takes the default's type, so `k = 1` is an `int`.\n- A `pre` calc normally runs before every filter. The exception is one that uses an `apply(...)` column: it runs where it's written, because that column doesn't exist earlier.\n- Referencing an unknown field in a pipeline `pre` calc exits 1, matching the rule for schema calcs. In a post-agg calc it exits 2.\n- `--strict` was missing from the Part 1 code, so I added it. Its only effect is on a failed `cast` (e.g. `'abc'` to `int`): exit 4 with it, `null` without. Part 1 never defined what it should do.\n- `window(param(\"w\"))` works with a string param such as `'2h'`; an invalid duration exits 2.\n- A `--param` that isn't declared is ignored, and a `--param` with no `=` exits 3, like other bad arguments.\n- When `@stage` is left off a calc, it defaults to `pre` before `aggregate` and `post_agg` after it."
+  },
+  "checkpoint_3": {
+   "pass_counts": {
+    "Core": 3,
+    "Functionality": 51,
+    "Regression": 98,
+    "Error": 11
+   },
+   "total_counts": {
+    "Core": 3,
+    "Functionality": 52,
+    "Regression": 98,
+    "Error": 11
+   },
+   "failed": {
+    "checkpoint_3-Functionality": [
+     {
+      "test": "test_checkpoint_3_hidden[04_many_files]",
+      "reason": "E           AssertionError"
+     }
+    ]
+   },
+   "agent_final_message": "I've extended `mtl.py` to cover the spec: multiple inputs, CSV/TSV (optionally gzipped) and Parquet, null markers, bad-record logging, and results that don't depend on input order. I tested it by hand with ad-hoc data and scripts; there is no automated test suite. In that testing, a mixed CSV + gzipped TSV + Parquet run gave the expected totals. Splitting 3,000 shuffled rows across the three formats gave byte-identical output on three runs. Strict mode, bad inputs and the bad-records file all behaved as described below.\n\n`pyarrow` is now installed in the existing `.venv` and listed in `requirements.txt`. Pandas is not needed.\n\n**Inputs**\n- `--input` can be repeated and takes several paths at once, so an unquoted shell glob still works. Each path can be a file, a directory (with `--recursive` to go into subfolders) or a glob.\n- Files matched by more than one input are read only once. Files are always processed in sorted path order.\n- **Format:** chosen by file extension, case-insensitive. A file whose extension doesn't identify its format uses `--format`; if that is `auto`, it fails with exit 3. `.gz` files are decompressed.\n- A missing path, a glob that matches nothing overall, an empty file, a corrupt gzip or Parquet file, or invalid UTF-8 all exit with 3.\n- `--csv` still works as another name for `--input`.\n\n**Null semantics**\n- Comparisons, `!`, `in` and `starts_with`/`ends_with`/`contains` now return null when an input is null. `&` and `|` use three-valued logic, so `false & null` is false and `true | null` is true.\n- A filter keeps a row only when its condition is exactly true.\n- Sums, averages and variances are now computed in a way that gives the same result whatever order the rows arrive in. Exact float output may differ from Parts 1\u20132 in the last digit.\n\n**Bad records**\n- **Text parse errors:** a value that can't be read as its type is `PARSE_TYPE_MISMATCH`; a bad timestamp is `TIMESTAMP_PARSE_ERROR`.\n- **Malformed rows:** a row with too few fields is `MISSING_REQUIRED_FIELD`; one with too many fields is `PARSE_TYPE_MISMATCH`.\n- **Parquet:** columns whose stored type can't be converted to the schema type are `PARQUET_TYPE_MISMATCH`.\n- **Row evaluation:** a runtime error in a calc, filter or `apply`, such as division by zero, is `RUNTIME_ERROR` (or `TYPE_ERROR`).\n- **Non-strict:** these rows are skipped.\n- **Strict:** the first bad row in file and line order stops the run with exit 4 for runtime errors and 2 for the rest. A schema column missing from a file also exits with 2.\n- **Bad-records file:** JSON Lines sorted by file and line, created only when there are bad rows. Parent folders are created if needed. In strict mode the one fatal row is still written.\n- **Fields:** `file`, `line`, `row`, `format`, `error_type`, `classification` (same value), `message`, `column`, `value`, and `context.record` holding the raw row. `line` is null for Parquet; `row` gives the position instead.\n\n**Judgement calls you may want to change**\n- `count(col)` returns 0 when every value is null, as SQL does. The spec's \"all-null \u2192 null (except `count(*)`)\" could be read to mean it should return null instead; it's a one-line change.\n- A Parquet string column is not converted to a numeric or bool schema field; it's a type mismatch. A string column for `timestamp` is accepted and read as ISO-8601. Other conversions (int to float, decimal, dates, dictionary-encoded strings, all timestamp units and time zones) work.\n- `NaN` text in a numeric field is always null, even if `--nulls` leaves it out. Null markers also apply to Parquet string values.\n- This changes earlier behaviour: in non-strict mode, a missing schema column now becomes null instead of exiting with 3, and a bad value or runtime error now skips that row instead of stopping the run.\n- When scanning a directory or glob, hidden files are skipped. Files with an unrecognised extension are skipped too, unless `--format` is set and the extension is ambiguous (none, `.gz`, `.txt` or `.dat`)."
+  },
+  "checkpoint_4": {
+   "pass_counts": {
+    "Core": 1,
+    "Functionality": 55,
+    "Regression": 117,
+    "Error": 4
+   },
+   "total_counts": {
+    "Core": 1,
+    "Functionality": 57,
+    "Regression": 164,
+    "Error": 4
+   },
+   "failed": {
+    "checkpoint_3-Regression": [
+     {
+      "test": "test_checkpoint_3_hidden[04_many_files]",
+      "reason": "E           AssertionError"
+     }
+    ],
+    "checkpoint_4-Functionality": [
+     {
+      "test": "test_checkpoint_4_hidden[05_join_full_outer]",
+      "reason": "E           AssertionError"
+     },
+     {
+      "test": "test_checkpoint_4_regression[33_recursive_directory]",
+      "reason": "E           AssertionError"
+     }
+    ]
+   },
+   "agent_final_message": "I've extended `mtl.py` with `--ingest-config` and everything in the spec: named sources, per-source mapping and schema checks, `sources {}` / `with` / `join` syntax, and the new config-error exit code 5. I tested it with hand-built fixtures and checked the results by hand; the workspace has no test suite, so nothing beyond that has been run.\n\n**What I ran:**\n- **Spec example:** Parquet web feed plus gzipped POS CSV, `within 10m`, 1h window. The output matches a hand calculation.\n- **Joins:** all four join types (`full` gives the right `count(col)` nulls), chained joins via `as WP` and via `_`, and per-source `with` filters and calcs.\n- **Mapping:** drop \u2192 rename \u2192 cast \u2192 defaults, required fields, per-source time zones, `--bad-records-out` and `--strict`.\n- **Errors:** every listed case returns the right code and a single `ERROR:<TYPE>:<msg>` line \u2014 for example duplicate project names (1), a string/number `on` comparison (2), a missing config file (3), and tied precedence or an unknown schema (5).\n- **Old behaviour:** for runs without a config, the old and new versions give identical output. The two intentional differences: `W.price` is now valid syntax (a non-existent `W.price` is an unknown-column error, exit 2, instead of a syntax error, exit 1), and the missing-`--input` message now also mentions `--ingest-config` (still exit 3).\n\n**Dependency:** I added `PyYAML>=6.0` to `requirements.txt` and installed it in `.venv`. There's also a small built-in YAML reader as a fallback; it gave identical results to PyYAML on the four configs I tried.\n\n**Where the spec was ambiguous, I chose:**\n- **Missing or unreadable config file:** exit 3. Leaving out `--ingest-config` when the DSL has a `sources {}` block, or a config that won't parse, is exit 5.\n- **Relative paths in the config:** looked up from the current directory first, then from the config file's folder.\n- **Cast to the wrong type:** a cast that clashes with the schema (say, `price: string` for a float field) makes each affected row bad rather than failing the whole config. That follows the spec's \"violations are bad rows\" rule.\n- **Strict config keys:** unknown source keys or mapping directives are config errors (5).\n- **Unused sources:** a source alias that's never joined, or a join result that no later join uses, is a DSL error (1).\n- **Null timestamps after a join:** rows like this are bad only when the pipeline has a `window`. Without a window they're kept.\n- **Config without `sources {}`:** all configured sources are combined into one input and checked against the pipeline's `using` schema. The spec doesn't cover this case.\n- **Extras the spec doesn't mention:**\n  - `within` also accepts seconds (`30s`).\n  - Project entries can drop `as` when the expression is just a column.\n  - Bad-row records now include a `source` field."
+  },
+  "checkpoint_5": {
+   "pass_counts": {
+    "Core": 1,
+    "Functionality": 19,
+    "Regression": 46,
+    "Error": 5
+   },
+   "total_counts": {
+    "Core": 1,
+    "Functionality": 20,
+    "Regression": 48,
+    "Error": 5
+   },
+   "failed": {
+    "checkpoint_5-Functionality": [
+     {
+      "test": "test_checkpoint_5_hidden[03_join_full_outer]",
+      "reason": "E           AssertionError"
+     }
+    ],
+    "checkpoint_5-Regression": [
+     {
+      "test": "test_checkpoint_5_regression[11_null_aggregates]",
+      "reason": "E       AssertionError"
+     },
+     {
+      "test": "test_checkpoint_5_regression[33_recursive_directory]",
+      "reason": "E           AssertionError"
+     }
+    ]
+   },
+   "agent_final_message": "I've extended `mtl.py` with all three Part 5 features: version gating, deterministic resume, and the metadata file. I also added `xxhash` to `requirements.txt` and installed it in the venv. I tested it against fixture data in every input mode (ingest-config union, joins, `--input` with a block DSL, and the legacy line DSL), using CSV, gzip and Parquet files. I also compared it against a backup of the Part 4 code with the header line removed: outputs, bad-records files and error messages are identical. The only difference is the new warning line for older versions.\n\n**What the tests showed**\n- **No-change resume:** output is byte-identical to the fresh run, and metadata is identical between resumes apart from `run_id` and the timestamps. The fresh-run metadata also differs in `\"resume\": false`.\n- **Files really are skipped:** I edited a file's content but kept its size and modified time. With the default `mtime_size` fingerprint the resume used the saved data and the output didn't change. With `xxhash64` the edit was caught and the file was reprocessed.\n- **Incremental runs:** after adding a new file and appending to an existing one, the resumed output matched a from-scratch run in all four modes.\n- **Errors:**\n  - Exit 6: missing header, `mtl_version 2.0`, `--resume` without `--state-dir`, missing or malformed state file, DSL or config hash mismatch, and `--state-dir` pointing at a file.\n  - Exit 1: a malformed header, and features above the declared version (blocks under 1.1, `count(col)` under 1.2, join/`--ingest-config`/`--udf` under 1.4).\n  - A failed run leaves the previous state file byte-for-byte unchanged.\n\n**How resume works:** the state file holds the required fields, plus a `checkpoints` section with each finished file's rows, bad records and stats. That's what makes resumed output identical without re-reading skipped files. All of it goes into one atomic write (temp file, then rename), and only after a successful run.\n\n**Judgment calls where the spec was unclear or contradictory**\n- **Missing vs. invalid header:** the spec lists missing headers under both exit 1 and exit 6. I used 6 for a missing header and 1 for one that's present but malformed (e.g. `mtl_version 1.x`).\n- **CLI features count as constructs:** `--ingest-config` and `--udf` need version 1.4 or later, otherwise exit 1.\n- **Warnings:** any DSL declaring a minor below 1.5 gets one `WARNING:version:\u2026` line on stderr and still exits 0. It's printed only on success, so a failed run still prints exactly one line. Newer minors (e.g. 1.9) are accepted without a warning.\n- **Other settings changed on resume:** if `--param`, `--tz`, `--strict`, null markers or the UDF files differ from the saved run, all files are reprocessed instead of failing, so the output is still correct.\n- **Removed files:** a file in the state that's no longer found is dropped, so a resume always matches a fresh run on the current files.\n- **Unnamed pipelines:** legacy DSLs and `--input` runs use the name `default`, for both the state file and the source.\n- **`--checkpoint-granularity`:** `rowgroup` and `line` are accepted but behave the same as `file`.\n- **xxhash64 fingerprints:** they look like `{\"scheme\": \"xxhash64\", \"hash\": \"<16 hex>\"}`, with `.gz` files hashed after decompression. A pure-Python fallback matches the library's output if `xxhash` isn't installed.\n\n**UDFs had to be built from scratch.** The Part 4 code had no UDF support, so I designed the `--udf` format myself. If the real Part 4 spec defines a different format, this is the piece most likely to need changing.\n- **Format:** a UDF file is Python. Functions can be registered with an `@udf(args=[...], returns=...)` decorator, `register_udf(...)`, a `register(registry)` hook, or a `UDFS` table. If none of those are used, fully type-annotated functions are picked up.\n- **Behavior:** a null argument gives a null result. An exception inside a UDF becomes a `RUNTIME_ERROR` bad record. Problems registering a UDF exit 5, and a missing UDF file exits 3."
+  }
+ }
+}

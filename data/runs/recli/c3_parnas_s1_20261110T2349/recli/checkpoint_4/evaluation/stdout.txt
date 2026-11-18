@@ -1,0 +1,653 @@
+
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.16, pytest-9.2.0, pluggy-1.7.0 -- /tmp/uv-cache/archive-v0/q7Oov73gdBMuUJLt/bin/python
+cachedir: .pytest_cache
+metadata: {'Python': '3.12.16', 'Platform': 'Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41', 'Packages': {'pytest': '9.2.0', 'pluggy': '1.7.0'}, 'Plugins': {'timeout': '2.4.0', 'json-report': '1.5.0', 'metadata': '3.1.1', 'json-ctrf': '0.6.5'}}
+rootdir: /workspace
+configfile: pytest.ini
+plugins: timeout-2.4.0, json-report-1.5.0, metadata-3.1.1, json-ctrf-0.6.5
+timeout: 25.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 133 items
+
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_no_args_shows_help_text PASSED [  0%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_command_dispatch_top_level PASSED [  1%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_subcommand_dispatch PASSED [  2%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite PASSED [  3%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite_for_multi_level_command PASSED [  3%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_version_rewrite PASSED [  4%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_positional_arg_parsing PASSED [  5%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_unrecognized_command_error PASSED [  6%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_missing_required_positional_shows_usage PASSED [  6%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_excess_positional_args_error PASSED [  7%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_with_suggestion PASSED [  8%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_no_suggestion PASSED [  9%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_multiple_parameter_errors_collected PASSED [  9%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unrecognized_subcommand_error PASSED [ 10%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_alphabetical_ordering_case_insensitive PASSED [ 11%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_column_alignment PASSED [ 12%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_parent_command_no_handler_shows_subcommands PASSED [ 12%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_suggestion_trash_to_delete PASSED [ 13%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_subcommand_synonym_example_allows_optional_delete_suggestion PASSED [ 14%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_checked_before_levenshtein PASSED [ 15%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_only_when_target_registered PASSED [ 15%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_suggestion_within_distance_2 PASSED [ 16%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_no_suggestion_beyond_distance_2 PASSED [ 17%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_tiebreaker_sort_order PASSED [ 18%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_optional_modifier PASSED [ 18%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_repeating_modifier_accepts_multiple PASSED [ 19%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_no_flag_sets_false PASSED [ 20%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error FAILED [ 21%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected FAILED [ 21%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_error_messages_to_stderr PASSED [ 22%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_exit_code_1_on_error PASSED [ 23%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_for_specific_command PASSED [ 24%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_generic_token_classification PASSED [ 24%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_default_value_for_optional_arg PASSED [ 25%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_precedence_changes_observable_behavior PASSED [ 26%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_runtime_overrides_project FAILED [ 27%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_project_overrides_global PASSED [ 27%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_global_defaults_apply PASSED [ 28%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_alias_invocation_applies_connection_params PASSED [ 29%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_all_broadcast_alphabetical_order PASSED [ 30%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_all_broadcast_case_insensitive_alphabetical_order PASSED [ 30%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_disabled_command_error PASSED [ 31%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_unknown_alias_error PASSED [ 32%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_unknown_alias_with_suggestion PASSED [ 33%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_all_no_aliases_error PASSED [ 33%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_alias_group_invalid_member_error PASSED [ 34%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_unwritable_config_error PASSED [ 35%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority PASSED [ 36%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority_overrides_project_disabled_command PASSED [ 36%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_upward_search PASSED [ 37%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_search_stops_at_first_matching_directory PASSED [ 38%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_inherit_depth_first PASSED [ 39%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_appended PASSED [ 39%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_not_deduplicated PASSED [ 40%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_auto_creation_locale_and_installer_version PASSED [ 41%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_global_config_from_env_var PASSED [ 42%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_global_config_default_path PASSED [ 42%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_deprecated_param_emits_warning PASSED [ 43%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_strict_args_mode FAILED [ 44%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_hidden_param_excluded_from_help_but_functional PASSED [ 45%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_runtime_alias_overrides_file_alias PASSED [ 45%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_unknown_alias_does_not_suggest_far_match PASSED [ 46%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_alias_name_regex_validation PASSED [ 47%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_alias_group_deduplication_first_appearance PASSED [ 48%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_local_path_absolutization PASSED [ 48%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_uri_schemes_recognized PASSED [ 49%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command FAILED [ 50%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_exit_255_error PASSED [ 51%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_packages_dir_from_env PASSED [ 51%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_all_auto_registered_when_aliases_exist PASSED [ 52%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_explicit_all_alias_is_not_overridden_by_auto_registration PASSED [ 53%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_table_format_default PASSED [ 54%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_json_format_4_space_indent PASSED [ 54%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_field_single_value_raw_output PASSED [ 55%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_quiet_suppresses_info_and_success PASSED [ 56%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_error_to_stderr PASSED [ 57%]
+.evaluation_tests/test_checkpoint_3.py::TestCore::test_debug_elapsed_time_format PASSED [ 57%]
+.evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_field_name_error PASSED [ 58%]
+.evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_json_stdin_error FAILED [ 59%]
+.evaluation_tests/test_checkpoint_3.py::TestErrors::test_confirmation_prompt_non_y_aborts PASSED [ 60%]
+.evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_fields_plural_error PASSED [ 60%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_formats_preserve_same_underlying_values PASSED [ 61%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_format_quoting PASSED [ 62%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_serializes_complex_values_as_json_strings FAILED [ 63%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_yaml_format_output PASSED [ 63%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_count_format_integer PASSED [ 64%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_ids_format_space_separated PASSED [ 65%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_restricts_and_orders_columns PASSED [ 66%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_fields_case_insensitive PASSED [ 66%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_color_auto_mode PASSED [ 67%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_no_color_disables_formatting PASSED [ 68%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_warning_to_stderr PASSED [ 69%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_success_to_stdout_suppressed_by_quiet PASSED [ 69%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_debug_group_filtering PASSED [ 70%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_debug_group_prefix_format PASSED [ 71%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_file_logging_timestamp_format PASSED [ 72%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_file_logging_separator_per_invocation FAILED [ 72%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_sensitive_error_not_logged PASSED [ 73%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_json_stdin_supplies_missing_positional_argument FAILED [ 74%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_yes_bypasses_confirmation PASSED [ 75%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_accepts_trimmed_uppercase_y PASSED [ 75%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_blank_response_cancels FAILED [ 76%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_suppresses_cancellation_warning FAILED [ 77%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_does_not_suppress_debug_output FAILED [ 78%]
+.evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_complex_values_json_serialized_in_table PASSED [ 78%]
+.evaluation_tests/test_checkpoint_4.py::TestCore::test_detailed_execution_captures_all_fields FAILED [ 79%]
+.evaluation_tests/test_checkpoint_4.py::TestCore::test_success_only_execution_returns_boolean PASSED [ 80%]
+.evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_read_hit_returns_content PASSED [ 81%]
+.evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_read_expired_deletes_and_misses PASSED [ 81%]
+.evaluation_tests/test_checkpoint_4.py::TestCore::test_cache_key_sanitization_non_url PASSED [ 82%]
+.evaluation_tests/test_checkpoint_4.py::TestErrors::test_unsupported_archive_format_error PASSED [ 83%]
+.evaluation_tests/test_checkpoint_4.py::TestErrors::test_non_writable_file_extraction_warning_then_error PASSED [ 84%]
+.evaluation_tests/test_checkpoint_4.py::TestErrors::test_exit_code_negative_1_warning FAILED [ 84%]
+.evaluation_tests/test_checkpoint_4.py::TestErrors::test_cache_dir_creation_failure_silent PASSED [ 85%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_sensitive_arg_obfuscation_in_debug PASSED [ 86%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_stdout_mode PASSED [ 87%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_stderr_mode PASSED [ 87%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_return_code_mode PASSED [ 88%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_all_mode PASSED [ 89%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tool_redispatch_json_parse_mode PASSED [ 90%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_write_stores_content PASSED [ 90%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_miss_returns_false PASSED [ 91%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_fresh_entry_not_expired PASSED [ 92%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_cleanup_expire_pass PASSED [ 93%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_cleanup_size_enforcement PASSED [ 93%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_eviction_tiebreaker_alphabetical PASSED [ 94%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_cache_key_sanitization_url PASSED [ 95%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_zip PASSED [ 96%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_overwrites_existing_writable_file PASSED [ 96%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_non_writable_nested_archive_entry_warns_with_relative_path PASSED [ 97%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_non_writable_archive_entry_does_not_stop_other_files PASSED [ 98%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_archive_extraction_tar_gz PASSED [ 99%]
+.evaluation_tests/test_checkpoint_4.py::TestFunctionality::test_tar_gz_fallback_to_external_command PASSED [100%]
+
+=================================== FAILURES ===================================
+__________ TestFunctionality.test_required_associative_missing_error ___________
+
+self = <test_checkpoint_1.TestFunctionality object at 0x7eddd56c8cb0>
+cli = <function cli.<locals>._run at 0x7eddd49f8ea0>
+
+    @pytest.mark.functionality
+    def test_required_associative_missing_error(self, cli):
+        """Missing required ``--type=<type>`` → error.
+    
+        Spec: Error Summary table.
+        """
+        result = cli(["site", "create", "example.test"])
+>       assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_1.py:406: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returnco... stdout="Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\n", stderr='')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: "Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\n"
+E         stderr: ''
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout="Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\n", stderr='').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+_____ TestFunctionality.test_required_associative_empty_value_is_rejected ______
+
+self = <test_checkpoint_1.TestFunctionality object at 0x7eddd582dbb0>
+cli = <function cli.<locals>._run at 0x7eddd49f99e0>
+
+    @pytest.mark.functionality
+    def test_required_associative_empty_value_is_rejected(self, cli):
+        """Required associative args must have non-empty values.
+    
+        Spec: "All required associative arguments must be present with
+        non-empty values."
+        """
+        result = cli(["site", "create", "example.test", "--type="])
+        assert_exit_code(result, 1)
+>       assert_stderr_contains(
+            result,
+            "Error: Parameter errors:",
+            "missing --type parameter",
+        )
+
+.evaluation_tests/test_checkpoint_1.py:421: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=1, stdout='', stderr='Error: Parameter errors:\n --type parameter needs a value\n')
+fragments = ('Error: Parameter errors:', 'missing --type parameter')
+
+    def assert_stderr_contains(
+        result: subprocess.CompletedProcess[str], *fragments: str
+    ) -> None:
+        """Assert all *fragments* appear in stderr."""
+        for frag in fragments:
+>           assert frag in result.stderr, (
+                f"Missing {frag!r} in stderr.\nstderr: {result.stderr!r}"
+            )
+E           AssertionError: Missing 'missing --type parameter' in stderr.
+E             stderr: 'Error: Parameter errors:\n --type parameter needs a value\n'
+E           assert 'missing --type parameter' in 'Error: Parameter errors:\n --type parameter needs a value\n'
+E            +  where 'Error: Parameter errors:\n --type parameter needs a value\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=1, stdout='', stderr='Error: Parameter errors:\n --type parameter needs a value\n').stderr
+
+.evaluation_tests/conftest.py:344: AssertionError
+________________ TestCore.test_config_runtime_overrides_project ________________
+
+self = <test_checkpoint_2.TestCore object at 0x7eddd56c8440>
+cli = <function cli.<locals>._run at 0x7eddd49f8a40>
+write_config = <function write_config.<locals>._write at 0x7eddd49fa160>
+
+    def test_config_runtime_overrides_project(self, cli, write_config):
+        """Runtime ``--color=auto`` overrides project ``color: true``.
+    
+        Spec: Example 1 – "The resolved value of color is auto."
+        """
+        write_config({"color": True}, kind="project")
+        result = cli(["--color=auto", "help"])
+>       assert_success(result)
+
+.evaluation_tests/test_checkpoint_2.py:55: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.evaluation_tests/conftest.py:322: in assert_success
+    assert_exit_code(result, 0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--color=auto', 'help'], returncode=1, stdout='', stderr='Error: The --color global parameter does not accept a value.\n')
+code = 0
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 0, got 1.
+E         stdout: ''
+E         stderr: 'Error: The --color global parameter does not accept a value.\n'
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--color=auto', 'help'], returncode=1, stdout='', stderr='Error: The --color global parameter does not accept a value.\n').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+___________________ TestFunctionality.test_strict_args_mode ____________________
+
+self = <test_checkpoint_2.TestFunctionality object at 0x7eddd5584ad0>
+cli = <function cli.<locals>._run at 0x7eddd49fa840>
+
+    @pytest.mark.functionality
+    def test_strict_args_mode(self, cli):
+        """Strict mode treats post-positional args as command-specific.
+    
+        Spec: "only arguments appearing before the first positional token
+        are treated as global runtime configuration flags."
+        """
+        strict = cli(
+            ["site", "list", "--debug"],
+            env={"APPCTL_STRICT_ARGS_MODE": "1"},
+        )
+        non_strict = cli(["site", "list", "--debug"])
+        assert "Debug:" not in strict.stderr
+>       assert "Debug:" in non_strict.stderr
+E       assert 'Debug:' in "Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.001s)\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\n"
+E        +  where "Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.001s)\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\n" = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--debug'], returncode=0, stdout='name  type      title         status\nmain  standard  Main Site     active\nblog  blog      Company Blog  active\nshop  store     Shop          archived\n', stderr="Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.001s)\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\n").stderr
+
+.evaluation_tests/test_checkpoint_2.py:457: AssertionError
+______ TestFunctionality.test_ssh_pre_cmd_injected_before_remote_command _______
+
+self = <test_checkpoint_2.TestFunctionality object at 0x7eddd56cac30>
+cli = <function cli.<locals>._run at 0x7eddd49fb240>
+write_config = <function write_config.<locals>._write at 0x7eddd49faca0>
+fake_ssh_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_ssh_pre_cmd_injected_befo0/fake_ssh_bin:/tmp/uv-cache/archive-v0/q7Oov73...usr/local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_ssh_pre_cmd_injected_befo0/ssh_calls.log'))
+
+    @pytest.mark.functionality
+    def test_ssh_pre_cmd_injected_before_remote_command(
+        self, cli, write_config, fake_ssh_env
+    ):
+        """``APPCTL_SSH_PRE_CMD`` prefixes the remote command payload.
+    
+        Spec: "``APPCTL_SSH_PRE_CMD`` injects a shell command that runs
+        before the main remote command."
+        """
+        ssh_env, log_file = fake_ssh_env
+        write_config(
+            {"@remote": {"ssh": "ssh://user@host"}},
+            kind="global",
+        )
+    
+        result = cli(
+            ["@remote", "site", "list"],
+            env={**ssh_env, "APPCTL_SSH_PRE_CMD": "echo prepare"},
+        )
+    
+        assert_success(result)
+        calls = log_file.read_text()
+>       assert "echo prepare && appctl site list" in calls
+E       AssertionError: assert 'echo prepare && appctl site list' in '-T -q user@host echo prepare; appctl site list\n'
+
+.evaluation_tests/test_checkpoint_2.py:600: AssertionError
+___________________ TestErrors.test_invalid_json_stdin_error ___________________
+
+self = <test_checkpoint_3.TestErrors object at 0x7eddd582e480>
+cli = <function cli.<locals>._run at 0x7eddd48f4040>
+
+    @pytest.mark.error
+    def test_invalid_json_stdin_error(self, cli):
+        """Invalid JSON on STDIN with ``--format=json`` → error.
+    
+        Spec: "Error: Invalid JSON: <raw_input>."
+        """
+        result = cli(
+            ["site", "create", "--format=json"],
+            input_text="not valid json{{{",
+        )
+        assert_exit_code(result, 1)
+>       assert "Error: Invalid JSON:" in result.stderr
+E       AssertionError: assert 'Error: Invalid JSON:' in 'Error: Parameter errors:\n unknown --format parameter\n'
+E        +  where 'Error: Parameter errors:\n unknown --format parameter\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--format=json'], returncode=1, stdout='', stderr='Error: Parameter errors:\n unknown --format parameter\n').stderr
+
+.evaluation_tests/test_checkpoint_3.py:135: AssertionError
+_____ TestFunctionality.test_csv_serializes_complex_values_as_json_strings _____
+
+self = <test_checkpoint_3.TestFunctionality object at 0x7eddd582dd60>
+cli = <function cli.<locals>._run at 0x7eddd48f4900>
+
+    @pytest.mark.functionality
+    def test_csv_serializes_complex_values_as_json_strings(self, cli):
+        """Complex values in CSV output are serialized as JSON strings.
+    
+        Spec: "Complex values such as arrays and objects must be serialized
+        as JSON strings when they appear in table or csv output."
+        """
+        result = cli(["site", "list", "--format=csv", "--fields=tags,meta"])
+>       assert_success(result)
+
+.evaluation_tests/test_checkpoint_3.py:204: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.evaluation_tests/conftest.py:322: in assert_success
+    assert_exit_code(result, 0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--format=csv', '--fields=tags,meta'], returncode=1, stdout='', stderr='Error: Invalid field: tags.\n')
+code = 0
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 0, got 1.
+E         stdout: ''
+E         stderr: 'Error: Invalid field: tags.\n'
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--format=csv', '--fields=tags,meta'], returncode=1, stdout='', stderr='Error: Invalid field: tags.\n').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+_________ TestFunctionality.test_file_logging_separator_per_invocation _________
+
+self = <test_checkpoint_3.TestFunctionality object at 0x7eddd4d35be0>
+cli = <function cli.<locals>._run at 0x7eddd48f4180>
+log_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_file_logging_separator_pe0/appctl_root/logs/appctl.log')
+
+    @pytest.mark.functionality
+    def test_file_logging_separator_per_invocation(self, cli, log_path):
+        """Each invocation delimited with separator line.
+    
+        Spec: "Each invocation is delimited with a separator line."
+        """
+        cli(["help"])
+        cli(["help"])
+        if log_path.exists():
+            content = log_path.read_text()
+            # Should have separator lines between invocations
+            # EasyEngine uses "::::::::::::::::::::::::ee invoked::::::::::::::::::::::::"
+            separator_candidates = [
+                l
+                for l in content.splitlines()
+                if l.strip()
+                and set(l.strip()) <= set(":= -_invoked appctl")
+                or "invoked" in l.lower()
+                or l.startswith("---")
+                or l.startswith("===")
+            ]
+>           assert len(separator_candidates) >= 2
+E           assert 0 >= 2
+E            +  where 0 = len([])
+
+.evaluation_tests/test_checkpoint_3.py:381: AssertionError
+____ TestFunctionality.test_json_stdin_supplies_missing_positional_argument ____
+
+self = <test_checkpoint_3.TestFunctionality object at 0x7eddd56ceb10>
+cli = <function cli.<locals>._run at 0x7eddd48f54e0>
+fake_docker_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_json_stdin_supplies_missi0/fake_docker_bin:/tmp/uv-cache/archive-v0/q7Oo.../local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_json_stdin_supplies_missi0/docker_calls.log'))
+
+    @pytest.mark.functionality
+    def test_json_stdin_supplies_missing_positional_argument(
+        self, cli, fake_docker_env
+    ):
+        """Missing positional values are read from STDIN in JSON mode.
+    
+        Spec: "If a positional argument value is missing from the command
+        line, the implementation attempts to read that value from STDIN...
+        When --format=json is active, STDIN is parsed as JSON."
+        """
+        docker_env, _ = fake_docker_env
+        result = cli(
+            ["site", "create", "--type=html", "--format=json"],
+            input_text='{"site-name": "stdin.test"}\n',
+            env=docker_env,
+        )
+>       assert_success(result)
+
+.evaluation_tests/test_checkpoint_3.py:413: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.evaluation_tests/conftest.py:322: in assert_success
+    assert_exit_code(result, 0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--type=html', '--format=json'], returncode=1, stdout='', stderr='Error: Parameter errors:\n unknown --format parameter\n')
+code = 0
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 0, got 1.
+E         stdout: ''
+E         stderr: 'Error: Parameter errors:\n unknown --format parameter\n'
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--type=html', '--format=json'], returncode=1, stdout='', stderr='Error: Parameter errors:\n unknown --format parameter\n').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+__________ TestFunctionality.test_confirmation_blank_response_cancels __________
+
+self = <test_checkpoint_3.TestFunctionality object at 0x7eddd5586f60>
+cli = <function cli.<locals>._run at 0x7eddd48f5580>
+
+    @pytest.mark.functionality
+    def test_confirmation_blank_response_cancels(self, cli):
+        """Blank confirmation input still cancels the operation.
+    
+        Spec: "Any response other than y, after trimming and case
+        normalization, must abort the operation."
+        """
+        result = cli(
+            ["site", "delete", "example.test"],
+            input_text="\n",
+        )
+>       assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_3.py:452: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'example.test'], returncode=0, stdout="Are you sure you want to delete the site 'example.test'? [y/n] ", stderr='Warning: Operation cancelled.\n')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: "Are you sure you want to delete the site 'example.test'? [y/n] "
+E         stderr: 'Warning: Operation cancelled.\n'
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'example.test'], returncode=0, stdout="Are you sure you want to delete the site 'example.test'? [y/n] ", stderr='Warning: Operation cancelled.\n').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+_________ TestFunctionality.test_quiet_suppresses_cancellation_warning _________
+
+self = <test_checkpoint_3.TestFunctionality object at 0x7eddd4d36360>
+cli = <function cli.<locals>._run at 0x7eddd49f9ee0>
+
+    @pytest.mark.functionality
+    def test_quiet_suppresses_cancellation_warning(self, cli):
+        """Quiet mode still aborts cancellation paths with the same exit code.
+    
+        Spec: cancellation remains an error-path return while quiet mode
+        suppresses regular informational/success chatter.
+        """
+        result = cli(
+            ["--quiet", "site", "delete", "example.test"],
+            input_text="n\n",
+        )
+>       assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_3.py:466: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', 'site', 'delete', 'example.test'...=0, stdout="Are you sure you want to delete the site 'example.test'? [y/n] ", stderr='Warning: Operation cancelled.\n')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: "Are you sure you want to delete the site 'example.test'? [y/n] "
+E         stderr: 'Warning: Operation cancelled.\n'
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', 'site', 'delete', 'example.test'], returncode=0, stdout="Are you sure you want to delete the site 'example.test'? [y/n] ", stderr='Warning: Operation cancelled.\n').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+_________ TestFunctionality.test_quiet_does_not_suppress_debug_output __________
+
+self = <test_checkpoint_3.TestFunctionality object at 0x7eddd4d35cd0>
+cli = <function cli.<locals>._run at 0x7eddd48f5120>
+
+    @pytest.mark.functionality
+    def test_quiet_does_not_suppress_debug_output(self, cli):
+        """``--quiet`` does not suppress debug output.
+    
+        Spec: "``--quiet`` must suppress informational messages, success
+        messages, and warnings." Debug output is enabled separately by
+        ``--debug``.
+        """
+        result = cli(["--quiet", "--debug", "help"])
+        assert_success(result)
+>       assert "Debug:" in result.stderr
+E       assert 'Debug:' in "Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.002s)\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.002s)\n"
+E        +  where "Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.002s)\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.002s)\n" = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', '--debug', 'help'], returncode=0, stdout="usage: appctl <command> [<subcommand>] [<args>] [--<flags>]\n\nAvailable commands:\n\n  cache   Adds, removes, fetches, and flushes the object cache.\n  cli     Reviews current appctl info and checks registered commands.\n  config  Generates and reads the configuration file.\n  help    Gets help for appctl commands.\n  option  Retrieves and sets site options.\n  plugin  Manages plugins, including installs, activations, and updates.\n  post    Manages posts, content, and meta.\n  site    Creates, deletes, empties, archives, and lists sites.\n  user    Manages users, along with their roles and meta.\n\nSee 'appctl help <command>' for more information on a specific command.\n", stderr="Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.002s)\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.002s)\n").stderr
+
+.evaluation_tests/test_checkpoint_3.py:478: AssertionError
+_____________ TestCore.test_detailed_execution_captures_all_fields _____________
+
+self = <test_checkpoint_4.TestCore object at 0x7eddd4d36a80>
+cli = <function cli.<locals>._run at 0x7eddd48f5800>
+
+    def test_detailed_execution_captures_all_fields(self, cli):
+        """External command returns stdout, stderr, return_code, run_time.
+    
+        Spec: "captures a structured result containing: stdout, stderr,
+        return_code, run_time."
+        """
+        result = cli(["--debug", "help"])
+        assert_success(result)
+        debug = strip_ansi(result.stderr).lower()
+        assert "command" in debug
+>       assert "return" in debug
+E       assert 'return' in "debug (bootstrap): loaded config file: /tmp/pytest-of-agent/pytest-0/test_detailed_execution_captur0/appctl_root/config/config.yml (0.002s)\ndebug (bootstrap): resolved command 'help' with arguments [] (0.003s)\n"
+
+.evaluation_tests/test_checkpoint_4.py:44: AssertionError
+_________________ TestErrors.test_exit_code_negative_1_warning _________________
+
+self = <test_checkpoint_4.TestErrors object at 0x7eddd4d35730>
+cli = <function cli.<locals>._run at 0x7eddd48f5da0>
+tmp_path = PosixPath('/tmp/pytest-of-agent/pytest-0/test_exit_code_negative_1_warn0')
+
+    @pytest.mark.error
+    def test_exit_code_negative_1_warning(self, cli, tmp_path):
+        """Process returning -1 emits warning to STDERR.
+    
+        Spec: "emits a warning to STDERR about signal handling configuration."
+        """
+        bin_dir = tmp_path / "signal_bin"
+        bin_dir.mkdir()
+        docker = bin_dir / "docker"
+        docker.write_text("#!/usr/bin/env sh\nkill -TERM $$\n")
+        docker.chmod(0o755)
+        compose = bin_dir / "docker-compose"
+        compose.write_text("#!/usr/bin/env sh\nexit 0\n")
+        compose.chmod(0o755)
+        env = {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+        result = cli(["site", "list"], env=env)
+>       assert "Warning" in result.stderr
+E       AssertionError: assert 'Warning' in ''
+E        +  where '' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='name  type      title         status\nmain  standard  Main Site     active\nblog  blog      Company Blog  active\nshop  store     Shop          archived\n', stderr='').stderr
+
+.evaluation_tests/test_checkpoint_4.py:172: AssertionError
+--------------------------------- JSON report ----------------------------------
+report saved to: .scbench/pytest-report.json
+=========================== short test summary info ============================
+FAILED .evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error - AssertionError: Expected exit code 1, got 0.
+  stdout: "Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\n"
+  stderr: ''
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout="Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\n", stderr='').returncode
+FAILED .evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected - AssertionError: Missing 'missing --type parameter' in stderr.
+  stderr: 'Error: Parameter errors:\n --type parameter needs a value\n'
+assert 'missing --type parameter' in 'Error: Parameter errors:\n --type parameter needs a value\n'
+ +  where 'Error: Parameter errors:\n --type parameter needs a value\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=1, stdout='', stderr='Error: Parameter errors:\n --type parameter needs a value\n').stderr
+FAILED .evaluation_tests/test_checkpoint_2.py::TestCore::test_config_runtime_overrides_project - AssertionError: Expected exit code 0, got 1.
+  stdout: ''
+  stderr: 'Error: The --color global parameter does not accept a value.\n'
+assert 1 == 0
+ +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--color=auto', 'help'], returncode=1, stdout='', stderr='Error: The --color global parameter does not accept a value.\n').returncode
+FAILED .evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_strict_args_mode - assert 'Debug:' in "Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.001s)\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\n"
+ +  where "Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.001s)\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\n" = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--debug'], returncode=0, stdout='name  type      title         status\nmain  standard  Main Site     active\nblog  blog      Company Blog  active\nshop  store     Shop          archived\n', stderr="Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_strict_args_mode0/appctl_root/config/config.yml (0.001s)\nDebug (bootstrap): Resolved command 'site list' with arguments [] (0.002s)\n").stderr
+FAILED .evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command - AssertionError: assert 'echo prepare && appctl site list' in '-T -q user@host echo prepare; appctl site list\n'
+FAILED .evaluation_tests/test_checkpoint_3.py::TestErrors::test_invalid_json_stdin_error - AssertionError: assert 'Error: Invalid JSON:' in 'Error: Parameter errors:\n unknown --format parameter\n'
+ +  where 'Error: Parameter errors:\n unknown --format parameter\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--format=json'], returncode=1, stdout='', stderr='Error: Parameter errors:\n unknown --format parameter\n').stderr
+FAILED .evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_csv_serializes_complex_values_as_json_strings - AssertionError: Expected exit code 0, got 1.
+  stdout: ''
+  stderr: 'Error: Invalid field: tags.\n'
+assert 1 == 0
+ +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list', '--format=csv', '--fields=tags,meta'], returncode=1, stdout='', stderr='Error: Invalid field: tags.\n').returncode
+FAILED .evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_file_logging_separator_per_invocation - assert 0 >= 2
+ +  where 0 = len([])
+FAILED .evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_json_stdin_supplies_missing_positional_argument - AssertionError: Expected exit code 0, got 1.
+  stdout: ''
+  stderr: 'Error: Parameter errors:\n unknown --format parameter\n'
+assert 1 == 0
+ +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', '--type=html', '--format=json'], returncode=1, stdout='', stderr='Error: Parameter errors:\n unknown --format parameter\n').returncode
+FAILED .evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_confirmation_blank_response_cancels - AssertionError: Expected exit code 1, got 0.
+  stdout: "Are you sure you want to delete the site 'example.test'? [y/n] "
+  stderr: 'Warning: Operation cancelled.\n'
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'delete', 'example.test'], returncode=0, stdout="Are you sure you want to delete the site 'example.test'? [y/n] ", stderr='Warning: Operation cancelled.\n').returncode
+FAILED .evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_suppresses_cancellation_warning - AssertionError: Expected exit code 1, got 0.
+  stdout: "Are you sure you want to delete the site 'example.test'? [y/n] "
+  stderr: 'Warning: Operation cancelled.\n'
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', 'site', 'delete', 'example.test'], returncode=0, stdout="Are you sure you want to delete the site 'example.test'? [y/n] ", stderr='Warning: Operation cancelled.\n').returncode
+FAILED .evaluation_tests/test_checkpoint_3.py::TestFunctionality::test_quiet_does_not_suppress_debug_output - assert 'Debug:' in "Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.002s)\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.002s)\n"
+ +  where "Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.002s)\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.002s)\n" = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--quiet', '--debug', 'help'], returncode=0, stdout="usage: appctl <command> [<subcommand>] [<args>] [--<flags>]\n\nAvailable commands:\n\n  cache   Adds, removes, fetches, and flushes the object cache.\n  cli     Reviews current appctl info and checks registered commands.\n  config  Generates and reads the configuration file.\n  help    Gets help for appctl commands.\n  option  Retrieves and sets site options.\n  plugin  Manages plugins, including installs, activations, and updates.\n  post    Manages posts, content, and meta.\n  site    Creates, deletes, empties, archives, and lists sites.\n  user    Manages users, along with their roles and meta.\n\nSee 'appctl help <command>' for more information on a specific command.\n", stderr="Debug (bootstrap): Loaded config file: /tmp/pytest-of-agent/pytest-0/test_quiet_does_not_suppress_d0/appctl_root/config/config.yml (0.002s)\nDebug (bootstrap): Resolved command 'help' with arguments [] (0.002s)\n").stderr
+FAILED .evaluation_tests/test_checkpoint_4.py::TestCore::test_detailed_execution_captures_all_fields - assert 'return' in "debug (bootstrap): loaded config file: /tmp/pytest-of-agent/pytest-0/test_detailed_execution_captur0/appctl_root/config/config.yml (0.002s)\ndebug (bootstrap): resolved command 'help' with arguments [] (0.003s)\n"
+FAILED .evaluation_tests/test_checkpoint_4.py::TestErrors::test_exit_code_negative_1_warning - AssertionError: assert 'Warning' in ''
+ +  where '' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'list'], returncode=0, stdout='name  type      title         status\nmain  standard  Main Site     active\nblog  blog      Company Blog  active\nshop  store     Shop          archived\n', stderr='').stderr
+======================= 14 failed, 119 passed in 34.62s ========================

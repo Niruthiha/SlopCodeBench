@@ -1,0 +1,253 @@
+
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.16, pytest-9.2.0, pluggy-1.7.0 -- /tmp/uv-cache/archive-v0/T4PKrcekRPfpWioL/bin/python
+cachedir: .pytest_cache
+metadata: {'Python': '3.12.16', 'Platform': 'Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41', 'Packages': {'pytest': '9.2.0', 'pluggy': '1.7.0'}, 'Plugins': {'timeout': '2.4.0', 'json-report': '1.5.0', 'metadata': '3.1.1', 'json-ctrf': '0.6.5'}}
+rootdir: /workspace
+configfile: pytest.ini
+plugins: timeout-2.4.0, json-report-1.5.0, metadata-3.1.1, json-ctrf-0.6.5
+timeout: 25.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 71 items
+
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_no_args_shows_help_text PASSED [  1%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_command_dispatch_top_level PASSED [  2%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_subcommand_dispatch PASSED [  4%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite PASSED [  5%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite_for_multi_level_command PASSED [  7%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_version_rewrite PASSED [  8%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_positional_arg_parsing PASSED [  9%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_unrecognized_command_error PASSED [ 11%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_missing_required_positional_shows_usage PASSED [ 12%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_excess_positional_args_error PASSED [ 14%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_with_suggestion PASSED [ 15%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_no_suggestion PASSED [ 16%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_multiple_parameter_errors_collected PASSED [ 18%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unrecognized_subcommand_error PASSED [ 19%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_alphabetical_ordering_case_insensitive PASSED [ 21%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_column_alignment PASSED [ 22%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_parent_command_no_handler_shows_subcommands PASSED [ 23%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_suggestion_trash_to_delete PASSED [ 25%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_subcommand_synonym_example_allows_optional_delete_suggestion PASSED [ 26%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_checked_before_levenshtein PASSED [ 28%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_only_when_target_registered PASSED [ 29%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_suggestion_within_distance_2 PASSED [ 30%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_no_suggestion_beyond_distance_2 PASSED [ 32%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_tiebreaker_sort_order PASSED [ 33%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_optional_modifier PASSED [ 35%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_repeating_modifier_accepts_multiple PASSED [ 36%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_no_flag_sets_false PASSED [ 38%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error FAILED [ 39%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected FAILED [ 40%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_error_messages_to_stderr PASSED [ 42%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_exit_code_1_on_error PASSED [ 43%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_for_specific_command PASSED [ 45%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_generic_token_classification PASSED [ 46%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_default_value_for_optional_arg PASSED [ 47%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_precedence_changes_observable_behavior PASSED [ 49%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_runtime_overrides_project FAILED [ 50%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_project_overrides_global PASSED [ 52%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_config_global_defaults_apply PASSED [ 53%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_alias_invocation_applies_connection_params PASSED [ 54%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_all_broadcast_alphabetical_order PASSED [ 56%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_all_broadcast_case_insensitive_alphabetical_order PASSED [ 57%]
+.evaluation_tests/test_checkpoint_2.py::TestCore::test_disabled_command_error PASSED [ 59%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_unknown_alias_error PASSED [ 60%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_unknown_alias_with_suggestion PASSED [ 61%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_all_no_aliases_error PASSED [ 63%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_alias_group_invalid_member_error PASSED [ 64%]
+.evaluation_tests/test_checkpoint_2.py::TestErrors::test_unwritable_config_error PASSED [ 66%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority PASSED [ 67%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_local_yml_priority_overrides_project_disabled_command PASSED [ 69%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_upward_search PASSED [ 70%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_project_config_search_stops_at_first_matching_directory PASSED [ 71%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_inherit_depth_first PASSED [ 73%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_appended PASSED [ 74%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_yaml_merge_arrays_not_deduplicated PASSED [ 76%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_auto_creation_locale_and_installer_version PASSED [ 77%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_global_config_from_env_var PASSED [ 78%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_global_config_default_path PASSED [ 80%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_deprecated_param_emits_warning PASSED [ 81%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_strict_args_mode PASSED [ 83%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_hidden_param_excluded_from_help_but_functional PASSED [ 84%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_runtime_alias_overrides_file_alias PASSED [ 85%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_unknown_alias_does_not_suggest_far_match PASSED [ 87%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_alias_name_regex_validation PASSED [ 88%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_alias_group_deduplication_first_appearance PASSED [ 90%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_local_path_absolutization PASSED [ 91%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_uri_schemes_recognized PASSED [ 92%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command FAILED [ 94%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_exit_255_error PASSED [ 95%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_packages_dir_from_env PASSED [ 97%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_all_auto_registered_when_aliases_exist PASSED [ 98%]
+.evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_explicit_all_alias_is_not_overridden_by_auto_registration PASSED [100%]
+
+=================================== FAILURES ===================================
+__________ TestFunctionality.test_required_associative_missing_error ___________
+
+self = <test_checkpoint_1.TestFunctionality object at 0x70654ec11250>
+cli = <function cli.<locals>._run at 0x70654e16bd80>
+
+    @pytest.mark.functionality
+    def test_required_associative_missing_error(self, cli):
+        """Missing required ``--type=<type>`` → error.
+    
+        Spec: Error Summary table.
+        """
+        result = cli(["site", "create", "example.test"])
+>       assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_1.py:406: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returnco... stdout="Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\n", stderr='')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: "Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\n"
+E         stderr: ''
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout="Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\n", stderr='').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+_____ TestFunctionality.test_required_associative_empty_value_is_rejected ______
+
+self = <test_checkpoint_1.TestFunctionality object at 0x70654ed675c0>
+cli = <function cli.<locals>._run at 0x70654de40900>
+
+    @pytest.mark.functionality
+    def test_required_associative_empty_value_is_rejected(self, cli):
+        """Required associative args must have non-empty values.
+    
+        Spec: "All required associative arguments must be present with
+        non-empty values."
+        """
+        result = cli(["site", "create", "example.test", "--type="])
+        assert_exit_code(result, 1)
+>       assert_stderr_contains(
+            result,
+            "Error: Parameter errors:",
+            "missing --type parameter",
+        )
+
+.evaluation_tests/test_checkpoint_1.py:421: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=1, stdout='', stderr='Error: Parameter errors:\n --type parameter needs a value\n')
+fragments = ('Error: Parameter errors:', 'missing --type parameter')
+
+    def assert_stderr_contains(
+        result: subprocess.CompletedProcess[str], *fragments: str
+    ) -> None:
+        """Assert all *fragments* appear in stderr."""
+        for frag in fragments:
+>           assert frag in result.stderr, (
+                f"Missing {frag!r} in stderr.\nstderr: {result.stderr!r}"
+            )
+E           AssertionError: Missing 'missing --type parameter' in stderr.
+E             stderr: 'Error: Parameter errors:\n --type parameter needs a value\n'
+E           assert 'missing --type parameter' in 'Error: Parameter errors:\n --type parameter needs a value\n'
+E            +  where 'Error: Parameter errors:\n --type parameter needs a value\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=1, stdout='', stderr='Error: Parameter errors:\n --type parameter needs a value\n').stderr
+
+.evaluation_tests/conftest.py:344: AssertionError
+________________ TestCore.test_config_runtime_overrides_project ________________
+
+self = <test_checkpoint_2.TestCore object at 0x70654ed66b70>
+cli = <function cli.<locals>._run at 0x70654de40400>
+write_config = <function write_config.<locals>._write at 0x70654de41080>
+
+    def test_config_runtime_overrides_project(self, cli, write_config):
+        """Runtime ``--color=auto`` overrides project ``color: true``.
+    
+        Spec: Example 1 – "The resolved value of color is auto."
+        """
+        write_config({"color": True}, kind="project")
+        result = cli(["--color=auto", "help"])
+>       assert_success(result)
+
+.evaluation_tests/test_checkpoint_2.py:55: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.evaluation_tests/conftest.py:322: in assert_success
+    assert_exit_code(result, 0)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--color=auto', 'help'], returncode=1, stdout='', stderr='Error: The --color global parameter does not accept a value.\n')
+code = 0
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 0, got 1.
+E         stdout: ''
+E         stderr: 'Error: The --color global parameter does not accept a value.\n'
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--color=auto', 'help'], returncode=1, stdout='', stderr='Error: The --color global parameter does not accept a value.\n').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+______ TestFunctionality.test_ssh_pre_cmd_injected_before_remote_command _______
+
+self = <test_checkpoint_2.TestFunctionality object at 0x70654ec11190>
+cli = <function cli.<locals>._run at 0x70654de42480>
+write_config = <function write_config.<locals>._write at 0x70654de41b20>
+fake_ssh_env = ({'PATH': '/tmp/pytest-of-agent/pytest-0/test_ssh_pre_cmd_injected_befo0/fake_ssh_bin:/tmp/uv-cache/archive-v0/T4PKrce...usr/local/games:/usr/games'}, PosixPath('/tmp/pytest-of-agent/pytest-0/test_ssh_pre_cmd_injected_befo0/ssh_calls.log'))
+
+    @pytest.mark.functionality
+    def test_ssh_pre_cmd_injected_before_remote_command(
+        self, cli, write_config, fake_ssh_env
+    ):
+        """``APPCTL_SSH_PRE_CMD`` prefixes the remote command payload.
+    
+        Spec: "``APPCTL_SSH_PRE_CMD`` injects a shell command that runs
+        before the main remote command."
+        """
+        ssh_env, log_file = fake_ssh_env
+        write_config(
+            {"@remote": {"ssh": "ssh://user@host"}},
+            kind="global",
+        )
+    
+        result = cli(
+            ["@remote", "site", "list"],
+            env={**ssh_env, "APPCTL_SSH_PRE_CMD": "echo prepare"},
+        )
+    
+        assert_success(result)
+        calls = log_file.read_text()
+>       assert "echo prepare && appctl site list" in calls
+E       AssertionError: assert 'echo prepare && appctl site list' in '-T -q user@host echo prepare; appctl site list\n'
+
+.evaluation_tests/test_checkpoint_2.py:600: AssertionError
+--------------------------------- JSON report ----------------------------------
+report saved to: .scbench/pytest-report.json
+=========================== short test summary info ============================
+FAILED .evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error - AssertionError: Expected exit code 1, got 0.
+  stdout: "Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\n"
+  stderr: ''
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout="Success: Site 'example.test' created (type: standard, title: example.test, visibility: public).\n", stderr='').returncode
+FAILED .evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected - AssertionError: Missing 'missing --type parameter' in stderr.
+  stderr: 'Error: Parameter errors:\n --type parameter needs a value\n'
+assert 'missing --type parameter' in 'Error: Parameter errors:\n --type parameter needs a value\n'
+ +  where 'Error: Parameter errors:\n --type parameter needs a value\n' = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=1, stdout='', stderr='Error: Parameter errors:\n --type parameter needs a value\n').stderr
+FAILED .evaluation_tests/test_checkpoint_2.py::TestCore::test_config_runtime_overrides_project - AssertionError: Expected exit code 0, got 1.
+  stdout: ''
+  stderr: 'Error: The --color global parameter does not accept a value.\n'
+assert 1 == 0
+ +  where 1 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', '--color=auto', 'help'], returncode=1, stdout='', stderr='Error: The --color global parameter does not accept a value.\n').returncode
+FAILED .evaluation_tests/test_checkpoint_2.py::TestFunctionality::test_ssh_pre_cmd_injected_before_remote_command - AssertionError: assert 'echo prepare && appctl site list' in '-T -q user@host echo prepare; appctl site list\n'
+======================== 4 failed, 67 passed in 25.41s =========================

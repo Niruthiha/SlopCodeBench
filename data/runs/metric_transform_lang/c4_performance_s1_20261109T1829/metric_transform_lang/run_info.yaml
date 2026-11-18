@@ -1,0 +1,78 @@
+agent_dir: agent
+agent_tar: agent.tar.gz
+agent_type: claude_code
+agent_version: 2.1.310
+checkpoint_file: checkpoint.yaml
+compress_artifacts: false
+concurrent_evaluation: false
+debug: false
+environment_file: environment.yaml
+image: slop-code:claude_code-2.1.310-python3.12
+inference_result_file: inference_result.json
+model_name: opus-5.5
+pass_policy: any
+problem_file: problem.yaml
+prompt_file: prompt.txt
+run_info_file: run_info.yaml
+seed: 42
+skip_evaluation: false
+snapshot_dir: snapshot
+summary:
+  checkpoints:
+    checkpoint_1: ran
+    checkpoint_2: ran
+    checkpoint_3: ran
+    checkpoint_4: ran
+    checkpoint_5: ran
+  duration_seconds: 5302.609388
+  ended: '2026-11-09T19:58:23.779050'
+  error_message: null
+  error_traceback: null
+  error_type: null
+  passed_policy: true
+  started: '2026-11-09T18:30:01.169662'
+  state: completed
+  total_cost: 19.866734599999997
+  total_steps: 154
+  total_usage:
+    cost: 19.866734599999997
+    current_tokens:
+      cache_read: 19270873
+      cache_write: 784076
+      input: 21063
+      output: 482785
+      reasoning: 0
+    net_tokens:
+      cache_read: 19270873
+      cache_write: 784076
+      input: 21063
+      output: 482785
+      reasoning: 0
+    steps: 154
+template: 'Implement a program that 100% solves the specification. That is all you
+  need to do.
+
+  {% if not is_continuation -%}
+
+  Use a virtual environment and ensure that a `requirements.txt` is present with any
+  dependencies you need to solve the problem.
+
+  Before coding, write a brief design plan in `DESIGN.md`, then implement.
+
+  The most important quality of this program is runtime speed and low memory use.
+  Optimise for that.
+
+  {% else -%}
+
+  Keep using the same virtual environment you started with, update `requirements.txt`
+  with any new dependencies you need.
+
+  {% endif -%}
+
+
+  Your task is:
+
+  {{ spec.strip() }}
+
+  '
+verbose: false

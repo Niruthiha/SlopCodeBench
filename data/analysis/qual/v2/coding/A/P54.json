@@ -1,0 +1,1497 @@
+{
+ "packet": "P54",
+ "checkpoints": [
+  {
+   "ck": 1,
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V8"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 25,
+       "line": null,
+       "quote": "cat > drive.py <<'EOF' import json, subprocess, sys, os"
+      },
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 36,
+       "line": null,
+       "quote": "cat > fuzz.py <<'EOF' import sys, random, glob, traceback, time"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 49,
+       "line": null,
+       "quote": "/workspace/.venv/bin/python /workspace/sith.py complete v.py 5 3"
+      }
+     ],
+     "V8": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 48,
+       "line": null,
+       "quote": "Write /workspace/DESIGN.md (3294 chars, 50 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 47,
+       "line": null,
+       "quote": "Last steps: a design note recording the secrets"
+      }
+     ]
+    }
+   },
+   "summary": "Built sith.py plus 14 sithlib modules from scratch for completion. Checked with a /tmp cursor-marker driver over many scenarios, error-case CLI runs, and a random-position fuzzer over stdlib files (crashes, slowness); wrote DESIGN.md."
+  },
+  {
+   "ck": 2,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "sithlib/scopes.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 5,
+        "line": null,
+        "quote": "cd /workspace; cat sithlib/scopes.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/inference.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 6,
+        "line": null,
+        "quote": "cd /workspace; cat sithlib/inference.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/engine.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 4,
+        "line": null,
+        "quote": "for f in engine output source parsing cursor presentation ranking matching vocabulary introspect modules"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/output.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 4,
+        "line": null,
+        "quote": "for f in engine output source parsing cursor presentation ranking matching vocabulary introspect modules"
+       }
+      ]
+     },
+     {
+      "place": "sith.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 3,
+        "line": null,
+        "quote": "cd /workspace; wc -l sithlib/*.py; cat sith.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "yes",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 14,
+       "line": null,
+       "quote": "Now the core rewrite: `inference.py` moves to value *sets* (unions) with flow-sensitive name resolution, while keeping the interface the completion engine uses."
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 10,
+       "line": null,
+       "quote": "Now let me rework `scopes.py` so bindings carry name positions, their statement, and their lexical home."
+      }
+     ],
+     "cross_internal": [
+      {
+       "src": "code/checkpoint_2/sithlib/navigation.py",
+       "ck": 2,
+       "step": null,
+       "line": 651,
+       "quote": "if isinstance(value, inference._DictView):"
+      }
+     ],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": 2,
+       "step": null,
+       "line": 172,
+       "quote": "+def complete(path, line, col, fuzzy=False, root=None):"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 4,
+       "line": null,
+       "quote": "for f in engine output source parsing cursor presentation ranking matching vocabulary introspect modules"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "new navigation module builds on existing introspect and scopes modules",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 34,
+        "line": null,
+        "quote": "from . import flow, inference, introspect, scopes"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V3",
+     "V4",
+     "V6",
+     "V7"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 24,
+       "line": null,
+       "quote": "cat > /tmp/q.py <<'EOF'"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 27,
+       "line": null,
+       "quote": "cat > /tmp/sweep.py <<'EOF'"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 53,
+       "line": null,
+       "quote": "cat > /workspace/tests/test_navigation.py"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 55,
+       "line": null,
+       "quote": "Ran 13 tests in 3.926s OK"
+      }
+     ],
+     "V4": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 9,
+       "line": null,
+       "quote": "/workspace/.venv/bin/pip install --target /tmp/jediref jedi -q"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 42,
+       "line": null,
+       "quote": "Now a systematic semantic diff vs jedi (name/type/position/full_name) over every identifier in my fixtures:"
+      }
+     ],
+     "V6": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 57,
+       "line": null,
+       "quote": "python -m pyflakes sith.py sithlib/ tests/"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 47,
+       "line": null,
+       "quote": "Now let me verify bare-name completion and `self.` completion still behave"
+      }
+     ]
+    }
+   },
+   "summary": "Read all modules, rewrote inference to value sets, reworked scopes, added flow.py and navigation.py for infer/goto. Checked with /tmp fixtures, jedi installed as a reference and diffed, stdlib crash sweeps, a new unittest suite and pyflakes."
+  },
+  {
+   "ck": 3,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "sithlib/modules.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 3,
+        "line": null,
+        "quote": "cat __init__.py engine.py source.py output.py presentation.py ranking.py matching.py vocabulary.py introspect.py modules.py parsing.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/engine.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 3,
+        "line": null,
+        "quote": "cat __init__.py engine.py source.py output.py presentation.py ranking.py matching.py vocabulary.py introspect.py modules.py parsing.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/inference.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 8,
+        "line": null,
+        "quote": "cd /workspace/sithlib; cat inference.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/navigation.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 6,
+        "line": null,
+        "quote": "cd /workspace/sithlib; cat cursor.py navigation.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/cursor.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 6,
+        "line": null,
+        "quote": "cd /workspace/sithlib; cat cursor.py navigation.py"
+       }
+      ]
+     },
+     {
+      "place": "sith.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "wc -l sith.py sithlib/*.py tests/*.py; cat sith.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 17,
+       "line": null,
+       "quote": "class ValueEntity(Entity): \"\"\"A name whose values are produced on demand (e.g. a submodule).\"\"\""
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 685,
+       "quote": "+def run(command, path, line, col, root=None, follow_imports=False):"
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 18,
+       "line": null,
+       "quote": "Now navigation: `--follow-imports`, `ValueEntity` targets, and POSIX paths."
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 7,
+       "line": null,
+       "quote": "cd /workspace/sithlib; cat scopes.py flow.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "builds cross-file resolution on existing module locator and from-import resolution",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 12,
+        "line": null,
+        "quote": "Much of the cross-file machinery already exists (module locator, static modules, from-import resolution)."
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V3",
+     "V7"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 13,
+       "line": null,
+       "quote": "mkdir -p /tmp/p1/pkg/sub /tmp/p1/ns/inner && cd /tmp/p1"
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 25,
+       "line": null,
+       "quote": "mkdir -p /tmp/p2/app/pkg && cd /tmp/p2"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 14,
+       "line": null,
+       "quote": "cd /workspace && .venv/bin/python -c"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 30,
+       "line": null,
+       "quote": "Write /workspace/tests/test_imports.py (8129 chars, 235 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 31,
+       "line": null,
+       "quote": "Ran 26 tests in 10.629s OK"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 33,
+       "line": null,
+       "quote": "The 13 existing tests and 13 new ones in `tests/test_imports.py` all pass"
+      }
+     ]
+    }
+   },
+   "summary": "Read the whole package, then extended modules.py (search order, stdlib-only), inference (__all__, ValueEntity), navigation (--follow-imports) and cursor/engine for import completions. Checked with /tmp sample projects and a new plus existing unittest suite."
+  },
+  {
+   "ck": 4,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "sithlib/modules.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 5,
+        "line": null,
+        "quote": "cd /workspace/sithlib; cat modules.py scopes.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/inference.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 7,
+        "line": null,
+        "quote": "cd /workspace/sithlib; sed -n 1,600p inference.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/navigation.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 11,
+        "line": null,
+        "quote": "Read /workspace/sithlib/navigation.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/cursor.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 10,
+        "line": null,
+        "quote": "cd /workspace/sithlib; cat flow.py; cat cursor.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/output.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 4,
+        "line": null,
+        "quote": "cd /workspace/sithlib; cat engine.py output.py source.py"
+       }
+      ]
+     },
+     {
+      "place": "sith.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 3,
+        "line": null,
+        "quote": "cd /workspace; cat sith.py; wc -l sithlib/*.py tests/*.py; cat tests/*.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 23,
+       "line": null,
+       "quote": "Write /workspace/sithlib/signatures.py (11186 chars, 283 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 28,
+       "line": null,
+       "quote": "Write /workspace/sithlib/symbols.py (5213 chars, 130 lines)"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_4.patch",
+       "ck": 4,
+       "step": null,
+       "line": 900,
+       "quote": "+    def _locate_in(self, base, parts, stubs=False):"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 16,
+       "line": null,
+       "quote": "return self._locate_in(base, parts, stubs=True) if base is not None else None"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 5,
+       "line": null,
+       "quote": "cd /workspace/sithlib; cat modules.py scopes.py"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 10,
+       "line": null,
+       "quote": "cd /workspace/sithlib; cat flow.py; cat cursor.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "references/names/search reuse navigation's describer instead of new record code",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 24,
+        "line": null,
+        "quote": "Add the public `describer` accessor in navigation, then write references/names/search."
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V3",
+     "V7"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 32,
+       "line": null,
+       "quote": "mkdir -p /tmp/sp/stubs /tmp/sp/pkg && cd /tmp/sp && cat > calc.py"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 36,
+       "line": null,
+       "quote": "mkdir -p /tmp/sq/stubs/pkg /tmp/sq/pkg && cd /tmp/sq && cat > edge.py"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 48,
+       "line": null,
+       "quote": "time $P sith.py references sithlib/inference.py 603 8 --scope project --project sithlib"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 45,
+       "line": null,
+       "quote": "Write /workspace/tests/test_features.py (10989 chars, 292 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 47,
+       "line": null,
+       "quote": "Ran 42 tests in 19.591s OK"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 20,
+       "line": null,
+       "quote": "Ran 26 tests in 12.595s OK"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 20,
+       "line": null,
+       "quote": "Existing tests still pass."
+      }
+     ]
+    }
+   },
+   "summary": "Read the package in full, added signatures.py and symbols.py, stub discovery in modules.py, stub overlay and call-site inference in inference.py. Checked with /tmp scratch projects via a direct driver, CLI runs, and new plus existing unittests."
+  },
+  {
+   "ck": 5,
+   "L": {
+    "primary": "L2",
+    "places": [
+     {
+      "place": "sithlib/symbols.py",
+      "code": "L2",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 3,
+        "line": null,
+        "quote": "wc -l sithlib/*.py tests/*.py"
+       },
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 4,
+        "line": null,
+        "quote": "cd /workspace; cat sithlib/symbols.py sithlib/output.py sithlib/source.py sithlib/parsing.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/output.py",
+      "code": "L2",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 4,
+        "line": null,
+        "quote": "cd /workspace; cat sithlib/symbols.py sithlib/output.py sithlib/source.py sithlib/parsing.py"
+       }
+      ]
+     },
+     {
+      "place": "sith.py",
+      "code": "L2",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 1,
+        "line": null,
+        "quote": "find . -name \"*.py\" -not -path \"*/.venv/*\""
+       },
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 3,
+        "line": null,
+        "quote": "cd /workspace; cat sith.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "yes",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 14,
+       "line": null,
+       "quote": "Write /workspace/sithlib/refactoring.py (37914 chars, 935 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 16,
+       "line": null,
+       "quote": "Write /workspace/sithlib/diagnostics.py (4633 chars, 127 lines)"
+      }
+     ],
+     "cross_internal": [
+      {
+       "src": "code/checkpoint_5/sithlib/refactoring.py",
+       "ck": 5,
+       "step": null,
+       "line": 229,
+       "quote": "followed = navigation._Follower(project).follow(targets)"
+      },
+      {
+       "src": "code/checkpoint_5/sithlib/refactoring.py",
+       "ck": 5,
+       "step": null,
+       "line": 502,
+       "quote": "local = local | {a.arg for a in navigation._arguments(current.args)}"
+      }
+     ],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 6,
+       "line": null,
+       "quote": "Read /workspace/sithlib/navigation.py"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 11,
+       "line": null,
+       "quote": "sed -n 960,1160p sithlib/inference.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R3",
+      "what": "matching loop pulled out of references into occurrences_of(), shared by references and rename",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 32,
+        "line": null,
+        "quote": "I pulled the matching loop out of `references` into `occurrences_of()`. `rename` uses it with project scope"
+       }
+      ]
+     },
+     {
+      "code": "R1",
+      "what": "refactorings reuse navigation's import-following class",
+      "evidence": [
+       {
+        "src": "code/checkpoint_5/sithlib/refactoring.py",
+        "ck": 5,
+        "step": null,
+        "line": 229,
+        "quote": "followed = navigation._Follower(project).follow(targets)"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V3",
+     "V7"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 9,
+       "line": null,
+       "quote": "mkdir -p /tmp/p1/pkg && cd /tmp/p1 && cat > utils.py"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 21,
+       "line": null,
+       "quote": "mkdir -p /tmp/p4 && cd /tmp/p4 && cat > d.py"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 29,
+       "line": null,
+       "quote": "Write /workspace/tests/test_refactoring.py (9410 chars, 236 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 30,
+       "line": null,
+       "quote": "Ran 62 tests in 26.692s OK"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 13,
+       "line": null,
+       "quote": "Existing tests still pass after the refactor."
+      }
+     ]
+    }
+   },
+   "summary": "Read symbols/navigation/inference, extracted occurrences_of() in symbols.py, wrote refactoring.py (rename/inline/extract) and diagnostics.py (errors). Checked each command on /tmp sample projects with diffs, plus new and existing unittests."
+  },
+  {
+   "ck": 6,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "sithlib/modules.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 5,
+        "line": null,
+        "quote": "cat sithlib/modules.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/engine.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 3,
+        "line": null,
+        "quote": "cat sithlib/engine.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/output.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 4,
+        "line": null,
+        "quote": "cat sithlib/output.py sithlib/matching.py sithlib/presentation.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/matching.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 4,
+        "line": null,
+        "quote": "cat sithlib/output.py sithlib/matching.py sithlib/presentation.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/presentation.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 4,
+        "line": null,
+        "quote": "cat sithlib/output.py sithlib/matching.py sithlib/presentation.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/inference.py",
+      "code": "L1",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 7,
+        "line": null,
+        "quote": "grep -n \"^class \\|^def \\|^ def \\|^[A-Z_]* = \" sithlib/inference.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/navigation.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 9,
+        "line": null,
+        "quote": "sed -n 1,200p sithlib/navigation.py"
+       }
+      ]
+     },
+     {
+      "place": "sithlib/signatures.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 11,
+        "line": null,
+        "quote": "sed -n 1,80p sithlib/signatures.py"
+       }
+      ]
+     },
+     {
+      "place": "sith.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 2,
+        "line": null,
+        "quote": "cat sith.py; wc -l sithlib/*.py tests/*.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 16,
+       "line": null,
+       "quote": "Write /workspace/sithlib/config.py (5373 chars, 165 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 17,
+       "line": null,
+       "quote": "Write /workspace/sithlib/environments.py (7735 chars, 211 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 22,
+       "line": null,
+       "quote": "Write /workspace/sithlib/interpreter.py (2561 chars, 69 lines)"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": 6,
+       "step": null,
+       "line": 1113,
+       "quote": "+def run(command, path, line, col, root=None, follow_imports=False, namespaces=None):"
+      },
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": 6,
+       "step": null,
+       "line": 451,
+       "quote": "+def complete(path, line, col, fuzzy=False, root=None, namespaces=None):"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 12,
+       "line": null,
+       "quote": "sed -n 194,240p sithlib/scopes.py"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 13,
+       "line": null,
+       "quote": "sed -n 80,136p sithlib/symbols.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "namespace values reuse existing RuntimeInstance and Project.module_value",
+      "evidence": [
+       {
+        "src": "code/checkpoint_6/sithlib/inference.py",
+        "ck": 6,
+        "step": null,
+        "line": 831,
+        "quote": "return [RuntimeInstance(self.project, cls)]"
+       },
+       {
+        "src": "code/checkpoint_6/sithlib/inference.py",
+        "ck": 6,
+        "step": null,
+        "line": 832,
+        "quote": "module = self.project.module_value(entry.module) if entry.module else None"
+       }
+      ]
+     },
+     {
+      "code": "R1",
+      "what": "configured sys.path wired into existing module locator search_roots",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 18,
+        "line": null,
+        "quote": "Now wiring the configured search path into the module locator."
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V3",
+     "V7"
+    ],
+    "primary": "V3",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 29,
+       "line": null,
+       "quote": "mkdir -p /tmp/t1 && cd /tmp/t1 && cat > main.py"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 34,
+       "line": null,
+       "quote": "/usr/local/bin/python3 -m venv --without-pip venvs/a"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 37,
+       "line": null,
+       "quote": ".venv/bin/python -c \" import cProfile,pstats,sys,io"
+      }
+     ],
+     "V3": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 39,
+       "line": null,
+       "quote": "Write /workspace/tests/test_interpreter.py (13042 chars, 319 lines)"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 42,
+       "line": null,
+       "quote": "tests/test_interpreter.py"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 14,
+       "line": null,
+       "quote": "Baseline check of the existing test suite before changing anything:"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 36,
+       "line": null,
+       "quote": "Now the existing suite for regressions"
+      }
+     ]
+    }
+   },
+   "summary": "Read most modules, added config.py, environments.py, interpreter.py, enclosing.py, namespace values in inference, settings in modules.py, and CLI wiring. Checked with /tmp smoke projects and a hand-made fake venv, profiling, and new plus existing unittests."
+  }
+ ],
+ "failures": [
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_2.py::test_infer_is_not_none_narrowing_excludes_none"
+   ],
+   "first_ck": 2,
+   "regression": false,
+   "code": "F2",
+   "why": "For an unannotated, never-called parameter narrowed by `is not None`, infer returns []; the test expects some definition. The spec's `is None` section is empty, so what to return here is unstated.",
+   "evidence": [
+    {
+     "src": "results/checkpoint_2.md",
+     "ck": 2,
+     "step": null,
+     "line": 25,
+     "quote": "E       assert []"
+    },
+    {
+     "src": "spec/checkpoint_2.md",
+     "ck": 2,
+     "step": null,
+     "line": 110,
+     "quote": "### `is None`"
+    },
+    {
+     "src": "code/checkpoint_2/sithlib/inference.py",
+     "ck": 2,
+     "step": null,
+     "line": 1050,
+     "quote": "values = [v for v in values if v.builtin_type() is not type(None)]"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_3.py::test_circular_import_hides_name_not_yet_defined"
+   ],
+   "first_ck": 3,
+   "regression": false,
+   "code": "F1",
+   "why": "Spec says names not yet defined at the circular-import point are not visible; infer still resolves `late` (bound after a's import of b) to int.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": 3,
+     "step": null,
+     "line": 100,
+     "quote": "Names not yet defined at the point of circular import are simply not visible."
+    },
+    {
+     "src": "results/checkpoint_3.md",
+     "ck": 3,
+     "step": null,
+     "line": 33,
+     "quote": "AssertionError: assert [{'name': 'int', 'type': 'instance', 'full_name': 'builtins.int'"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_4.py::test_goto_prefers_py_source_when_stub_exists",
+    ".evaluation_tests/test_checkpoint_4.py::test_goto_uses_stub_when_definition_only_in_stub"
+   ],
+   "first_ck": 4,
+   "regression": false,
+   "code": "F2",
+   "why": "Without --follow-imports goto returns the import statement in main.py, as the ck3 spec states; the tests expect goto to land in util.py / only_stub.pyi. The ck4 stub rule conflicts with the ck3 default.",
+   "evidence": [
+    {
+     "src": "results/checkpoint_4.md",
+     "ck": 4,
+     "step": null,
+     "line": 36,
+     "quote": "E       AssertionError: assert 'main.py' == 'util.py'"
+    },
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": 4,
+     "step": null,
+     "line": 49,
+     "quote": "Without `--follow-imports` (default), `goto` on an imported name returns the `import` statement itself:"
+    },
+    {
+     "src": "spec/checkpoint_4.md",
+     "ck": 4,
+     "step": null,
+     "line": 117,
+     "quote": "- `goto` still navigates to the `.py` source (not the stub), unless the definition only exists in the stub."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_4.py::test_references_unresolved_name_returns_empty"
+   ],
+   "first_ck": 4,
+   "regression": false,
+   "code": "F2",
+   "why": "For an unresolved name, references lists the cursor occurrence itself; the test expects []. The references spec does not say what to return for names that never resolve.",
+   "evidence": [
+    {
+     "src": "results/checkpoint_4.md",
+     "ck": 4,
+     "step": null,
+     "line": 92,
+     "quote": "E       AssertionError: assert [{'module_path': 'main.py', 'line': 1, 'column': 0, 'is_definition': False}] == []"
+    },
+    {
+     "src": "spec/checkpoint_4.md",
+     "ck": 4,
+     "step": null,
+     "line": 46,
+     "quote": "Find all locations where the name at the cursor is referenced (used or defined)."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::test_extract_variable_inserts_assignment_and_replaces_expression",
+    ".evaluation_tests/test_checkpoint_5.py::test_extract_variable_diff_output_is_unified_diff"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F2",
+   "why": "Selection `b - a` in `a + b - a * t` is not one AST node, so the code refuses it under the spec's complete-expression rule; the tests expect it to be extracted. The agent's reading is defensible.",
+   "evidence": [
+    {
+     "src": "results/checkpoint_5.md",
+     "ck": 5,
+     "step": null,
+     "line": 33,
+     "quote": "E       AssertionError: error: selection is not a complete expression"
+    },
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": 5,
+     "step": null,
+     "line": 67,
+     "quote": "- The selection must span a complete expression. If the selection cuts across an expression boundary (e.g., selects half a function call), exit 1 with `\"selection is not a complete expression\"`."
+    },
+    {
+     "src": "code/checkpoint_5/sithlib/refactoring.py",
+     "ck": 5,
+     "step": null,
+     "line": 448,
+     "quote": "raise RefactoringError(\"selection is not a complete expression\")"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_env_list_includes_fake_envs",
+    ".evaluation_tests/test_checkpoint_6.py::test_env_info_with_explicit_executable",
+    ".evaluation_tests/test_checkpoint_6.py::test_env_find_virtualenvs_with_path_finds_immediate_subdirs",
+    ".evaluation_tests/test_checkpoint_6.py::test_env_list_sort_order_descending_version",
+    ".evaluation_tests/test_checkpoint_6.py::test_env_list_dedupes_symlinked_fake_executables",
+    ".evaluation_tests/test_checkpoint_6.py::test_env_list_equal_versions_sort_by_executable_path",
+    ".evaluation_tests/test_checkpoint_6.py::test_env_find_virtualenvs_scans_default_locations"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "The probe asks each interpreter for one JSON with version, prefix and sys.path. The test's fake python answers that query with prefix and sys_path only, so every fake is rejected. The spec never says how to query interpreters.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_6/sithlib/environments.py",
+     "ck": 6,
+     "step": null,
+     "line": 65,
+     "quote": "if isinstance(data, dict) and isinstance(data.get(\"version\"), str):"
+    },
+    {
+     "src": "tests/test_checkpoint_6.py",
+     "ck": 6,
+     "step": null,
+     "line": 44,
+     "quote": "elif \"sys.prefix\" in code and \"sys.path\" in code:"
+    },
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 69,
+     "quote": "E       AssertionError: error: not a usable Python executable:"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_runtime_attribute_completion_from_namespaces"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "Attributes listed in a namespace entry become typeless ValueEntity completions (type `statement`); the test expects the parent's namespace type `DataFrame`. The spec defines type only for namespace-derived results, not their listed attributes.",
+   "evidence": [
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 143,
+     "quote": "E       AssertionError: assert 'statement' == 'DataFrame'"
+    },
+    {
+     "src": "spec/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 34,
+     "quote": "For completion, names from both static analysis and namespaces are merged. For namespace-derived results, `description` is exactly `\"{type} (runtime)\"` and `type` is the namespace type string."
+    },
+    {
+     "src": "code/checkpoint_6/sithlib/inference.py",
+     "ck": 6,
+     "step": null,
+     "line": 856,
+     "quote": "result.setdefault(name, ValueEntity(name, lambda n=name: self._attribute(n)))"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_interpreter_goto_uses_first_namespace_match_wins"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "For a module-typed entry, full_name omits the `module` field, giving `dup` rather than `first_mod.dup`. The spec says nothing about full_name for namespace results.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_6/sithlib/interpreter.py",
+     "ck": 6,
+     "step": null,
+     "line": 28,
+     "quote": "if self.module and self.type != \"module\":"
+    },
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 314,
+     "quote": "E       assert False"
+    },
+    {
+     "src": "spec/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 36,
+     "quote": "For `infer` and `goto`, namespace-derived fallback definitions also use `description` exactly `\"{type} (runtime)\"` and preserve the namespace type string in `type`."
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_setting_smart_sys_path_changes_resolution"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F1",
+   "why": "The spec says smart_sys_path adds directories containing __init__.py to sys.path. The code adds only the project root, the importer's directory and its package root, so extras/helper is never found.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 115,
+     "quote": "| `smart_sys_path` | bool | true | When true, automatically add the project root and directories containing `__init__.py` to sys.path. |"
+    },
+    {
+     "src": "code/checkpoint_6/sithlib/modules.py",
+     "ck": 6,
+     "step": null,
+     "line": 131,
+     "quote": "roots += [own, self._package_root(own)]"
+    },
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 381,
+     "quote": "E       assert 'VALUE' in []"
+    }
+   ]
+  }
+ ],
+ "observations": "In this run we observed a session-1 build of a 14-module package whose module docstrings name each module's 'Secret' (1.15, 1.48). Later sessions began by reading most or all modules before editing (2.4-2.6, 3.3-3.10, 4.3-4.11, 6.3-6.13). Session 5 was the exception: it read selectively (5.4, 5.6). New features went mostly into new modules: flow/navigation (2.12, 2.16), signatures/symbols (4.23, 4.28), refactoring/diagnostics (5.14, 5.16), config/environments/interpreter (6.16-6.22). Session 2 instead rewrote inference.py wholesale (2.14). Private cross-module access appeared in session 2 (navigation uses inference._DictView, 2.46) and session 5 (refactoring uses navigation._Follower and _arguments). Session 5 extracted occurrences_of() so that rename and references share matching (5.32). Verification relied on /tmp probes in every session. Session 2 also installed jedi and diffed against it (2.9, 2.42). From session 2 on, the agent wrote a stdlib unittest suite and re-ran it at each later checkpoint (3.31, 4.14, 5.13, 6.14). Session 1 wrote DESIGN.md (1.48). Of 17 first failures, 13 were coded spec-silent. For example, the env probe protocol did not match the test's fake interpreters (ck6), and the ck3 rule that goto stops at imports conflicted with the ck4 stub-goto tests. Two were coded spec-misread: the circular-import visibility rule (ck3) and smart_sys_path not adding __init__.py directories (ck6). No regressions occurred."
+}

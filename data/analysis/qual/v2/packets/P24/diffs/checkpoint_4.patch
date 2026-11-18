@@ -1,0 +1,1199 @@
+### appctl_core/app.py (modified)
+--- appctl_core/app.py
++++ appctl_core/app.py
+@@ -8,10 +8,11 @@
+ import os
+ import time
+ 
+-from . import (aliases, binding, catalog, config_files, dispatch, help_text,
+-               logfile, remote, rewrites, runtime_config, tokens, values)
++from . import (aliases, binding, catalog, config_files, dispatch, file_cache,
++               help_text, logfile, process, remote, rewrites, runtime_config,
++               tokens, values)
+ from .command_tree import CommandTree
+-from .errors import CliError, MissingPositional
++from .errors import CliError, Halt, MissingPositional
+ from .output import Output, color_enabled
+ 
+ _COMPLETION = ["cli", "completion"]
+@@ -20,12 +21,32 @@
+ class CommandContext:
+     """Everything a command handler may use."""
+ 
+-    def __init__(self, command, args, out, config, tree):
++    def __init__(self, command, args, out, config, tree, cwd=None, cache=None,
++                 launcher=None):
+         self.command = command
+         self.args = args
+         self.out = out
+         self.config = config
+         self.tree = tree
++        self.cwd = cwd if cwd is not None else os.getcwd()
++        self.cache = cache
++        self.launcher = launcher
++
++    def run_process(self, command, **kwargs):
++        """Run an external command (see ``process.run``)."""
++        kwargs.setdefault("out", self.out)
++        kwargs.setdefault("cwd", self.cwd)
++        return process.run(command, **kwargs)
++
++    def launch_self(self, command, *args, **kwargs):
++        """Re-dispatch an appctl command in a child process (see
++        ``process.Launcher.launch_self``)."""
++        return self.launcher.launch_self(command, *args, **kwargs)
++
++    def runcommand(self, command, **kwargs):
++        """Run an appctl command in a child process and return its output
++        (see ``process.Launcher.runcommand``)."""
++        return self.launcher.runcommand(command, **kwargs)
+ 
+     def read_value(self, index):
+         """Positional ``index``, or STDIN when it was not given, decoded
+@@ -109,9 +130,22 @@
+                       color=self._color(runtime_values.get("color", "auto")))
+         for warning in self.runtime.warnings:
+             out.warning(warning)
++        self.cache = file_cache.from_env(self.env, self.locations.root_dir,
++                                         warn=out.warning)
++        try:
++            return self.load_and_execute(alias)
++        finally:
++            if not _is_completion(self.argv):
++                try:
++                    self.cache.clean()
++                except OSError:
++                    pass
++
++    def load_and_execute(self, alias):
++        out = self.out
+         try:
+             self.loaded = config_files.load(self.locations, self.cwd)
+-            if "color" not in runtime_values:
++            if "color" not in self.runtime.values:
+                 out.configure(color=self._color(self.loaded.values.get("color", "auto")))
+             self.registry = aliases.AliasRegistry(
+                 self.loaded.aliases, aliases.runtime_aliases(self.env))
+@@ -120,6 +154,8 @@
+             return self.execute(alias, ())
+         except CliError as exc:
+             out.report(exc)
++            return exc.exit_code
++        except Halt as exc:
+             return exc.exit_code
+ 
+     def execute(self, alias, stack):
+@@ -172,7 +208,12 @@
+             remaining = self.stdin_fallback(node.synopsis, remaining, options)
+             bound = binding.bind(node.path, node.synopsis, node.defaults(),
+                                  remaining, options)
+-            result = node.run(CommandContext(node, bound, out, config, tree))
++            launcher = process.Launcher(
++                self.runtime.values, self.env, self.cwd, out,
++                config_path=self.locations.global_config_path)
++            result = node.run(CommandContext(node, bound, out, config, tree,
++                                             cwd=self.cwd, cache=self.cache,
++                                             launcher=launcher))
+             return int(result or 0)
+         except MissingPositional:
+             out.usage(help_text.usage_line(node))
+
+### appctl_core/catalog.py (modified)
+--- appctl_core/catalog.py
++++ appctl_core/catalog.py
+@@ -5,10 +5,12 @@
+ """
+ 
+ import json
++import os
+ import secrets
+ import shlex
+ 
+-from . import config_spec, dispatch, formatter, help_text, messages, yaml_lite
++from . import (config_spec, dispatch, extractor, formatter, help_text, messages,
++               yaml_lite)
+ from .errors import CliError
+ from .suggest import suggest
+ 
+@@ -227,6 +229,16 @@
+     return 0
+ 
+ 
++def _cli_update(ctx):
++    archive = os.path.join(ctx.cwd, os.path.expanduser(ctx.args.option("archive")))
++    extractor.validate(archive)
++    destination = ctx.args.option("path") or ctx.config.path() or ctx.cwd
++    destination = os.path.join(ctx.cwd, os.path.expanduser(str(destination)))
++    extractor.extract(archive, destination, ctx.out)
++    ctx.out.success(messages.archive_extracted(archive, destination))
++    return 0
++
++
+ # --- config ---------------------------------------------------------------
+ 
+ def _config_get(ctx):
+@@ -512,6 +524,9 @@
+       defaults={"format": "list"})
+     r("cli param-dump", _cli_param_dump, synopsis="[--with-values] [--format=<format>]",
+       description="Dumps the list of global parameters.", defaults={"format": "json"})
++    r("cli update", _cli_update, synopsis="--archive=<archive-path> [--path=<path>]",
++      description="Extracts a .zip or .tar.gz archive into a directory "
++                  "(the current directory by default).")
+     r("cli version", _cli_version, description="Prints appctl version.")
+ 
+     r("config", alias="cfg", description="Generates and reads the configuration file.")
+
+### appctl_core/errors.py (modified)
+--- appctl_core/errors.py
++++ appctl_core/errors.py
+@@ -27,3 +27,12 @@
+ class MissingPositional(Exception):
+     """Raised when a command did not receive all of its required positional
+     arguments; the caller is expected to show that command's usage."""
++
++
++class Halt(Exception):
++    """Stops the invocation with ``exit_code`` without reporting anything
++    (the cause has already been shown, e.g. by a child process)."""
++
++    def __init__(self, exit_code):
++        super().__init__(exit_code)
++        self.exit_code = exit_code
+
+### appctl_core/extractor.py (created)
+--- appctl_core/extractor.py
++++ appctl_core/extractor.py
+@@ -0,0 +1,159 @@
++"""Archive extraction.
++
++Secret: which archive types are recognised, which runtime facilities are
++used to unpack them (and the fallback when the built-in tar.gz support
++fails), and how unpacked files are merged into an existing directory.
++"""
++
++import os
++import shutil
++import tempfile
++
++from . import messages as _messages
++from . import process
++from .errors import CliError
++
++_ZIP = ".zip"
++_TAR_GZ = ".tar.gz"
++
++
++def archive_type(path):
++    """``"zip"``, ``"tar.gz"`` or ``None`` for an unsupported file name."""
++    name = str(path).lower()
++    if name.endswith(_TAR_GZ):
++        return "tar.gz"
++    if name.endswith(_ZIP):
++        return "zip"
++    return None
++
++
++def validate(archive):
++    """Raise ``CliError`` unless ``archive`` is an existing supported archive."""
++    if archive_type(archive) is None:
++        raise CliError(_messages.unsupported_archive())
++    if not os.path.isfile(archive):
++        raise CliError(_messages.archive_not_found(archive))
++
++
++def _reason(exc):
++    return getattr(exc, "strerror", None) or str(exc) or type(exc).__name__
++
++
++def _unpack_zip(archive, target):
++    try:
++        import zipfile
++    except ImportError:
++        raise CliError(_messages.zip_unavailable()) from None
++    try:
++        with zipfile.ZipFile(archive) as bundle:
++            bundle.extractall(target)
++    except (zipfile.BadZipFile, OSError, RuntimeError, ValueError,
++            NotImplementedError, EOFError) as exc:
++        raise CliError(_messages.archive_extraction_failed(archive, _reason(exc))) from None
++
++
++def _unpack_tar_gz(archive, target, out):
++    try:
++        import tarfile
++    except ImportError:
++        tarfile = None
++    if tarfile is not None:
++        try:
++            with tarfile.open(archive, "r:gz") as bundle:
++                if hasattr(tarfile, "data_filter"):
++                    bundle.extractall(target, filter="data")
++                else:
++                    bundle.extractall(target)
++            return
++        except (tarfile.TarError, OSError, EOFError, ValueError) as exc:
++            reason = _reason(exc)
++    else:
++        reason = "tarfile is not available"
++    out.warning(_messages.tarfile_fallback(reason))
++    _reset(target)
++    tar = shutil.which("tar")
++    if tar is None:
++        raise CliError(_messages.tar_unavailable())
++    result = process.run([tar, "xzf", archive, "-C", target], out=out)
++    if not result.succeeded:
++        lines = result.stderr.strip().splitlines()
++        raise CliError(_messages.archive_extraction_failed(
++            archive, lines[0] if lines else f"tar exited with code {result.return_code}"))
++
++
++def _reset(directory):
++    shutil.rmtree(directory, ignore_errors=True)
++    os.makedirs(directory, exist_ok=True)
++
++
++def _writable(path):
++    return os.access(path, os.W_OK)
++
++
++def _copy_file(source, dest):
++    if os.path.islink(source):
++        os.symlink(os.readlink(source), dest)
++    else:
++        shutil.copyfile(source, dest)
++        shutil.copymode(source, dest)
++
++
++def copy_overwrite_files(source, dest, out):
++    """Copy the tree below ``source`` into ``dest``, overwriting writable
++    files. Every file that cannot be copied is reported as a warning; once
++    all files have been processed a ``CliError`` is raised if any failed."""
++    failed = []
++
++    def walk(directory, relative):
++        try:
++            names = sorted(os.listdir(directory))
++        except OSError:
++            return
++        for name in names:
++            src = os.path.join(directory, name)
++            rel = f"{relative}/{name}" if relative else name
++            dst = os.path.join(dest, *rel.split("/"))
++            if os.path.isdir(src) and not os.path.islink(src):
++                if not os.path.isdir(dst):
++                    try:
++                        os.makedirs(dst)
++                    except OSError:
++                        failed.append(rel)
++                        out.warning(_messages.unable_to_copy(rel))
++                        continue
++                walk(src, rel)
++                continue
++            exists = os.path.lexists(dst)
++            try:
++                if exists and (os.path.isdir(dst) or not _writable(dst)):
++                    raise PermissionError(rel)
++                if exists and os.path.islink(dst) != os.path.islink(src):
++                    os.unlink(dst)
++                elif exists and os.path.islink(src):
++                    os.unlink(dst)
++                _copy_file(src, dst)
++            except OSError:
++                failed.append(rel)
++                out.warning(_messages.unable_to_copy(rel))
++
++    os.makedirs(dest, exist_ok=True)
++    walk(source, "")
++    if failed:
++        raise CliError(_messages.overwrite_failed())
++
++
++def extract(archive, dest, out):
++    """Extract a ``.zip`` or ``.tar.gz`` ``archive`` into directory ``dest``."""
++    kind = archive_type(archive)
++    if kind is None:
++        raise CliError(_messages.unsupported_archive())
++    validate(archive)
++    staging = tempfile.mkdtemp(prefix="appctl-extract-")
++    try:
++        if kind == "zip":
++            _unpack_zip(archive, staging)
++        else:
++            _unpack_tar_gz(archive, staging, out)
++        copy_overwrite_files(staging, dest, out)
++    finally:
++        shutil.rmtree(staging, ignore_errors=True)
+
+### appctl_core/file_cache.py (created)
+--- appctl_core/file_cache.py
++++ appctl_core/file_cache.py
+@@ -0,0 +1,310 @@
++"""Filesystem cache for downloads and intermediate data.
++
++Secret: where the cache directory lives, the default time-to-live and size
++limit (and the environment variables overriding them), how keys are mapped
++to file names, which entries count as expired, and the order in which
++entries are evicted when the cache grows too large.
++"""
++
++import hashlib
++import os
++import re
++import shutil
++import time
++from urllib.parse import urlsplit
++
++from . import messages as _messages
++
++_DIR_ENV = "APPCTL_CACHE_DIR"
++_TTL_ENV = "APPCTL_CACHE_EXPIRY"
++_SIZE_ENV = "APPCTL_CACHE_MAX_SIZE"
++_DEFAULT_SUBDIR = ".cache"
++DEFAULT_TTL = 15552000          # 180 days
++DEFAULT_MAX_SIZE = 314572800    # 300 MiB
++_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
++_MAX_PART = 200
++_HASH_LENGTH = 12
++
++
++def cache_dir(env, root_dir):
++    """``APPCTL_CACHE_DIR`` when set, otherwise ``<root_dir>/.cache/``."""
++    configured = env.get(_DIR_ENV) or ""
++    if configured:
++        return os.path.expanduser(configured)
++    return os.path.join(root_dir, _DEFAULT_SUBDIR) + os.sep
++
++
++def _int_env(env, name, default):
++    try:
++        value = int(str(env.get(name, "")).strip())
++    except ValueError:
++        return default
++    return value if value >= 0 else default
++
++
++def from_env(env, root_dir, warn=None):
++    """The cache configured by ``env`` (TTL and size may be overridden)."""
++    return FileCache(cache_dir(env, root_dir),
++                     ttl=_int_env(env, _TTL_ENV, DEFAULT_TTL),
++                     max_size=_int_env(env, _SIZE_ENV, DEFAULT_MAX_SIZE),
++                     warn=warn)
++
++
++def _digest(text):
++    return hashlib.sha1(text.encode("utf-8", "surrogatepass")).hexdigest()[:_HASH_LENGTH]
++
++
++def _safe_part(part):
++    """A filesystem-safe name for one key segment. Segments that are already
++    safe are kept as they are; any other segment gets a digest of its
++    original text appended so that distinct segments stay distinct."""
++    cleaned = _UNSAFE.sub("-", part)
++    if cleaned == part and part not in ("", ".", "..") and len(part) <= _MAX_PART:
++        return part
++    cleaned = cleaned.strip(".")[:_MAX_PART] or "-"
++    return f"{cleaned}~{_digest(part)}"
++
++
++def sanitize_key(key):
++    """Deterministic, filesystem-safe relative path for cache ``key``.
++
++    URLs map to ``misc/<scheme>-<host>[-<port>]/<path>[-<query>]``; other keys
++    are split into directories on ``/`` and ``\\``.
++    """
++    key = str(key)
++    url = urlsplit(key) if "://" in key else None
++    if url is not None and url.scheme and url.netloc:
++        host = f"{url.scheme}-{url.hostname or url.netloc}"
++        if url.port:
++            host += f"-{url.port}"
++        tail = url.path.lstrip("/") + (f"-{url.query}" if url.query else "")
++        parts = ["misc", host, tail or "-"]
++    else:
++        parts = [p for p in key.replace("\\", "/").split("/") if p != ""]
++        if not parts:
++            parts = [key]
++    return "/".join(_safe_part(p) for p in parts)
++
++
++class FileCache:
++    """Key/value store backed by files below a root directory.
++
++    An entry expires ``ttl`` seconds after it was last written (0 disables
++    expiry). ``clean`` removes expired entries and then evicts the least
++    recently used ones until the total size is at most ``max_size`` (0
++    disables the limit).
++    """
++
++    def __init__(self, root, ttl=DEFAULT_TTL, max_size=DEFAULT_MAX_SIZE, warn=None):
++        self.root = str(root)
++        self.ttl = int(ttl)
++        self.max_size = int(max_size)
++        self._warn = warn
++        self.enabled = self._ensure_dir(self.root)
++
++    # --- helpers ----------------------------------------------------------
++
++    def _warning(self, text):
++        if self._warn is not None:
++            self._warn(text)
++
++    def _ensure_dir(self, directory, report=True):
++        if os.path.isdir(directory):
++            return True
++        try:
++            os.makedirs(directory, exist_ok=True)
++        except OSError as exc:
++            if report:
++                self._warning(_messages.directory_uncreatable(directory, exc))
++            return False
++        return True
++
++    def is_enabled(self):
++        return self.enabled
++
++    def get_root(self):
++        return self.root
++
++    def filename(self, key):
++        return os.path.join(self.root, *sanitize_key(key).split("/"))
++
++    def _expired(self, mtime, ttl, now):
++        return ttl > 0 and now - mtime > ttl
++
++    def _effective_ttl(self, ttl):
++        return self.ttl if ttl is None else int(ttl)
++
++    def _entries(self):
++        """``(path, size, recency)`` for every file, in a stable order."""
++        found = []
++        for directory, dirs, files in os.walk(self.root):
++            dirs.sort()
++            for name in sorted(files):
++                path = os.path.join(directory, name)
++                try:
++                    info = os.lstat(path)
++                except OSError:
++                    continue
++                found.append((path, info.st_size, info.st_mtime,
++                              max(info.st_atime, info.st_mtime)))
++        return found
++
++    def _unlink(self, path):
++        try:
++            os.unlink(path)
++            return True
++        except OSError:
++            return False
++
++    def _prune_empty_dirs(self):
++        for directory, _, _ in sorted(os.walk(self.root), reverse=True):
++            if os.path.normpath(directory) == os.path.normpath(self.root):
++                continue
++            try:
++                os.rmdir(directory)
++            except OSError:
++                pass
++
++    # --- reading ----------------------------------------------------------
++
++    def has(self, key, ttl=None):
++        """The entry's file name when it exists and has not expired, else
++        ``False``. An expired entry is deleted."""
++        if not self.enabled:
++            return False
++        path = self.filename(key)
++        try:
++            mtime = os.stat(path).st_mtime
++        except OSError:
++            return False
++        if not os.path.isfile(path):
++            return False
++        if self._expired(mtime, self._effective_ttl(ttl), time.time()):
++            self._unlink(path)
++            return False
++        return path
++
++    def read(self, key, ttl=None, binary=False):
++        """Cached content for ``key``, or ``False`` on a cache miss."""
++        path = self.has(key, ttl)
++        if not path:
++            return False
++        try:
++            with open(path, "rb") as handle:
++                data = handle.read()
++            mtime = os.stat(path).st_mtime
++            os.utime(path, (time.time(), mtime))   # mark as recently used
++        except OSError:
++            return False
++        if binary:
++            return data
++        return data.decode("utf-8", errors="surrogateescape")
++
++    def export(self, key, target, ttl=None):
++        """Copy the cached entry to ``target``; ``False`` on a cache miss."""
++        path = self.has(key, ttl)
++        if not path:
++            return False
++        try:
++            directory = os.path.dirname(os.path.abspath(target))
++            os.makedirs(directory, exist_ok=True)
++            shutil.copyfile(path, target)
++            mtime = os.stat(path).st_mtime
++            os.utime(path, (time.time(), mtime))
++        except OSError:
++            return False
++        return True
++
++    # --- writing ----------------------------------------------------------
++
++    def is_writable(self, key):
++        if not self.enabled:
++            return False
++        path = self.filename(key)
++        if os.path.exists(path):
++            return os.path.isfile(path) and os.access(path, os.W_OK)
++        directory = os.path.dirname(path)
++        while not os.path.exists(directory):
++            directory = os.path.dirname(directory)
++        return os.path.isdir(directory) and os.access(directory, os.W_OK)
++
++    def _prepare(self, key):
++        if not self.enabled:
++            return None
++        path = self.filename(key)
++        if not self._ensure_dir(os.path.dirname(path)):
++            return None
++        return path
++
++    def _touch(self, path):
++        now = time.time()
++        os.utime(path, (now, now))
++
++    def write(self, key, contents):
++        """Store ``contents`` (text or bytes) under ``key``; return success."""
++        path = self._prepare(key)
++        if path is None:
++            return False
++        data = contents if isinstance(contents, bytes) else str(contents).encode(
++            "utf-8", errors="surrogateescape")
++        try:
++            with open(path, "wb") as handle:
++                handle.write(data)
++            self._touch(path)
++        except OSError:
++            return False
++        return True
++
++    def import_file(self, key, source):
++        """Store a copy of the file ``source`` under ``key``; return success."""
++        path = self._prepare(key)
++        if path is None or not os.path.isfile(source):
++            return False
++        try:
++            shutil.copyfile(source, path)
++            self._touch(path)
++        except OSError:
++            return False
++        return True
++
++    def remove(self, key):
++        if not self.enabled:
++            return False
++        path = self.filename(key)
++        return os.path.isfile(path) and self._unlink(path)
++
++    # --- maintenance --------------------------------------------------------
++
++    def clean(self, now=None):
++        """Delete expired entries, then evict least recently used entries
++        (ties broken by path) until the cache fits within ``max_size``."""
++        if not self.enabled or not os.path.isdir(self.root):
++            return False
++        now = time.time() if now is None else now
++        kept = []
++        for path, size, mtime, recency in self._entries():
++            if self._expired(mtime, self.ttl, now):
++                self._unlink(path)
++            else:
++                kept.append((path, size, recency))
++        if self.max_size > 0:
++            total = 0
++            for path, size, _ in sorted(kept, key=lambda e: (-e[2], e[0])):
++                if total + size <= self.max_size:
++                    total += size
++                else:
++                    self._unlink(path)
++        self._prune_empty_dirs()
++        return True
++
++    def clear(self):
++        """Delete every entry."""
++        if not self.enabled or not os.path.isdir(self.root):
++            return False
++        for path, _, _, _ in self._entries():
++            self._unlink(path)
++        self._prune_empty_dirs()
++        return True
++
++    def size(self):
++        return sum(size for _, size, _, _ in self._entries()) if self.enabled else 0
+
+### appctl_core/messages.py (modified)
+--- appctl_core/messages.py
++++ appctl_core/messages.py
+@@ -130,3 +130,48 @@
+ 
+ def invalid_format(fmt, supported):
+     return f"Invalid format: {fmt}. Supported formats: " + ", ".join(supported)
++
++
++def directory_uncreatable(path, exc):
++    return f"Failed to create directory '{path}': {_reason(exc)}."
++
++
++def spawned_exit_minus_one():
++    return ("Spawned process returned exit code -1, which could be caused by the "
++            "signal handling configuration (e.g. SIGCHLD being ignored).")
++
++
++def unsupported_archive():
++    return "Extraction only supported for '.zip' and '.tar.gz' file types."
++
++
++def archive_not_found(path):
++    return f"Archive '{path}' does not exist."
++
++
++def zip_unavailable():
++    return "Extracting a zip file requires a zip archive extension (zipfile)."
++
++
++def tar_unavailable():
++    return "Extracting a tar.gz file requires tar.gz support (tarfile or 'tar')."
++
++
++def archive_extraction_failed(path, reason):
++    return f"Failed to extract '{path}': {reason}"
++
++
++def tarfile_fallback(reason):
++    return f"tarfile extraction failed, falling back to 'tar xz' ({reason})."
++
++
++def unable_to_copy(relative):
++    return f"Unable to copy '{relative}' to current directory."
++
++
++def overwrite_failed():
++    return "There was an error overwriting existing files."
++
++
++def archive_extracted(archive, destination):
++    return f"Extracted '{archive}' to '{destination}'."
+
+### appctl_core/output.py (modified)
+--- appctl_core/output.py
++++ appctl_core/output.py
+@@ -102,6 +102,10 @@
+     def line(self, text=""):
+         """Command result data; always shown, never logged."""
+         self._write(self._stdout, text)
++
++    def write_stderr(self, text):
++        """Raw text for STDERR (e.g. relayed from a child process)."""
++        self._write(self._stderr, text)
+ 
+     def usage(self, text):
+         """Help and usage text; always shown."""
+
+### appctl_core/process.py (created)
+--- appctl_core/process.py
++++ appctl_core/process.py
+@@ -0,0 +1,228 @@
++"""External command execution.
++
++Secret: how child processes are spawned, timed and logged, how sensitive
++substrings are hidden from debug output, the wording of the exit code -1
++warning, and how appctl re-invokes itself with the current runtime
++configuration.
++"""
++
++import json
++import os
++import shlex
++import subprocess
++import sys
++import time
++
++from . import messages as _messages
++from .errors import Halt
++from .output import Output
++
++_GROUP = "process"
++_MASK = "******"
++_SIGNAL_EXIT = -1
++_ENTRY_POINT = os.path.join(
++    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "appctl.py")
++# Environment variables describing the runtime that a child appctl inherits.
++_CONFIG_PATH_ENV = "APPCTL_CONFIG_PATH"
++
++
++class ProcessRun:
++    """Outcome of one external command."""
++
++    def __init__(self, command, stdout, stderr, return_code, run_time, cwd=None, env=None):
++        self.command = command
++        self.stdout = stdout
++        self.stderr = stderr
++        self.return_code = return_code
++        self.run_time = run_time
++        self.cwd = cwd
++        self.env = env
++
++    @property
++    def succeeded(self):
++        return self.return_code == 0
++
++    def __repr__(self):
++        return (f"ProcessRun(command={self.command!r}, return_code={self.return_code}, "
++                f"run_time={self.run_time:.3f})")
++
++
++def _default_output():
++    return Output(sys.stdout, sys.stderr)
++
++
++def command_text(command):
++    """The command as a single shell-style string."""
++    if isinstance(command, (list, tuple)):
++        return shlex.join(str(part) for part in command)
++    return str(command)
++
++
++def obfuscate(text, secrets):
++    """Replace every listed substring of ``text`` with ``******``."""
++    text = str(text)
++    for secret in sorted({str(s) for s in secrets or () if s not in (None, "")},
++                         key=len, reverse=True):
++        text = text.replace(secret, _MASK)
++    return text
++
++
++def _decode(data):
++    if data is None:
++        return ""
++    if isinstance(data, bytes):
++        return data.decode(errors="replace")
++    return data
++
++
++def run(command, *, cwd=None, env=None, out=None, obfuscate_list=(), stdin=None):
++    """Run ``command`` and return a ``ProcessRun``.
++
++    ``command`` is either a shell command string or an argument list. The
++    command is logged at debug level before it runs (with every substring in
++    ``obfuscate_list`` masked); afterwards non-empty STDOUT and STDERR and the
++    return code are logged. The returned result always holds the real values.
++    """
++    out = out or _default_output()
++    text = command_text(command)
++
++    def debug(message):
++        out.debug(obfuscate(message, obfuscate_list), group=_GROUP)
++
++    debug(f"Running command: {text}")
++    started = time.monotonic()
++    try:
++        proc = subprocess.run(
++            command, shell=isinstance(command, str), cwd=cwd,
++            env=dict(env) if env is not None else None,
++            input=stdin.encode() if isinstance(stdin, str) else stdin,
++            stdin=None if stdin is not None else subprocess.DEVNULL,
++            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
++        stdout, stderr, code = _decode(proc.stdout), _decode(proc.stderr), proc.returncode
++    except OSError as exc:
++        stdout, stderr, code = "", f"{getattr(exc, 'strerror', None) or exc}\n", 127
++    result = ProcessRun(text, stdout, stderr, code, time.monotonic() - started,
++                        cwd=cwd, env=env)
++    if stdout:
++        debug(f"STDOUT: {stdout.rstrip(chr(10))}")
++    if stderr:
++        debug(f"STDERR: {stderr.rstrip(chr(10))}")
++    debug(f"Return code: {code}")
++    if code == _SIGNAL_EXIT:
++        out.warning(_messages.spawned_exit_minus_one())
++    return result
++
++
++def run_check(command, **kwargs):
++    """Run ``command`` and return whether it exited successfully."""
++    return run(command, **kwargs).succeeded
++
++
++# --- re-dispatching appctl -------------------------------------------------
++
++def _flag(name, value):
++    if value is True:
++        return f"--{name}"
++    if value is False:
++        return f"--no-{name}" if name == "color" else None
++    if value is None:
++        return None
++    return f"--{name}={value}"
++
++
++def runtime_flags(runtime_values):
++    """Global flags reproducing ``runtime_values`` on a command line."""
++    flags = []
++    for name, value in runtime_values.items():
++        flag = _flag(name, value)
++        if flag is not None:
++            flags.append(flag)
++    return flags
++
++
++def _args_list(command):
++    if isinstance(command, str):
++        return shlex.split(command)
++    return [str(part) for part in command]
++
++
++def _assoc_flags(assoc_args):
++    flags = []
++    for key, value in (assoc_args or {}).items():
++        flag = _flag(key, value)
++        if flag is not None:
++            flags.append(flag)
++    return flags
++
++
++class Launcher:
++    """Runs appctl as a child process with the current runtime configuration:
++    the same interpreter and entry point, the same global flags, config file
++    path, environment and working directory."""
++
++    def __init__(self, runtime_values, env, cwd, out, config_path=None):
++        self.runtime_values = dict(runtime_values or {})
++        self.env = dict(env or {})
++        self.cwd = cwd
++        self.out = out or _default_output()
++        self.config_path = config_path
++
++    def argv(self, command, args=(), assoc_args=None, runtime_args=None):
++        values = dict(self.runtime_values)
++        values.update(runtime_args or {})
++        return ([sys.executable, _ENTRY_POINT] + runtime_flags(values)
++                + _args_list(command) + [str(a) for a in args]
++                + _assoc_flags(assoc_args))
++
++    def environment(self):
++        env = dict(self.env)
++        if self.config_path and not env.get(_CONFIG_PATH_ENV):
++            env[_CONFIG_PATH_ENV] = self.config_path
++        return env
++
++    def launch(self, command, args=(), assoc_args=None, *, runtime_args=None,
++               obfuscate_list=(), stdin=None):
++        """Run appctl ``command`` and return the ``ProcessRun``."""
++        return run(self.argv(command, args, assoc_args, runtime_args),
++                   cwd=self.cwd, env=self.environment(), out=self.out,
++                   obfuscate_list=obfuscate_list, stdin=stdin)
++
++    def launch_self(self, command, args=(), assoc_args=None, *, exit_on_error=True,
++                    return_detailed=False, runtime_args=None, obfuscate_list=()):
++        """Run appctl ``command``; return the ``ProcessRun`` when
++        ``return_detailed`` or else its return code. A failure halts the
++        current invocation with the same code when ``exit_on_error``."""
++        result = self.launch(command, args, assoc_args, runtime_args=runtime_args,
++                             obfuscate_list=obfuscate_list)
++        if return_detailed:
++            return result
++        if result.return_code and exit_on_error:
++            raise Halt(result.return_code)
++        return result.return_code
++
++    def runcommand(self, command, *, return_="stdout", parse=None, exit_error=True,
++                   obfuscate_list=(), stdin=None):
++        """Run appctl ``command`` and return part of its outcome.
++
++        ``return_`` is ``"stdout"``, ``"stderr"``, ``"return_code"`` or
++        ``"all"``; with ``parse="json"`` STDOUT is decoded as JSON (``None``
++        when it is not valid JSON).
++        """
++        result = self.launch(command, obfuscate_list=obfuscate_list, stdin=stdin)
++        if result.return_code and exit_error:
++            if result.stderr:
++                self.out.write_stderr(result.stderr)
++            raise Halt(result.return_code)
++        if return_ == "all":
++            return result
++        if return_ == "return_code":
++            return result.return_code
++        if return_ == "stderr":
++            return result.stderr.rstrip("\r\n")
++        stdout = result.stdout.rstrip("\r\n")
++        if parse == "json":
++            try:
++                return json.loads(stdout)
++            except ValueError:
++                return None
++        return stdout
+
+### tests/test_services.py (created)
+--- tests/test_services.py
++++ tests/test_services.py
+@@ -0,0 +1,252 @@
++import io
++import json
++import os
++import sys
++import tarfile
++import time
++import zipfile
++
++import pytest
++
++from appctl_core import file_cache, process
++from appctl_core.app import run
++from appctl_core.output import Output
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
++
++
++def call(tmp_path, *argv, env=None):
++    out, err = io.StringIO(), io.StringIO()
++    full_env = {"APPCTL_ROOT_DIR": str(tmp_path / "root"), "PATH": os.environ.get("PATH", "")}
++    full_env.update(env or {})
++    code = run(list(argv), full_env, out, err, cwd=str(tmp_path), stdin=io.StringIO(""))
++    return code, out.getvalue(), err.getvalue()
++
++
++def debug_output():
++    err = io.StringIO()
++    return Output(io.StringIO(), err, debug=True), err
++
++
++# --- process execution ---------------------------------------------------------
++
++def test_run_exposes_outputs_code_and_runtime():
++    out, err = debug_output()
++    result = process.run(["sh", "-c", "echo out; echo problem >&2; exit 3"], out=out)
++    assert (result.stdout, result.stderr, result.return_code) == ("out\n", "problem\n", 3)
++    assert result.run_time >= 0
++    lines = err.getvalue().splitlines()
++    assert lines[0].startswith("Debug (process): Running command: sh -c ")
++    assert lines[1].startswith("Debug (process): STDOUT: out")
++    assert lines[2].startswith("Debug (process): STDERR: problem")
++    assert lines[3].startswith("Debug (process): Return code: 3")
++
++
++def test_empty_outputs_are_not_logged():
++    out, err = debug_output()
++    process.run("true", out=out)
++    assert "STDOUT" not in err.getvalue() and "STDERR" not in err.getvalue()
++
++
++def test_run_check_and_logging():
++    out, err = debug_output()
++    assert process.run_check("true", out=out) is True
++    assert process.run_check(["false"], out=out) is False
++    assert "Running command: false" in err.getvalue()
++
++
++def test_obfuscation_hides_secret_in_debug_only():
++    out, err = debug_output()
++    result = process.run("echo --password=s3cret", out=out, obfuscate_list=["s3cret"])
++    assert "s3cret" not in err.getvalue()
++    assert "Running command: echo --password=******" in err.getvalue()
++    assert result.stdout == "--password=s3cret\n"
++
++
++def test_exit_code_minus_one_warns():
++    out, err = debug_output()
++    result = process.run(["sh", "-c", "kill -HUP $$"], out=out)
++    assert result.return_code == -1
++    assert "Warning: Spawned process returned exit code -1" in err.getvalue()
++    assert "signal handling configuration" in err.getvalue()
++
++
++def test_launcher_preserves_runtime_and_parses_json(tmp_path):
++    config = tmp_path / "custom.yml"
++    env = {"APPCTL_ROOT_DIR": str(tmp_path / "root"), "PATH": os.environ.get("PATH", "")}
++    launcher = process.Launcher({"path": "/srv/app", "quiet": True, "color": False},
++                                env, str(tmp_path), Output(io.StringIO(), io.StringIO()),
++                                config_path=str(config))
++    info = launcher.runcommand("cli info --format=json", parse="json")
++    assert info["path"] == "/srv/app" and info["quiet"] is True and info["color"] is False
++    assert info["global_config_path"] == str(config)
++    assert launcher.launch_self("cli version", exit_on_error=False) == 0
++    detailed = launcher.launch_self("nosuch", exit_on_error=False, return_detailed=True)
++    assert detailed.return_code == 1 and "nosuch" in detailed.stderr
++
++
++# --- file cache ------------------------------------------------------------------
++
++def test_cache_location(tmp_path):
++    assert file_cache.cache_dir({"APPCTL_CACHE_DIR": "/x/c"}, "/r") == "/x/c"
++    assert file_cache.cache_dir({}, "/r") == os.path.join("/r", ".cache") + os.sep
++    code, _, err = call(tmp_path, "cli", "version")
++    assert code == 0 and err == "" and (tmp_path / "root" / ".cache").is_dir()
++    custom = tmp_path / "custom" / "cache"
++    assert call(tmp_path, "cli", "version", env={"APPCTL_CACHE_DIR": str(custom)})[0] == 0
++    assert custom.is_dir()
++
++
++def test_uncreatable_cache_dir_warns_and_disables(tmp_path):
++    blocker = tmp_path / "file"
++    blocker.write_text("x")
++    target = str(blocker / "cache")
++    code, out, err = call(tmp_path, "cli", "version", env={"APPCTL_CACHE_DIR": target})
++    assert code == 0 and out == "appctl 1.0.0\n"
++    assert err == f"Warning: Failed to create directory '{target}': Not a directory.\n"
++    cache = file_cache.FileCache(target)
++    assert not cache.is_enabled() and cache.read("k") is False and not cache.write("k", "v")
++
++
++def test_cache_read_write_and_expiry(tmp_path):
++    cache = file_cache.FileCache(str(tmp_path / "c"), ttl=100)
++    assert cache.read("missing") is False
++    assert cache.write("core/pkg 1.zip", "data")
++    assert cache.read("core/pkg 1.zip") == "data"
++    path = cache.filename("core/pkg 1.zip")
++    assert abs(os.path.getmtime(path) - time.time()) < 5
++    old = time.time() - 500
++    os.utime(path, (old, old))
++    assert cache.read("core/pkg 1.zip") is False
++    assert not os.path.exists(path)
++
++
++def test_key_sanitization():
++    keys = ["a b", "a-b", "a/b", "a\\b", "../x", "https://h.example/p.zip?v=1", "A", ""]
++    sanitized = [file_cache.sanitize_key(k) for k in keys]
++    assert sanitized == [file_cache.sanitize_key(k) for k in keys]
++    for value in sanitized:
++        assert value and all(p not in ("", ".", "..") for p in value.split("/"))
++        assert all(c.isalnum() or c in "._-~/" for c in value)
++    assert sanitized[0] != sanitized[1]
++    assert file_cache.sanitize_key("plain-key_1.0") == "plain-key_1.0"
++
++
++def test_clean_removes_expired_and_evicts_lru(tmp_path):
++    cache = file_cache.FileCache(str(tmp_path / "c"), ttl=1000, max_size=10)
++    now = time.time()
++    for index, key in enumerate(["old", "a", "b", "c"]):
++        cache.write(key, "12345")
++        stamp = now - 5000 if key == "old" else now - 100 + index
++        os.utime(cache.filename(key), (stamp, stamp))
++    cache.clean()
++    assert sorted(os.listdir(tmp_path / "c")) == ["b", "c"]
++
++
++def test_invocation_cleans_cache(tmp_path):
++    cache_root = tmp_path / "cache"
++    cache = file_cache.FileCache(str(cache_root))
++    cache.write("stale", "x")
++    old = time.time() - file_cache.DEFAULT_TTL - 10
++    os.utime(cache.filename("stale"), (old, old))
++    cache.write("fresh", "x")
++    call(tmp_path, "cli", "version", env={"APPCTL_CACHE_DIR": str(cache_root)})
++    assert os.listdir(cache_root) == ["fresh"]
++
++
++# --- archive extraction --------------------------------------------------------------
++
++def make_archives(tmp_path):
++    zpath = tmp_path / "pkg.zip"
++    with zipfile.ZipFile(zpath, "w") as bundle:
++        bundle.writestr("a.txt", "new a")
++        bundle.writestr("sub/b.txt", "new b")
++    src = tmp_path / "src"
++    (src / "sub").mkdir(parents=True)
++    (src / "a.txt").write_text("new a")
++    (src / "sub" / "b.txt").write_text("new b")
++    tpath = tmp_path / "pkg.tar.gz"
++    with tarfile.open(tpath, "w:gz") as bundle:
++        bundle.add(src / "a.txt", "a.txt")
++        bundle.add(src / "sub", "sub")
++    return zpath, tpath
++
++
++@pytest.mark.parametrize("name", ["pkg.zip", "pkg.tar.gz"])
++def test_extract_overwrites(tmp_path, name):
++    make_archives(tmp_path)
++    dest = tmp_path / "dest"
++    (dest / "sub").mkdir(parents=True)
++    (dest / "sub" / "b.txt").write_text("old")
++    code, out, err = call(tmp_path, "cli", "update", f"--archive={name}", "--path=dest")
++    assert code == 0, err
++    assert out.startswith("Success: ")
++    assert (dest / "a.txt").read_text() == "new a"
++    assert (dest / "sub" / "b.txt").read_text() == "new b"
++
++
++def test_extract_defaults_to_current_directory(tmp_path):
++    make_archives(tmp_path)
++    assert call(tmp_path, "cli", "update", "--archive=pkg.zip")[0] == 0
++    assert (tmp_path / "a.txt").read_text() == "new a"
++
++
++def test_strict_mode_accepts_path_after_command(tmp_path):
++    make_archives(tmp_path)
++    code, _, err = call(tmp_path, "cli", "update", "--archive=pkg.zip", "--path=d",
++                        env={"APPCTL_STRICT_ARGS_MODE": "1"})
++    assert code == 0, err
++    assert (tmp_path / "d" / "a.txt").exists()
++
++
++@pytest.mark.skipif(IS_ROOT, reason="root can write read-only files")
++def test_non_writable_files_warn_then_fail(tmp_path):
++    make_archives(tmp_path)
++    dest = tmp_path / "dest"
++    dest.mkdir()
++    locked = dest / "a.txt"
++    locked.write_text("keep")
++    locked.chmod(0o444)
++    code, _, err = call(tmp_path, "cli", "update", "--archive=pkg.zip", "--path=dest")
++    assert code == 1
++    assert err == ("Warning: Unable to copy 'a.txt' to current directory.\n"
++                   "Error: There was an error overwriting existing files.\n")
++    assert locked.read_text() == "keep"
++    assert (dest / "sub" / "b.txt").read_text() == "new b"
++
++
++def test_unsupported_format(tmp_path):
++    (tmp_path / "pkg.rar").write_text("x")
++    for name in ("pkg.rar", "pkg.tgz", "missing.7z"):
++        code, out, err = call(tmp_path, "cli", "update", f"--archive={name}")
++        assert (code, out) == (1, "")
++        assert err == "Error: Extraction only supported for '.zip' and '.tar.gz' file types.\n"
++
++
++def test_archive_is_validated(tmp_path):
++    code, _, err = call(tmp_path, "cli", "update")
++    assert code == 1 and "missing --archive parameter" in err
++    code, _, err = call(tmp_path, "cli", "update", "--archive=missing.zip", "--path=dest")
++    assert code == 1 and err.startswith("Error: ") and not (tmp_path / "dest").exists()
++
++
++def test_broken_tar_gz_warns_before_retry(tmp_path):
++    (tmp_path / "bad.tar.gz").write_text("not an archive")
++    code, _, err = call(tmp_path, "cli", "update", "--archive=bad.tar.gz", "--path=dest")
++    lines = err.splitlines()
++    assert code == 1
++    assert lines[0].startswith("Warning: ") and "falling back" in lines[0]
++    assert lines[-1].startswith("Error: ")
++
++
++def test_script_extracts_archive(tmp_path):
++    import subprocess
++    make_archives(tmp_path)
++    proc = subprocess.run(
++        [sys.executable, os.path.join(ROOT, "appctl.py"), "cli", "update",
++         "--archive=pkg.tar.gz", "--path=out"],
++        cwd=tmp_path, capture_output=True, text=True,
++        env=dict(os.environ, APPCTL_ROOT_DIR=str(tmp_path / "root")))
++    assert proc.returncode == 0, proc.stderr
++    assert (tmp_path / "out" / "sub" / "b.txt").read_text() == "new b"
+

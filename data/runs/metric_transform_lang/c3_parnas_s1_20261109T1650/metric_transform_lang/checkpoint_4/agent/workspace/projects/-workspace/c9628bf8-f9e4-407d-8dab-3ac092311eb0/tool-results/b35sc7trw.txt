@@ -1,0 +1,943 @@
+"""Scalar and boolean expressions.
+
+Secret: the static typing rules applied to expressions and transforms and
+how they are evaluated -- null propagation and three-valued logic, half-away-from-zero rounding,
+casts, parameter constants, row-relative lag/lead access, and detection of
+arithmetic faults (division by zero, non-finite results).
+"""
+
+import math
+import re
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+
+from . import program as P
+from . import timestamps
+from . import valuetypes as T
+from .errors import DslError, ExecutionError, TypeCheckError
+
+_ORDERING = ("<", "<=", ">", ">=")
+_EQUALITY = ("==", "!=")
+_ARITHMETIC = ("+", "-", "*", "/", "%")
+_TRANSFORM_ARITY = {
+    "len": (1, 1), "day": (1, 1), "month": (1, 1), "year": (1, 1), "round": (1, 2),
+    "coalesce": (2, None), "lag": (1, 2), "lead": (1, 2),
+    "starts_with": (2, 2), "ends_with": (2, 2), "contains": (2, 2),
+}
+_STRING_TESTS = {
+    "starts_with": lambda s, x: s.startswith(x),
+    "ends_with": lambda s, x: s.endswith(x),
+    "contains": lambda s, x: x in s,
+}
+_INT_TEXT = re.compile(r"^[+-]?\d+$")
+_CASTS = {
+    T.INT: (T.INT, T.FLOAT, T.BOOL, T.STRING, T.TIMESTAMP),
+    T.FLOAT: (T.INT, T.FLOAT, T.BOOL, T.STRING, T.TIMESTAMP),
+    T.STRING: (T.INT, T.FLOAT, T.BOOL, T.STRING, T.TIMESTAMP),
+    T.BOOL: (T.INT, T.FLOAT, T.BOOL, T.STRING),
+    T.TIMESTAMP: (T.INT, T.FLOAT, T.STRING, T.TIMESTAMP),
+}
+
+
+class Compiled:
+    """A type-checked expression: `.type` and `.evaluate(record)`."""
+
+    def __init__(self, value_type, evaluate):
+        self.type = value_type
+        self.evaluate = evaluate
+
+
+def compile_expression(expr, schema, params=None, row_relative=False, unknown=None,
+                       ts_parser=None):
+    """Type-check `expr` against `schema` (has/type_of) and return a Compiled.
+
+    params:       name -> (type, value) of the bound pipeline parameters
+    row_relative: whether lag()/lead() may be used; records must then expose
+                  `position` and `table` (the ordered list of records)
+    unknown:      name -> exception raised for references to unknown columns
+    ts_parser:    parser used by cast(<string> as timestamp)
+    """
+    return _Compiler(schema, params or {}, row_relative, unknown, ts_parser).compile(expr)
+
+
+def column_references(expr):
+    """Names of all columns referenced by `expr`, in first-use order."""
+    names = []
+
+    def walk(node):
+        if isinstance(node, P.ColumnRef):
+            if node.name not in names:
+                names.append(node.name)
+        elif isinstance(node, P.Unary):
+            walk(node.operand)
+        elif isinstance(node, P.Binary):
+            walk(node.left)
+            walk(node.right)
+        elif isinstance(node, P.Call):
+            for arg in node.args:
+                walk(arg)
+        elif isinstance(node, P.Cast):
+            walk(node.operand)
+    walk(expr)
+    return names
+
+
+def uses_row_relative(expr):
+    """True if `expr` calls lag() or lead()."""
+    if isinstance(expr, P.Call):
+        return expr.name in ("lag", "lead") or any(uses_row_relative(a) for a in expr.args)
+    if isinstance(expr, P.Unary):
+        return uses_row_relative(expr.operand)
+    if isinstance(expr, P.Binary):
+        return uses_row_relative(expr.left) or uses_row_relative(expr.right)
+    if isinstance(expr, P.Cast):
+        return uses_row_relative(expr.operand)
+    return False
+
+
+def is_assignable(declared, actual):
+    """Whether a value of type `actual` may be stored as `declared` (int widens to float)."""
+    return declared == actual or (declared == T.FLOAT and actual == T.INT)
+
+
+def coerce(declared, compiled):
+    """Evaluator storing compiled's value as `declared` (see is_assignable)."""
+    ev = compiled.evaluate
+    if declared == T.FLOAT and compiled.type == T.INT:
+        return _null_safe(ev, float)
+    return ev
+
+
+def _finite(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ExecutionError("arithmetic produced a non-finite value")
+    return value
+
+
+def round_half_away(value, digits):
+    if not math.isfinite(value):
+        raise ExecutionError("cannot round a non-finite value")
+    try:
+        exact = Decimal(repr(float(value))) if isinstance(value, float) else Decimal(value)
+        rounded = exact.quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
+        result = float(rounded)
+    except (InvalidOperation, OverflowError):
+        result = float(value)
+    return _finite(result) + 0.0
+
+
+class _Compiler:
+    def __init__(self, schema, params, row_relative, unknown, ts_parser):
+        self.schema = schema
+        self.params = params
+        self.row_relative = row_relative
+        self.unknown = unknown or (lambda name: TypeCheckError("unknown column %r" % name))
+        self.ts_parser = ts_parser
+
+    def compile(self, expr):
+        if isinstance(expr, P.Literal):
+            return self.literal(expr)
+        if isinstance(expr, P.ColumnRef):
+            return self.column(expr.name)
+        if isinstance(expr, P.Unary):
+            return self.unary(expr)
+        if isinstance(expr, P.Binary):
+            return self.binary(expr)
+        if isinstance(expr, P.Call):
+            return self.call(expr)
+        if isinstance(expr, P.Param):
+            return self.param(expr.name)
+        if isinstance(expr, P.Cast):
+            return self.cast(expr)
+        raise DslError("unsupported expression")
+
+    def literal(self, expr):
+        value_type = {"int": T.INT, "float": T.FLOAT, "string": T.STRING, "bool": T.BOOL}[expr.kind]
+        value = expr.value
+        if isinstance(value, float):
+            _finite(value)
+        return Compiled(value_type, lambda record: value)
+
+    def column(self, name):
+        if not self.schema.has(name):
+            raise self.unknown(name)
+        return Compiled(self.schema.type_of(name), lambda record: record.get(name))
+
+    def param(self, name):
+        if name not in self.params:
+            raise DslError("unknown parameter %r" % name)
+        value_type, value = self.params[name]
+        return Compiled(value_type, lambda record: value)
+
+    def cast(self, expr):
+        inner = self.compile(expr.operand)
+        source, target = inner.type, expr.type
+        if target not in _CASTS.get(source, ()):
+            raise TypeCheckError("cannot cast %s to %s" % (T.type_name(source), T.type_name(target)))
+        convert = _caster(source, target, self.ts_parser)
+        return Compiled(target, _null_safe(inner.evaluate, convert))
+
+    def unary(self, expr):
+        inner = self.compile(expr.operand)
+        ev = inner.evaluate
+        if expr.op == "!":
+            if not T.is_bool(inner.type):
+                raise TypeCheckError("'!' requires a boolean operand, got %s" % T.type_name(inner.type))
+            return Compiled(T.BOOL, _null_safe(ev, lambda v: not v))
+        if not T.is_numeric(inner.type):
+            raise TypeCheckError("unary '%s' requires a numeric operand, got %s"
+                                 % (expr.op, T.type_name(inner.type)))
+        if expr.op == "-":
+            def negate(r):
+                v = ev(r)
+                return None if v is None else -v
+            return Compiled(inner.type, negate)
+        return inner
+
+    def binary(self, expr):
+        op = expr.op
+        if op == "in":
+            return self.membership(expr)
+        left = self.compile(expr.left)
+        right = self.compile(expr.right)
+        lt, rt = left.type, right.type
+        le, re_ = left.evaluate, right.evaluate
+        if op in ("&", "|"):
+            if not (T.is_bool(lt) and T.is_bool(rt)):
+                raise TypeCheckError("'%s' requires boolean operands, got %s and %s"
+                                     % (op, T.type_name(lt), T.type_name(rt)))
+            return Compiled(T.BOOL, _kleene_and(le, re_) if op == "&" else _kleene_or(le, re_))
+        if op in _EQUALITY or op in _ORDERING:
+            allowed = T.can_order(lt, rt) if op in _ORDERING else T.can_compare(lt, rt)
+            if not allowed:
+                raise TypeCheckError("cannot compare %s %s %s"
+                                     % (T.type_name(lt), op, T.type_name(rt)))
+            return Compiled(T.BOOL, _comparison(op, le, re_))
+        if op in _ARITHMETIC:
+            if not (T.is_numeric(lt) and T.is_numeric(rt)):
+                raise TypeCheckError("'%s' requires numeric operands, got %s and %s"
+                                     % (op, T.type_name(lt), T.type_name(rt)))
+            result_type = T.FLOAT if op == "/" else T.widen(lt, rt)
+            return Compiled(result_type, _arithmetic(op, le, re_))
+        raise DslError("unsupported operator %r" % op)
+
+    def membership(self, expr):
+        if isinstance(expr.left, P.Param):
+            needle_c = self.param(expr.left.name)
+            if not T.is_string(needle_c.type):
+                raise TypeCheckError("'in' requires a string on the left, got %s"
+                                     % T.type_name(needle_c.type))
+            expr = expr._replace(left=P.Literal("string", needle_c.evaluate(None)))
+        if not (isinstance(expr.left, P.Literal) and expr.left.kind == "string"):
+            raise TypeCheckError("'in' requires a string literal on the left")
+        if not isinstance(expr.right, P.ColumnRef):
+            raise TypeCheckError("'in' requires a string column on the right")
+        right = self.column(expr.right.name)
+        if not T.is_string(right.type):
+            raise TypeCheckError("'in' requires a string column, %r is %s"
+                                 % (expr.right.name, T.type_name(right.type)))
+        needle = expr.left.value
+        ev = right.evaluate
+
+        def contains(r):
+            hay = ev(r)
+            return None if hay is None else needle in hay
+        return Compiled(T.BOOL, contains)
+
+    def call(self, expr):
+        name = expr.name
+        if name not in _TRANSFORM_ARITY:
+            raise DslError("unknown transform %r" % name)
+        low, high = _TRANSFORM_ARITY[name]
+        if len(expr.args) < low or (high is not None and len(expr.args) > high):
+            raise DslError("wrong number of arguments to %s(): %d" % (name, len(expr.args)))
+        if name in ("lag", "lead"):
+            return self.shifted(expr)
+        args = [self.compile(a) for a in expr.args]
+        if name == "coalesce":
+            return self.coalesce(args)
+        if name in _STRING_TESTS:
+            return self.string_test(name, args)
+        first = args[0]
+        ev = first.evaluate
+        if name == "len":
+            if not T.is_string(first.type):
+                raise TypeCheckError("len() requires a string, got %s" % T.type_name(first.type))
+            return Compiled(T.INT, _null_safe(ev, len))
+        if name in ("day", "month", "year"):
+            if not T.is_timestamp(first.type):
+                raise TypeCheckError("%s() requires a timestamp, got %s"
+                                     % (name, T.type_name(first.type)))
+            return Compiled(T.INT, _null_safe(ev, lambda v: timestamps.calendar_part(v, name)))
+        if not T.is_numeric(first.type):
+            raise TypeCheckError("round() requires a number, got %s" % T.type_name(first.type))
+        if len(args) == 1:
+            return Compiled(T.FLOAT, _null_safe(ev, lambda v: round_half_away(v, 0)))
+        if not T.is_int(args[1].type):
+            raise TypeCheckError("round() digits must be an integer, got %s"
+                                 % T.type_name(args[1].type))
+        dev = args[1].evaluate
+
+        def rounding(r):
+            v, d = ev(r), dev(r)
+            if v is None or d is None:
+                return None
+            return round_half_away(v, d)
+        return Compiled(T.FLOAT, rounding)
+
+    def coalesce(self, args):
+        types = [a.type for a in args]
+        if all(t == types[0] for t in types):
+            result_type = types[0]
+        elif all(T.is_numeric(t) for t in types):
+            result_type = T.FLOAT
+        else:
+            raise TypeCheckError("coalesce() arguments must share a type, got %s"
+                                 % ", ".join(T.type_name(t) for t in types))
+        evs = [coerce(result_type, a) for a in args]
+
+        def first_present(r):
+            for ev in evs:
+                v = ev(r)
+                if v is not None and not (isinstance(v, float) and not math.isfinite(v)):
+                    return v
+            return None
+        return Compiled(result_type, first_present)
+
+    def string_test(self, name, args):
+        if not all(T.is_string(a.type) for a in args):
+            raise TypeCheckError("%s() requires string arguments, got %s"
+                                 % (name, ", ".join(T.type_name(a.type) for a in args)))
+        test = _STRING_TESTS[name]
+        hay, needle = args[0].evaluate, args[1].evaluate
+
+        def check(r):
+            h, n = hay(r), needle(r)
+            if h is None or n is None:
+                return None
+            return test(h, n)
+        return Compiled(T.BOOL, check)
+
+    def shifted(self, expr):
+        name = expr.name
+        if not self.row_relative:
+            raise DslError("%s() is only allowed in @stage(post_agg) calcs" % name)
+        inner = self.compile(expr.args[0])
+        k = self.offset(name, expr.args[1]) if len(expr.args) > 1 else 1
+        step = -k if name == "lag" else k
+        ev = inner.evaluate
+
+        def neighbour(r):
+            j = r.position + step
+            if j < 0 or j >= len(r.table):
+                return None
+            return ev(r.table[j])
+        return Compiled(inner.type, neighbour)
+
+    def offset(self, name, arg):
+        if isinstance(arg, P.Literal):
+            if arg.kind != "int":
+                raise TypeCheckError("%s() offset must be an int, got %s" % (name, arg.kind))
+            if arg.value <= 0:
+                raise DslError("%s() offset must be a positive integer" % name)
+            return arg.value
+        if isinstance(arg, P.Param):
+            compiled = self.param(arg.name)
+            if not T.is_int(compiled.type):
+                raise TypeCheckError("%s() offset parameter %r must be an int, got %s"
+                                     % (name, arg.name, T.type_name(compiled.type)))
+            k = compiled.evaluate(None)
+            if k <= 0:
+                raise ExecutionError("%s() offset must be positive, parameter %r is %d"
+                                     % (name, arg.name, k))
+            return k
+        raise DslError("%s() offset must be a positive integer literal or an int param()" % name)
+
+
+def _caster(source, target, ts_parser):
+    if source == target:
+        return lambda v: v
+    if target == T.STRING:
+        if source == T.BOOL:
+            return lambda v: "true" if v else "false"
+        if source == T.TIMESTAMP:
+            return timestamps.format_utc
+        if source == T.FLOAT:
+            return lambda v: repr(v + 0.0)
+        return str
+    if source == T.STRING:
+        return _string_parser(target, ts_parser)
+    if source == T.TIMESTAMP:
+        micros = timestamps.to_epoch_micros
+        if target == T.INT:
+            return lambda v: micros(v) // 1000000
+        return lambda v: micros(v) / 1000000.0
+    if target == T.TIMESTAMP:
+        return lambda v: timestamps.from_epoch_micros(int(round(v * 1000000)))
+    if target == T.BOOL:
+        return lambda v: v != 0
+    if target == T.INT:
+        return lambda v: int(v)
+    return lambda v: _finite(float(v))
+
+
+def _string_parser(target, ts_parser):
+    def parse(text):
+        stripped = text.strip()
+        if stripped == "":
+            return None
+        try:
+            if target == T.INT:
+                if _INT_TEXT.match(stripped):
+                    return int(stripped)
+                return int(_finite_text(stripped))
+            if target == T.FLOAT:
+                return _finite_text(stripped)
+            if target == T.BOOL:
+                lowered = stripped.lower()
+                if lowered in ("true", "false"):
+                    return lowered == "true"
+                raise ValueError(text)
+            if ts_parser is not None:
+                return ts_parser.parse(stripped)
+            return timestamps.TimestampParser().parse(stripped)
+        except (ValueError, OverflowError):
+            raise ExecutionError("cannot cast %r to %s" % (text, T.type_name(target)))
+    return parse
+
+
+def _finite_text(text):
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError(text)
+    return value
+
+
+def _null_safe(ev, fn):
+    def apply(r):
+        v = ev(r)
+        return None if v is None else fn(v)
+    return apply
+
+
+def _comparison(op, le, re_):
+    test = {
+        "==": lambda a, b: a == b,
+        "!=": lambda a, b: a != b,
+        "<": lambda a, b: a < b,
+        "<=": lambda a, b: a <= b,
+        ">": lambda a, b: a > b,
+        ">=": lambda a, b: a >= b,
+    }[op]
+
+    def compare(r):
+        a, b = le(r), re_(r)
+        if a is None or b is None:
+            return None
+        return test(a, b)
+    return compare
+
+
+def _kleene_and(le, re_):
+    def conjunction(r):
+        a = le(r)
+        if a is False:
+            return False
+        b = re_(r)
+        if b is False:
+            return False
+        return None if a is None or b is None else True
+    return conjunction
+
+
+def _kleene_or(le, re_):
+    def disjunction(r):
+        a = le(r)
+        if a is True:
+            return True
+        b = re_(r)
+        if b is True:
+            return True
+        return None if a is None or b is None else False
+    return disjunction
+
+
+def _arithmetic(op, le, re_):
+    def compute(r):
+        a, b = le(r), re_(r)
+        if a is None or b is None:
+            return None
+        try:
+            if op == "+":
+                v = a + b
+            elif op == "-":
+                v = a - b
+            elif op == "*":
+                v = a * b
+            else:
+                if b == 0:
+                    raise ExecutionError("division by zero")
+                v = a / b if op == "/" else a % b
+        except OverflowError:
+            raise ExecutionError("numeric overflow in '%s'" % op)
+        return _finite(v)
+    return compute
+"""Data-quality bookkeeping.
+
+Secret: how rejected rows are classified, which failure category a bad
+record maps to in strict mode, and the JSON Lines shape and ordering of the
+bad-records report.
+"""
+
+import json
+import math
+from datetime import datetime
+
+from .errors import ExecutionError, InputError, TypeCheckError
+
+PARSE_TYPE_MISMATCH = "PARSE_TYPE_MISMATCH"
+TIMESTAMP_PARSE_ERROR = "TIMESTAMP_PARSE_ERROR"
+RUNTIME_ERROR = "RUNTIME_ERROR"
+TYPE_ERROR = "TYPE_ERROR"
+MISSING_REQUIRED_FIELD = "MISSING_REQUIRED_FIELD"
+PARQUET_TYPE_MISMATCH = "PARQUET_TYPE_MISMATCH"
+
+_STRICT_ERRORS = {
+    PARSE_TYPE_MISMATCH: TypeCheckError,
+    TIMESTAMP_PARSE_ERROR: TypeCheckError,
+    RUNTIME_ERROR: ExecutionError,
+    TYPE_ERROR: TypeCheckError,
+    MISSING_REQUIRED_FIELD: TypeCheckError,
+    PARQUET_TYPE_MISMATCH: TypeCheckError,
+}
+
+
+class Provenance:
+    """Where a row came from: file path, physical line (None for Parquet), row ordinal."""
+
+    __slots__ = ("file", "line", "row")
+
+    def __init__(self, file, line, row):
+        self.file = file
+        self.line = line
+        self.row = row
+
+    def describe(self):
+        if self.line is not None:
+            return "%s:%d" % (self.file, self.line)
+        if self.row is not None:
+            return "%s: row %d" % (self.file, self.row)
+        return self.file
+
+
+class BadRecord:
+    """One rejected row.
+
+    error: optional MtlError class raised for it in strict mode (defaults by
+    classification).
+    """
+
+    def __init__(self, provenance, classification, message, context=None, error=None):
+        self.provenance = provenance
+        self.classification = classification
+        self.message = message
+        self.context = context or {}
+        self.error = error or _STRICT_ERRORS[classification]
+
+    def sort_key(self):
+        p = self.provenance
+        line = p.line if p.line is not None else -1
+        return (p.file, line, p.row if p.row is not None else -1)
+
+    def as_json(self):
+        p = self.provenance
+        obj = {
+            "file": p.file,
+            "line": p.line,
+            "row": p.row,
+            "error": self.classification,
+            "message": self.message,
+            "context": _json_safe(self.context),
+        }
+        return json.dumps(obj, sort_keys=True, ensure_ascii=False, allow_nan=False)
+
+
+def _json_safe(value):
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else repr(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return str(value)
+
+
+class BadRecordLog:
+    """Collects bad records; in strict mode the first one aborts the run."""
+
+    def __init__(self, strict):
+        self.strict = strict
+        self.records = []
+
+    def add(self, record):
+        self.records.append(record)
+        if self.strict:
+            raise record.error("%s: %s: %s" % (record.provenance.describe(),
+                                               record.classification, record.message))
+
+    def write(self, path):
+        """Write the JSON Lines report; nothing is created when there are no bad rows."""
+        if not path or not self.records:
+            return
+        ordered = sorted(self.records, key=BadRecord.sort_key)
+        text = "".join(r.as_json() + "\n" for r in ordered)
+        try:
+            with open(path, "wb") as handle:
+                handle.write(text.encode("utf-8"))
+        except OSError as exc:
+            raise InputError("cannot write bad records %r: %s" % (path, exc.strerror or exc))
+"""Value types of the language.
+
+Secret: the type lattice and its compatibility rules (int<->float widening,
+which kinds may be compared or ordered, what counts as numeric).
+"""
+
+INT = "int"
+FLOAT = "float"
+STRING = "string"
+TIMESTAMP = "timestamp"
+BOOL = "bool"
+
+_NUMERIC = (INT, FLOAT)
+
+
+def is_numeric(t):
+    return t in _NUMERIC
+
+
+def is_string(t):
+    return t == STRING
+
+
+def is_timestamp(t):
+    return t == TIMESTAMP
+
+
+def is_bool(t):
+    return t == BOOL
+
+
+def is_int(t):
+    return t == INT
+
+
+def _kind(t):
+    return "number" if t in _NUMERIC else t
+
+
+def can_compare(a, b):
+    """True if values of types a and b may be tested for (in)equality."""
+    return _kind(a) == _kind(b)
+
+
+def can_order(a, b):
+    """True if values of types a and b may be ordered with < <= > >=."""
+    return can_compare(a, b) and _kind(a) in ("number", STRING, TIMESTAMP)
+
+
+def widen(a, b):
+    """Result type of an arithmetic operation on two numeric types."""
+    return INT if a == INT and b == INT else FLOAT
+
+
+def type_name(t):
+    return t
+"""Timestamps.
+
+Secret: how timestamp text is parsed (ISO 8601 or an explicit strptime
+format, with a default zone for naive values) and how instants are
+represented and rendered.  Callers may rely only on the functions below and
+on instants being totally ordered by the comparison operators.
+"""
+
+import re
+from datetime import datetime, timedelta, timezone
+
+from .errors import ExecutionError, InputError
+
+try:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+except ImportError:  # pragma: no cover
+    ZoneInfo = None
+    ZoneInfoNotFoundError = Exception
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_ISO_SHAPE = re.compile(r"^\s*\d{4}-?\d{2}-?\d{2}([T ]\d{2}(:?\d{2}(:?\d{2}([.,]\d+)?)?)?"
+                        r"\s*(Z|z|[+-]\d{2}(:?\d{2}(:?\d{2})?)?)?)?\s*$")
+
+
+def _resolve_zone(name):
+    if name in ("UTC", "utc", "Z", "Etc/UTC"):
+        return timezone.utc
+    if ZoneInfo is None:
+        raise InputError("timezone support unavailable for %r" % name)
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        raise InputError("unknown timezone %r" % name)
+
+
+class TimestampParser:
+    """Turns timestamp text into instants; raises ValueError on bad text."""
+
+    def __init__(self, tz_name="UTC", fmt=None):
+        self._zone = _resolve_zone(tz_name)
+        self._fmt = fmt
+
+    def parse(self, text):
+        text = text.strip()
+        if self._fmt is not None:
+            moment = datetime.strptime(text, self._fmt)
+        else:
+            if not text:
+                raise ValueError("empty timestamp")
+            if text[-1] in "zZ":
+                text = text[:-1] + "+00:00"
+            moment = datetime.fromisoformat(text)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=self._zone)
+        return moment.astimezone(timezone.utc)
+
+    def localize(self, moment):
+        """UTC instant of a datetime; naive values are taken in the default zone."""
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=self._zone)
+        return moment.astimezone(timezone.utc)
+
+    def iso_only(self):
+        """A parser with the same default zone that ignores any explicit format."""
+        twin = TimestampParser.__new__(TimestampParser)
+        twin._zone = self._zone
+        twin._fmt = None
+        return twin
+
+    def looks_like_timestamp(self, text):
+        """Heuristic used for inferring the type of extra CSV columns."""
+        if self._fmt is None and not _ISO_SHAPE.match(text):
+            return False
+        try:
+            self.parse(text)
+        except (ValueError, OverflowError):
+            return False
+        return True
+
+
+def to_epoch_micros(instant):
+    delta = instant - _EPOCH
+    return (delta.days * 86400 + delta.seconds) * 1000000 + delta.microseconds
+
+
+def from_epoch_micros(micros):
+    try:
+        return _EPOCH + timedelta(microseconds=micros)
+    except OverflowError:
+        raise ExecutionError("timestamp out of range")
+
+
+def format_utc(instant):
+    utc = instant.astimezone(timezone.utc)
+    text = utc.strftime("%Y-%m-%dT%H:%M:%S")
+    if utc.year < 1000:
+        text = "%04d%s" % (utc.year, text[len(str(utc.year)):])
+    if utc.microsecond:
+        text += (".%06d" % utc.microsecond).rstrip("0")
+    return text + "Z"
+
+
+def calendar_part(instant, part):
+    """Return 'day', 'month' or 'year' of the instant, taken in UTC."""
+    utc = instant.astimezone(timezone.utc)
+    return {"day": utc.day, "month": utc.month, "year": utc.year}[part]
+"""JSON rendering.
+
+Secret: the JSON document shape, object key ordering and how
+values (numbers, timestamps, nulls) are encoded.
+"""
+
+import json
+import math
+from collections import OrderedDict
+
+from . import timestamps
+from . import valuetypes as T
+from .errors import ExecutionError
+
+
+def _encode(value, value_type=None):
+    if value is None:
+        return None
+    if value_type is not None and T.is_timestamp(value_type):
+        return timestamps.format_utc(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ExecutionError("cannot emit non-finite number")
+        return value + 0.0
+    return value
+
+
+def _object(result, row):
+    obj = OrderedDict()
+    if result.windowed:
+        obj["window_start"] = timestamps.format_utc(row.window_start)
+        obj["window_end"] = timestamps.format_utc(row.window_end)
+    for name, value_type, value in zip(result.group_columns, result.group_types, row.keys):
+        obj[name] = _encode(value, value_type)
+    for alias in sorted(result.aliases):
+        obj[alias] = _encode(row.values[alias])
+    for name, value_type in sorted(zip(result.calc_names, result.calc_types)):
+        obj[name] = _encode(row.values[name], value_type)
+    return obj
+
+
+def render(result):
+    """Serialise a ResultSet to the deterministic JSON text."""
+    if result.scalar:
+        document = _object(result, result.rows[0])
+    else:
+        document = [_object(result, r) for r in result.rows]
+    try:
+        return json.dumps(document, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    except ValueError as exc:
+        raise ExecutionError("cannot emit result: %s" % exc)
+"""Aggregate functions.
+
+Secret: the numeric algorithm behind each aggregate (exactly rounded,
+order-independent float summation, median of even counts, population
+variance/deviation), their typing rules, null skipping and the finiteness
+guarantee on results.
+"""
+
+import math
+
+from . import valuetypes as T
+from .errors import ExecutionError, TypeCheckError
+
+_FUNCTIONS = ("average", "median", "sum", "count", "std", "var", "min", "max")
+
+
+class Aggregate:
+    """compute(values) -> number or None; values holds one entry per input row."""
+
+    def __init__(self, function, keep_int):
+        self._function = function
+        self._keep_int = keep_int
+
+    def compute(self, values):
+        present = [v for v in values if v is not None]
+        if self._function == "count":
+            return len(present)
+        if not present:
+            return None
+        result = getattr(self, "_" + self._function)(present)
+        if isinstance(result, float):
+            if not math.isfinite(result):
+                raise ExecutionError("%s produced a non-finite value" % self._function)
+            result += 0.0  # normalise -0.0
+        return result
+
+    def _sum(self, xs):
+        if self._keep_int:
+            return sum(xs)
+        return _fsum(float(x) for x in xs)
+
+    def _average(self, xs):
+        return _mean(xs)
+
+    def _median(self, xs):
+        ordered = sorted(float(x) for x in xs)
+        n = len(ordered)
+        mid = n // 2
+        if n % 2:
+            return ordered[mid]
+        a, b = ordered[mid - 1], ordered[mid]
+        m = (a + b) / 2
+        return m if math.isfinite(m) else a / 2 + b / 2
+
+    def _var(self, xs):
+        mean = _mean(xs)
+        return _fsum((float(x) - mean) ** 2 for x in xs) / len(xs)
+
+    def _std(self, xs):
+        v = self._var(xs)
+        return math.sqrt(v) if math.isfinite(v) else v
+
+    def _min(self, xs):
+        m = min(xs)
+        return m if self._keep_int else float(m)
+
+    def _max(self, xs):
+        m = max(xs)
+        return m if self._keep_int else float(m)
+
+
+def _fsum(values):
+    try:
+        return math.fsum(values)
+    except OverflowError:
+        raise ExecutionError("sum produced a non-finite value")
+
+
+def _mean(xs):
+    mean = _fsum(float(x) for x in xs) / len(xs)
+    if not math.isfinite(mean):
+        raise ExecutionError("average produced a non-finite value")
+    return mean
+
+
+def make_aggregate(function, input_type):
+    """Build an aggregate; input_type is None for '*'."""
+    if function not in _FUNCTIONS:
+        raise TypeCheckError("unknown aggregate %r" % function)
+    if input_type is None:
+        if function != "count":
+            raise TypeCheckError("%s(*) is not allowed; only count(*)" % function)
+    elif function != "count" and not T.is_numeric(input_type):
+        raise TypeCheckError("%s() requires a numeric column, got %s"
+                             % (function, T.type_name(input_type)))
+    keep_int = input_type is not None and T.is_int(input_type)
+    return Aggregate(function, keep_int)
+
+
+def result_type(function, input_type):
+    """Static type of an aggregate's result; input_type is None for '*'."""
+    if function == "count":
+        return T.INT
+    if function in ("sum", "min", "max") and input_type is not None and T.is_int(input_type):
+        return T.INT
+    return T.FLOAT
+"""Tumbling windows.
+
+Secret: the duration units and the epoch-aligned window arithmetic.
+"""
+
+from . import timestamps
+from .errors import DslError
+
+_UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400}
+
+
+class TumblingWindow:
+    def __init__(self, amount, unit):
+        if unit not in _UNIT_SECONDS or amount <= 0:
+            raise DslError("invalid window duration %s%s" % (amount, unit))
+        self._width = amount * _UNIT_SECONDS[unit] * 1000000
+
+    def bounds(self, instant):
+        """(start, end) instants of the window containing `instant`."""
+        start = timestamps.to_epoch_micros(instant) // self._width * self._width
+        return timestamps.from_epoch_micros(start), timestamps.from_epoch_micros(start + self._width)

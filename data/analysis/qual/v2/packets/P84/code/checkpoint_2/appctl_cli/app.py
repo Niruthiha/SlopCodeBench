@@ -1,0 +1,167 @@
+"""Top-level orchestration: config, aliases, rewrite, parse, resolve, validate, run."""
+
+import os
+import sys
+
+from . import config_loader
+from .arguments import END_OF_OPTIONS, is_assoc_token, parse_argv
+from .commands import build_command_tree
+from .context import Context
+from .errors import AppctlError, UsageError
+from .help import render_root_help, render_usage
+from .output import Output
+from .remote import run_remote
+from .resolver import resolve
+from .rewrites import apply_rewrites
+from .runtime_config import build_runtime_config, deprecation_warnings, is_strict_mode
+from .suggest import get_suggestion
+from .validator import ArgumentValidator
+
+
+def extract_alias(argv):
+    """Return ``(alias, argv_without_alias)``; the alias is the first non-flag token."""
+    for index, token in enumerate(argv):
+        if token == END_OF_OPTIONS:
+            break
+        if is_assoc_token(token):
+            continue
+        if config_loader.is_alias(token):
+            return token, argv[:index] + argv[index + 1:]
+        break
+    return None, list(argv)
+
+
+def _unique(items):
+    seen = []
+    for item in items:
+        if item not in seen:
+            seen.append(item)
+    return seen
+
+
+def check_disabled(command, typed, disabled):
+    """Raise if the command or one of its parents is disabled."""
+    disabled = {" ".join(str(entry).split()) for entry in disabled}
+    for path in (command.path, typed[:len(command.path)]):
+        for depth in range(1, len(path) + 1):
+            name = " ".join(path[:depth])
+            if name in disabled:
+                raise AppctlError(f"The '{name}' command has been disabled.")
+
+
+def guarded(output, action, *args):
+    """Run ``action`` and report user-facing errors; return the exit code."""
+    try:
+        return int(action(*args) or 0)
+    except UsageError as exc:
+        output.line(exc.usage)
+        return exc.exit_code
+    except AppctlError as exc:
+        output.error(exc.message)
+        return exc.exit_code
+
+
+class Runner:
+    def __init__(self, argv, parsed, environ, output, strict, loaded):
+        self.argv = argv
+        self.parsed = parsed
+        self.environ = environ
+        self.output = output
+        self.strict = strict
+        self.loaded = loaded
+        self._root = None
+
+    @property
+    def root(self):
+        if self._root is None:
+            self._root = build_command_tree()
+        return self._root
+
+    # -- aliases ----------------------------------------------------------
+
+    def run_alias(self, name, stack=()):
+        aliases = self.loaded.aliases
+        if name == config_loader.ALL_ALIAS and not aliases:
+            raise AppctlError("Cannot use '@all' when no aliases are registered.")
+        if name not in aliases:
+            message = f"Alias '{name}' not found."
+            suggestion = get_suggestion(name, list(aliases))
+            if suggestion:
+                message += f"\nDid you mean '{suggestion}'?"
+            raise AppctlError(message)
+        definition = aliases[name]
+        if name == config_loader.ALL_ALIAS and definition is None:
+            members = sorted((a for a, d in aliases.items() if a != name and not isinstance(d, list)),
+                             key=config_loader.alias_sort_key)
+            return self.run_group(name, members, stack)
+        if isinstance(definition, list):
+            members = _unique(definition)
+            invalid = [m for m in members if m not in aliases]
+            if invalid:
+                raise AppctlError(
+                    f"Group '{name}' contains one or more invalid aliases: {', '.join(invalid)}."
+                )
+            return self.run_group(name, members, stack)
+        return self.run(name, definition if isinstance(definition, dict) else {})
+
+    def run_group(self, name, members, stack):
+        stack = stack + (name,)
+        result = 0
+        for member in members:
+            if member in stack:
+                continue
+            self.output.log(member)
+            self.output.stdout.flush()
+            code = guarded(self.output, self.run_alias, member, stack)
+            self.output.stdout.flush()
+            if code:
+                result = code
+        return result
+
+    # -- a single execution ----------------------------------------------
+
+    def run(self, alias=None, alias_params=None):
+        runtime = build_runtime_config(self.parsed.runtime, self.loaded.merged, alias_params)
+        if runtime.get("ssh"):
+            return run_remote(runtime["ssh"], self.argv, self.environ, self.output,
+                              alias=alias, alias_params=alias_params,
+                              skip_tty=bool(runtime.get("skip-tty")))
+        positional = self.parsed.positional
+        if not positional:
+            self.output.line(render_root_help(self.root))
+            return 0
+        command, remaining = resolve(self.root, positional)
+        check_disabled(command, positional, runtime["disabled_commands"])
+        if not command.is_runnable:
+            self.output.line(render_usage(command))
+            return 0
+        self.output.debug(f"Running command: {command.full_name}")
+        args, assoc = ArgumentValidator(command).validate(
+            remaining, self.parsed.assoc, warn=self.output.warning
+        )
+        context = Context(root=self.root, command=command, output=self.output,
+                          runtime=runtime, strict=self.strict, config=self.loaded,
+                          alias=alias)
+        return command.handler(context, args, assoc)
+
+
+def main(argv=None, environ=None, stdout=None, stderr=None, cwd=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    environ = os.environ if environ is None else environ
+    strict = is_strict_mode(environ)
+
+    alias, argv = extract_alias(argv)
+    parsed = parse_argv(apply_rewrites(argv), strict=strict)
+    output = Output(quiet=bool(parsed.runtime.get("quiet")), debug=bool(parsed.runtime.get("debug")),
+                    stdout=stdout, stderr=stderr)
+    for warning in deprecation_warnings(parsed.runtime):
+        print(warning, file=output.stderr)
+
+    def start():
+        loaded = config_loader.load(environ, cwd)
+        runner = Runner(argv, parsed, environ, output, strict, loaded)
+        if alias:
+            return runner.run_alias(alias)
+        return runner.run()
+
+    return guarded(output, start)

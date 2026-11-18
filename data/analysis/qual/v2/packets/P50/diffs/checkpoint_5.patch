@@ -1,0 +1,291 @@
+### industry.py (modified)
+--- industry.py
++++ industry.py
+@@ -5,7 +5,7 @@
+       [-me <0-10>] [-te <0-20, even>] [-waste]
+   python industry.py invention <Product or Blueprint name> --sde <SDE directory> [--skill <1-5>]
+   python industry.py plan <Build string> --config <YAML file> --sde <SDE directory>
+-      --output <output directory>
++      --output <output directory> [--build-all]
+ 
+ This module only parses arguments and wires the other modules together.
+ """
+@@ -108,20 +108,33 @@
+     )
+ 
+ 
+-def _build_plan(text, config_path, sde_dir, output_dir):
++def _component_defaults(config):
++    defaults = config.get("component_bpo_defaults")
++    if defaults is None:
++        defaults = {}
++    if not isinstance(defaults, dict):
++        raise ValueError("component_bpo_defaults must be a mapping")
++    return defaults.get("me", 10), defaults.get("te", 20)
++
++
++def _build_plan(text, config_path, sde_dir, output_dir, build_all=False):
+     with open(config_path, encoding="utf-8") as handle:
+         config = yaml.safe_load(handle) or {}
+     if not isinstance(config, dict):
+         raise ValueError("config must be a YAML mapping")
++    component_me, component_te = _component_defaults(config)
+     builder = planner.Planner(
+         sde_dir,
+         te_bonus=config.get("te_bonus", 0),
+         invention_skill=config.get("invention_skill", 5),
++        split_days=config.get("split_days", 3.0),
++        component_me=component_me,
++        component_te=component_te,
+     )
+     request = build_string.parse(
+         text, invention.decryptor_names(), builder.is_item, builder.is_relic
+     )
+-    plan_report.write(builder.plan(request), output_dir)
++    plan_report.write(builder.plan(request, build_all=build_all), output_dir)
+ 
+ 
+ def _efficiency(low, high, step, label):
+@@ -163,11 +176,14 @@
+     plan.add_argument("--config", required=True, help="YAML build config file")
+     plan.add_argument("--sde", required=True, help="SDE directory")
+     plan.add_argument("--output", required=True, help="output directory for the CSV files")
++    plan.add_argument("--build-all", dest="build_all", action="store_true",
++                      help="also build every buildable component in the tree")
+     args = parser.parse_args(argv)
+ 
+     try:
+         if args.command == "plan":
+-            _build_plan(" ".join(args.build), args.config, args.sde, args.output)
++            _build_plan(" ".join(args.build), args.config, args.sde, args.output,
++                        args.build_all)
+             return 0
+         if args.command == "invention":
+             text = _build_invention_report(" ".join(args.name), args.sde, args.skill)
+
+### plan_report.py (modified)
+--- plan_report.py
++++ plan_report.py
+@@ -34,7 +34,8 @@
+     _write(
+         os.path.join(output_dir, _MATERIALS_FILE),
+         _MATERIALS_HEADER,
+-        [(p.name, p.quantity, repr(float(p.volume)), 0, 0) for p in materials],
++        [(p.name, p.quantity, repr(float(p.volume)), p.start_amount, p.end_amount)
++         for p in materials],
+     )
+     merged = {}
+     for job in plan.jobs:
+
+### planner.py (modified)
+--- planner.py
++++ planner.py
+@@ -3,7 +3,9 @@
+ Secret: how a request is turned into manufacturing jobs (splitting runs
+ across limited-run invented blueprints), how many invention attempts are
+ expected, which inputs are consumed per job or attempt, and how time and
+-material efficiency bonuses combine.
++material efficiency bonuses combine; with build-all, how the whole
++buildable tree below the product is resolved into component jobs, which
++efficiencies components use, and how long jobs are split.
+ """
+ 
+ import math
+@@ -17,6 +19,13 @@
+ import volumes
+ 
+ _SECONDS_PER_DAY = 86400
++_MAX_SPLIT_DAYS = 30
++_SHIP_CATEGORY = "Ship"
++_CAPITAL_MARKET_GROUP = "Capital Ships"
++_CAPITAL_GROUPS = frozenset((
++    "Titan", "Supercarrier", "Dreadnought", "Lancer Dreadnought", "Carrier",
++    "Force Auxiliary", "Freighter", "Jump Freighter", "Capital Industrial Ship",
++))
+ 
+ 
+ @dataclass(frozen=True)
+@@ -32,6 +41,8 @@
+     name: str
+     quantity: int
+     volume: Decimal  # m3 for the whole quantity
++    start_amount: int = 0
++    end_amount: int = 0  # built but left over at the end
+ 
+ 
+ @dataclass(frozen=True)
+@@ -46,10 +57,33 @@
+     return value
+ 
+ 
++def _check_days(value, label):
++    if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
++        raise ValueError("%s must be a positive number, got %r" % (label, value))
++    return min(Fraction(repr(float(value))), Fraction(_MAX_SPLIT_DAYS))
++
++
++def split_runs(runs, max_runs):
++    """[(runs, count)] for one job of `runs` split so no job exceeds max_runs."""
++    max_runs = max(1, max_runs)
++    if runs <= max_runs:
++        return [(runs, 1)]
++    t = math.ceil(Fraction(runs, max_runs))
++    base, extra = divmod(runs, t)
++    if base + 1 == max_runs and 2 * extra > t and runs // (t + 1) + 1 < max_runs:
++        t += 1
++        base, extra = divmod(runs, t)
++    return [(r, c) for r, c in ((base + 1, extra), (base, t - extra)) if c and r]
++
++
+ class Planner:
+-    def __init__(self, sde_dir, te_bonus=0, invention_skill=5):
++    def __init__(self, sde_dir, te_bonus=0, invention_skill=5, split_days=3.0,
++                 component_me=10, component_te=20):
+         self._te_bonus = _check(te_bonus, 0, 30, "te_bonus")
+         self._skill = _check(invention_skill, 1, 5, "invention_skill")
++        self._split_days = _check_days(split_days, "split_days")
++        self._component_me = _check(component_me, 0, 10, "component_bpo_defaults me")
++        self._component_te = _check(component_te, 0, 20, "component_bpo_defaults te")
+         self._items = catalog.Catalog(sde_dir)
+         self._industry = blueprints.Industry(sde_dir, self._items)
+         self._invention = invention.Invention(sde_dir, self._items)
+@@ -93,7 +127,77 @@
+         total = Fraction(seconds * runs) * (100 - te) / 100 * (100 - self._te_bonus) / 100
+         return total / _SECONDS_PER_DAY
+ 
+-    def plan(self, request):
++    def _max_runs(self, seconds, te):
++        """Most runs one job can have while finishing in under the split limit."""
++        per_run = self._days(seconds, 1, te)
++        if per_run <= 0:
++            return None
++        return math.ceil(self._split_days / per_run) - 1
++
++    def _split(self, groups, seconds, te):
++        max_runs = self._max_runs(seconds, te)
++        if max_runs is None:
++            return list(groups)
++        return [
++            (runs, count * times)
++            for job_runs, count in groups
++            for runs, times in split_runs(job_runs, max_runs)
++        ]
++
++    def _is_capital(self, type_id):
++        if self._items.category_name(type_id) != _SHIP_CATEGORY:
++            return False
++        if self._items.tech_level(type_id) != "Tech I":
++            return False
++        return (_CAPITAL_MARKET_GROUP in self._items.market_path(type_id)
++                or self._items.group_name(type_id) in _CAPITAL_GROUPS)
++
++    def _component_efficiency(self, type_id, recipe):
++        if not blueprints.material_efficiency_applies(recipe.activity):
++            return 0, 0
++        if self._is_capital(type_id):
++            return 0, 0
++        return self._component_me, self._component_te
++
++    def _build_order(self, recipe):
++        """(buildable items below a recipe, every item before its inputs;
++        (consumer, material) edges closing a cycle, whose material is bought)."""
++        order = []
++        cut = set()
++        state = {recipe.product_id: "active"}
++
++        def visit(consumer, materials):
++            for material, _ in materials:
++                if not self._industry.is_buildable(material):
++                    continue
++                if state.get(material) == "active":
++                    cut.add((consumer, material))
++                    continue
++                if state.get(material) == "done":
++                    continue
++                state[material] = "active"
++                visit(material, self._industry.recipe_for(material).materials)
++                state[material] = "done"
++                order.append(material)
++
++        visit(recipe.product_id, recipe.materials)
++        return list(reversed(order)), cut
++
++    def _consume(self, recipe, me, groups, buy, demand, cut=()):
++        for runs, count in groups:
++            for material, quantity in recipe.materials:
++                needed = blueprints.material_amount(quantity, me, runs) * count
++                built = (demand is not None and self._industry.is_buildable(material)
++                         and (recipe.product_id, material) not in cut)
++                target = demand if built else buy
++                target[material] = target.get(material, 0) + needed
++
++    def _job_rows(self, recipe, groups, te):
++        name = self._items.name(recipe.blueprint_id)
++        return [Job(name, runs, self._days(recipe.seconds, runs, te), count)
++                for runs, count in groups]
++
++    def plan(self, request, build_all=False):
+         _check(request.runs, 1, 10 ** 9, "runs per job")
+         _check(request.jobs, 1, 10 ** 9, "number of jobs")
+         type_id, recipe = self._recipe(request.name)
+@@ -127,20 +231,38 @@
+ 
+         if not blueprints.material_efficiency_applies(recipe.activity):
+             me = 0
+-        for runs, count in groups:
+-            for material, quantity in recipe.materials:
+-                needed = blueprints.material_amount(quantity, me, runs) * count
+-                buy[material] = buy.get(material, 0) + needed
+-
+-        job_name = self._items.name(recipe.blueprint_id)
+-        jobs = tuple(
+-            Job(job_name, runs, self._days(recipe.seconds, runs, te), count)
+-            for runs, count in groups
+-        )
+-        return BuildPlan(jobs=jobs, purchases=self._purchases(buy))
+-
+-    def _purchases(self, buy):
++        if not build_all:
++            self._consume(recipe, me, groups, buy, None)
++            jobs = self._job_rows(recipe, groups, te)
++            return BuildPlan(jobs=tuple(jobs), purchases=self._purchases(buy))
++
++        groups = self._split(groups, recipe.seconds, te)
++        order, cut = self._build_order(recipe)
++        demand = {}
++        self._consume(recipe, me, groups, buy, demand, cut)
++        jobs = self._job_rows(recipe, groups, te)
++        left_over = {}
++        for type_id in order:
++            component = self._industry.recipe_for(type_id)
++            needed = demand.pop(type_id, 0)
++            runs = math.ceil(Fraction(needed, component.output_quantity or 1))
++            if runs <= 0:
++                continue
++            left_over[type_id] = runs * component.output_quantity - needed
++            c_me, c_te = self._component_efficiency(type_id, component)
++            c_groups = self._split([(runs, 1)], component.seconds, c_te)
++            self._consume(component, c_me, c_groups, buy, demand, cut)
++            jobs.extend(self._job_rows(component, c_groups, c_te))
++        return BuildPlan(jobs=tuple(jobs), purchases=self._purchases(buy, left_over))
++
++    def _purchases(self, buy, left_over=None):
+         totals = {}
++        ends = {}
++        for type_id, quantity in (left_over or {}).items():
++            if quantity > 0:
++                name = self._items.name(type_id)
++                ends[name] = ends.get(name, 0) + quantity
++                totals.setdefault(name, (0, Decimal(0)))
+         for type_id, quantity in buy.items():
+             name = self._items.name(type_id) if self._items.is_valid(type_id) else str(type_id)
+             if self._items.is_valid(type_id):
+@@ -150,4 +272,6 @@
+                 unit = Decimal(0)
+             old_quantity, old_volume = totals.get(name, (0, Decimal(0)))
+             totals[name] = (old_quantity + quantity, old_volume + unit * quantity)
+-        return tuple(Purchase(name, q, v) for name, (q, v) in totals.items())
++        return tuple(
++            Purchase(name, q, v, end_amount=ends.get(name, 0)) for name, (q, v) in totals.items()
++        )
+

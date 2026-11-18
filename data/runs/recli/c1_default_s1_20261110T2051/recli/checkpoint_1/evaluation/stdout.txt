@@ -1,0 +1,135 @@
+
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.16, pytest-9.2.0, pluggy-1.7.0 -- /tmp/uv-cache/archive-v0/wKv_UiZQZYsLXqaE/bin/python
+cachedir: .pytest_cache
+metadata: {'Python': '3.12.16', 'Platform': 'Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41', 'Packages': {'pytest': '9.2.0', 'pluggy': '1.7.0'}, 'Plugins': {'timeout': '2.4.0', 'json-report': '1.5.0', 'metadata': '3.1.1', 'json-ctrf': '0.6.5'}}
+rootdir: /workspace
+configfile: pytest.ini
+plugins: timeout-2.4.0, json-report-1.5.0, metadata-3.1.1, json-ctrf-0.6.5
+timeout: 25.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 34 items
+
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_no_args_shows_help_text PASSED [  2%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_command_dispatch_top_level PASSED [  5%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_subcommand_dispatch PASSED [  8%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite PASSED [ 11%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_help_rewrite_for_multi_level_command PASSED [ 14%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_version_rewrite PASSED [ 17%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_positional_arg_parsing PASSED [ 20%]
+.evaluation_tests/test_checkpoint_1.py::TestCore::test_unrecognized_command_error PASSED [ 23%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_missing_required_positional_shows_usage PASSED [ 26%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_excess_positional_args_error PASSED [ 29%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_with_suggestion PASSED [ 32%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unknown_associative_no_suggestion PASSED [ 35%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_multiple_parameter_errors_collected PASSED [ 38%]
+.evaluation_tests/test_checkpoint_1.py::TestErrors::test_unrecognized_subcommand_error PASSED [ 41%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_alphabetical_ordering_case_insensitive PASSED [ 44%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_column_alignment PASSED [ 47%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_parent_command_no_handler_shows_subcommands PASSED [ 50%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_suggestion_trash_to_delete PASSED [ 52%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_subcommand_synonym_example_allows_optional_delete_suggestion PASSED [ 55%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_checked_before_levenshtein PASSED [ 58%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_synonym_only_when_target_registered PASSED [ 61%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_suggestion_within_distance_2 PASSED [ 64%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_no_suggestion_beyond_distance_2 PASSED [ 67%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_levenshtein_tiebreaker_sort_order PASSED [ 70%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_optional_modifier PASSED [ 73%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_repeating_modifier_accepts_multiple PASSED [ 76%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_no_flag_sets_false PASSED [ 79%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error FAILED [ 82%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected FAILED [ 85%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_error_messages_to_stderr PASSED [ 88%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_exit_code_1_on_error PASSED [ 91%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_help_for_specific_command PASSED [ 94%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_generic_token_classification PASSED [ 97%]
+.evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_default_value_for_optional_arg PASSED [100%]
+
+=================================== FAILURES ===================================
+__________ TestFunctionality.test_required_associative_missing_error ___________
+
+self = <test_checkpoint_1.TestFunctionality object at 0x777e17be06e0>
+cli = <function cli.<locals>._run at 0x777e1717fe20>
+
+    @pytest.mark.functionality
+    def test_required_associative_missing_error(self, cli):
+        """Missing required ``--type=<type>`` → error.
+    
+        Spec: Error Summary table.
+        """
+        result = cli(["site", "create", "example.test"])
+>       assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_1.py:406: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout="Success: Created site 'example.test' (type: standard, title: example.test).\n", stderr='')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: "Success: Created site 'example.test' (type: standard, title: example.test).\n"
+E         stderr: ''
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout="Success: Created site 'example.test' (type: standard, title: example.test).\n", stderr='').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+_____ TestFunctionality.test_required_associative_empty_value_is_rejected ______
+
+self = <test_checkpoint_1.TestFunctionality object at 0x777e17d95070>
+cli = <function cli.<locals>._run at 0x777e16ea49a0>
+
+    @pytest.mark.functionality
+    def test_required_associative_empty_value_is_rejected(self, cli):
+        """Required associative args must have non-empty values.
+    
+        Spec: "All required associative arguments must be present with
+        non-empty values."
+        """
+        result = cli(["site", "create", "example.test", "--type="])
+>       assert_exit_code(result, 1)
+
+.evaluation_tests/test_checkpoint_1.py:420: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+result = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=0, stdout="Success: Created site 'example.test' (type: , title: example.test).\n", stderr='')
+code = 1
+
+    def assert_exit_code(
+        result: subprocess.CompletedProcess[str], code: int
+    ) -> None:
+        """Assert the process exited with *code*."""
+>       assert result.returncode == code, (
+            f"Expected exit code {code}, got {result.returncode}.\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+        )
+E       AssertionError: Expected exit code 1, got 0.
+E         stdout: "Success: Created site 'example.test' (type: , title: example.test).\n"
+E         stderr: ''
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=0, stdout="Success: Created site 'example.test' (type: , title: example.test).\n", stderr='').returncode
+
+.evaluation_tests/conftest.py:314: AssertionError
+--------------------------------- JSON report ----------------------------------
+report saved to: .scbench/pytest-report.json
+=========================== short test summary info ============================
+FAILED .evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_missing_error - AssertionError: Expected exit code 1, got 0.
+  stdout: "Success: Created site 'example.test' (type: standard, title: example.test).\n"
+  stderr: ''
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test'], returncode=0, stdout="Success: Created site 'example.test' (type: standard, title: example.test).\n", stderr='').returncode
+FAILED .evaluation_tests/test_checkpoint_1.py::TestFunctionality::test_required_associative_empty_value_is_rejected - AssertionError: Expected exit code 1, got 0.
+  stdout: "Success: Created site 'example.test' (type: , title: example.test).\n"
+  stderr: ''
+assert 0 == 1
+ +  where 0 = CompletedProcess(args=['/usr/local/bin/uv', 'run', '/workspace/appctl.py', 'site', 'create', 'example.test', '--type='], returncode=0, stdout="Success: Created site 'example.test' (type: , title: example.test).\n", stderr='').returncode
+========================= 2 failed, 32 passed in 4.97s =========================

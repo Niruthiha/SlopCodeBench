@@ -1,0 +1,1132 @@
+{
+ "packet": "P50",
+ "checkpoints": [
+  {
+   "ck": 1,
+   "V": {
+    "present": [
+     "V2",
+     "V5"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 13,
+       "line": null,
+       "quote": ".venv/bin/python industry.py recipe \"$n\" --sde sde"
+      },
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 14,
+       "line": null,
+       "quote": "4104 [] 0"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 1,
+       "step": 13,
+       "line": null,
+       "quote": "All three spec examples match exactly."
+      }
+     ]
+    }
+   },
+   "summary": "Explored SDE tables with inline Python, wrote six modules (sde_source, catalog, volumes, blueprints, report, industry). Checked by running the recipe command on the spec examples and sweeping all 4,104 blueprints for crashes."
+  },
+  {
+   "ck": 2,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "sde_source.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py sde_source.py catalog.py blueprints.py report.py volumes.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 2,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py sde_source.py catalog.py blueprints.py report.py volumes.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": 2,
+       "step": null,
+       "line": 92,
+       "quote": "@@ -0,0 +1,204 @@"
+      },
+      {
+       "src": "diffs/checkpoint_2.patch",
+       "ck": 2,
+       "step": null,
+       "line": 27,
+       "quote": "+def _build_invention_report(name, sde_dir, skill_level):"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 2,
+       "line": null,
+       "quote": "cat industry.py sde_source.py catalog.py blueprints.py report.py volumes.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "invention.py reads SDE tables through existing sde_source reader functions",
+      "evidence": [
+       {
+        "src": "code/checkpoint_2/invention.py",
+        "ck": 2,
+        "step": null,
+        "line": 99,
+        "quote": "for bp, act, product, qty in sde_source.activity_products(sde_dir):"
+       }
+      ]
+     },
+     {
+      "code": "R2",
+      "what": "invention_report.py re-implements the ITEM/Group/Market Group header already in report.render",
+      "evidence": [
+       {
+        "src": "code/checkpoint_2/invention_report.py",
+        "ck": 2,
+        "step": null,
+        "line": 49,
+        "quote": "market = \" > \".join(data.market_path) if data.market_path else \"None\""
+       },
+       {
+        "src": "code/checkpoint_2/report.py",
+        "ck": 2,
+        "step": null,
+        "line": 38,
+        "quote": "market = \" > \".join(data.market_path) if data.market_path else \"None\""
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5"
+    ],
+    "primary": "V1",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 6,
+       "line": null,
+       "quote": "cat > /tmp/r.py <<'EOF' from decimal import Decimal, ROUND_HALF_UP"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 9,
+       "line": null,
+       "quote": "cat > /tmp/r4.py <<'EOF'"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 21,
+       "line": null,
+       "quote": "plan=p.plan(t,5) if plan: n+=1"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 21,
+       "line": null,
+       "quote": "2184 Counter({(False, 'Tech II', 2, 9): 2072, (True, 'Tech III', 2, 27): 112})"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 20,
+       "line": null,
+       "quote": "ALL MATCH"
+      },
+      {
+       "src": "trace",
+       "ck": 2,
+       "step": 20,
+       "line": null,
+       "quote": "All three spec examples match byte-for-byte."
+      }
+     ]
+    }
+   },
+   "summary": "Read all modules, probed SDE and fitted rounding/skill formula to spec numbers with /tmp scripts, added invention.py and invention_report.py plus CLI wiring. Diffed the three spec examples byte-for-byte and swept all inventable items."
+  },
+  {
+   "ck": 3,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "blueprints.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py blueprints.py report.py catalog.py; ls sde"
+       }
+      ]
+     },
+     {
+      "place": "industry.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py blueprints.py report.py catalog.py; ls sde"
+       }
+      ]
+     },
+     {
+      "place": "report.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 3,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py blueprints.py report.py catalog.py; ls sde"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 65,
+       "quote": "+    if not blueprints.material_efficiency_applies(recipe.activity):"
+      },
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 156,
+       "quote": "+    if data.show_waste:"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 53,
+       "quote": "+def _build_report(name, sde_dir, me=0, te=0, show_waste=False):"
+      },
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 142,
+       "quote": "+    materials: tuple  # of (name, quantity, buildable, waste)"
+      },
+      {
+       "src": "diffs/checkpoint_3.patch",
+       "ck": 3,
+       "step": null,
+       "line": 129,
+       "quote": "+            text = _build_report(\" \".join(args.name), args.sde, args.me, args.te, args.waste)"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 2,
+       "line": null,
+       "quote": "cat industry.py blueprints.py report.py catalog.py; ls sde"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "waste and ME quantities extend the existing ReportInput/render path rather than a new renderer",
+      "evidence": [
+       {
+        "src": "diffs/checkpoint_3.patch",
+        "ck": 3,
+        "step": null,
+        "line": 84,
+        "quote": "+            show_waste=show_waste,"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V2",
+     "V5",
+     "V7"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 3,
+       "line": null,
+       "quote": ".venv/bin/python industry.py recipe Naga --sde sde;"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 5,
+       "line": null,
+       "quote": "Everything matches the spec."
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 3,
+       "step": 6,
+       "line": null,
+       "quote": "A quick check that the default output and the `invention` command didn't change:"
+      }
+     ]
+    }
+   },
+   "summary": "Read four core modules, added ME/TE helpers to blueprints.py, threaded me/te/waste through _build_report and report.render. Compared Naga spec cases and re-checked default recipe and invention output."
+  },
+  {
+   "ck": 4,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "blueprints.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 3,
+        "line": null,
+        "quote": "cat blueprints.py invention.py catalog.py volumes.py sde_source.py; ls -la sde"
+       }
+      ]
+     },
+     {
+      "place": "invention.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 3,
+        "line": null,
+        "quote": "cat blueprints.py invention.py catalog.py volumes.py sde_source.py; ls -la sde"
+       }
+      ]
+     },
+     {
+      "place": "industry.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 4,
+        "step": 2,
+        "line": null,
+        "quote": "cat industry.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "no",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_4.patch",
+       "ck": 4,
+       "step": null,
+       "line": 283,
+       "quote": "@@ -0,0 +1,153 @@"
+      },
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 6,
+       "line": null,
+       "quote": "Now writing the build-string parser, the planner, and the CSV writer."
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 3,
+       "line": null,
+       "quote": "cat blueprints.py invention.py catalog.py volumes.py sde_source.py; ls -la sde"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R1",
+      "what": "planner computes material quantities with the existing blueprints.material_amount helper",
+      "evidence": [
+       {
+        "src": "code/checkpoint_4/planner.py",
+        "ck": 4,
+        "step": null,
+        "line": 132,
+        "quote": "needed = blueprints.material_amount(quantity, me, runs) * count"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5",
+     "V7"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 13,
+       "line": null,
+       "quote": "--config /tmp/cfg.yaml --sde sde --output /tmp/out && cat /tmp/out/*.csv"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 4,
+       "line": null,
+       "quote": "python industry.py recipe Barrage L --sde sde; python industry.py invention Barrage L --sde sde --skill 3"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 13,
+       "line": null,
+       "quote": "Both examples from the spec (`Barrage L 10 None x10` and `Barrage L 10 10 20 x10`) produce exactly the expected `materials.csv` and `jobs.csv`."
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 4,
+       "step": 13,
+       "line": null,
+       "quote": "also checking that the `recipe` command still gives the same output after the material-rule change:"
+      }
+     ]
+    }
+   },
+   "summary": "Read the whole program, added hooks to blueprints.py/invention.py, new build_string, planner, plan_report modules and plan CLI. Ran both spec plan examples, extra build strings, and re-checked recipe output after changing material_amount."
+  },
+  {
+   "ck": 5,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "planner.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 2,
+        "line": null,
+        "quote": "for f in planner.py plan_report.py build_string.py industry.py blueprints.py; do echo \"=== $f\"; cat $f; done"
+       }
+      ]
+     },
+     {
+      "place": "plan_report.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 2,
+        "line": null,
+        "quote": "for f in planner.py plan_report.py build_string.py industry.py blueprints.py; do echo \"=== $f\"; cat $f; done"
+       }
+      ]
+     },
+     {
+      "place": "industry.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 5,
+        "step": 2,
+        "line": null,
+        "quote": "for f in planner.py plan_report.py build_string.py industry.py blueprints.py; do echo \"=== $f\"; cat $f; done"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I1",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": 5,
+       "step": null,
+       "line": 164,
+       "quote": "+    def _split(self, groups, seconds, te):"
+      },
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": 5,
+       "step": null,
+       "line": 127,
+       "quote": "+def split_runs(runs, max_runs):"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": 5,
+       "step": null,
+       "line": 27,
+       "quote": "+def _build_plan(text, config_path, sde_dir, output_dir, build_all=False):"
+      },
+      {
+       "src": "diffs/checkpoint_5.patch",
+       "ck": 5,
+       "step": null,
+       "line": 45,
+       "quote": "+    plan_report.write(builder.plan(request, build_all=build_all), output_dir)"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 3,
+       "line": null,
+       "quote": "for f in catalog.py invention.py volumes.py sde_source.py; do echo \"=== $f\"; cat $f; done"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R3",
+      "what": "inline material-consumption and job-row code in plan() factored into _consume/_job_rows used by both paths",
+      "evidence": [
+       {
+        "src": "diffs/checkpoint_5.patch",
+        "ck": 5,
+        "step": null,
+        "line": 213,
+        "quote": "+    def _consume(self, recipe, me, groups, buy, demand, cut=()):"
+       },
+       {
+        "src": "diffs/checkpoint_5.patch",
+        "ck": 5,
+        "step": null,
+        "line": 249,
+        "quote": "+            self._consume(recipe, me, groups, buy, None)"
+       },
+       {
+        "src": "diffs/checkpoint_5.patch",
+        "ck": 5,
+        "step": null,
+        "line": 268,
+        "quote": "+            self._consume(component, c_me, c_groups, buy, demand, cut)"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5",
+     "V7",
+     "V8"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 4,
+       "line": null,
+       "quote": "mkdir -p /tmp/t && printf 'te_bonus: 20\\ninvention_skill: 3\\n' > /tmp/t/c.yaml"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 5,
+       "line": null,
+       "quote": ".venv/bin/python -c \" import catalog, blueprints c=catalog.Catalog('sde'); ind=blueprints.Industry('sde',c)"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 8,
+       "line": null,
+       "quote": "ALL MATCH"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 13,
+       "line": null,
+       "quote": "all three examples in the spec produce exactly the expected `jobs.csv` and `materials.csv`"
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 12,
+       "line": null,
+       "quote": "Now I'll re-run the spec examples, the non-build-all baseline, and a build-all pass over every buildable item in the SDE."
+      }
+     ],
+     "V8": [
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 13,
+       "line": null,
+       "quote": "M=/tmp/agent_home/.claude/projects/-workspace/memory cat > $M/split-boundary-strict.md"
+      },
+      {
+       "src": "trace",
+       "ck": 5,
+       "step": 12,
+       "line": null,
+       "quote": "I'll record the non-obvious split-boundary rule in memory, since later stages will likely build on it."
+      }
+     ]
+    }
+   },
+   "summary": "Read all modules, added build-all tree resolution and job splitting in planner.py, start/end amounts in plan_report, CLI flag. Matched three spec examples, checked non-build-all output unchanged, swept SDE, wrote a memory note on split boundary."
+  },
+  {
+   "ck": 6,
+   "L": {
+    "primary": "L3",
+    "places": [
+     {
+      "place": "planner.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 3,
+        "line": null,
+        "quote": "cat planner.py industry.py plan_report.py build_string.py"
+       }
+      ]
+     },
+     {
+      "place": "industry.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 3,
+        "line": null,
+        "quote": "cat planner.py industry.py plan_report.py build_string.py"
+       }
+      ]
+     },
+     {
+      "place": "catalog.py",
+      "code": "L3",
+      "evidence": [
+       {
+        "src": "trace",
+        "ck": 6,
+        "step": 4,
+        "line": null,
+        "quote": "cat blueprints.py invention.py catalog.py volumes.py report.py invention_report.py sde_source.py"
+       }
+      ]
+     }
+    ]
+   },
+   "I": {
+    "primary": "I2",
+    "cross_internal": "no",
+    "interface_change": "yes",
+    "read_internals": "yes",
+    "evidence": {
+     "primary": [
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": 6,
+       "step": null,
+       "line": 211,
+       "quote": "+    def plan(self, request, build_all=False, stocks=None, targets=None):"
+      },
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 8,
+       "line": null,
+       "quote": "old_plan_start = src.index(\" def _build_order(self, recipe):\")"
+      }
+     ],
+     "cross_internal": [],
+     "interface_change": [
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": 6,
+       "step": null,
+       "line": 119,
+       "quote": "+    def _build_order(self, product_id, materials, roots=(), recursive=True):"
+      },
+      {
+       "src": "diffs/checkpoint_6.patch",
+       "ck": 6,
+       "step": null,
+       "line": 149,
+       "quote": "+    def _consume(self, recipe, me, groups, buy, demand, consumed, cut=()):"
+      }
+     ],
+     "read_internals": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 4,
+       "line": null,
+       "quote": "cat blueprints.py invention.py catalog.py volumes.py report.py invention_report.py sde_source.py"
+      }
+     ]
+    }
+   },
+   "R": {
+    "instances": [
+     {
+      "code": "R3",
+      "what": "inline invention-attempt code in plan() extracted into _invent, reused for the request and for inventable stock targets",
+      "evidence": [
+       {
+        "src": "diffs/checkpoint_6.patch",
+        "ck": 6,
+        "step": null,
+        "line": 165,
+        "quote": "+    def _invent(self, name, outcome, runs, jobs, buy, consumed):"
+       },
+       {
+        "src": "diffs/checkpoint_6.patch",
+        "ck": 6,
+        "step": null,
+        "line": 252,
+        "quote": "+            groups = self._invent(request.name, outcome, request.runs, request.jobs, buy, consumed)"
+       },
+       {
+        "src": "diffs/checkpoint_6.patch",
+        "ck": 6,
+        "step": null,
+        "line": 298,
+        "quote": "+                c_groups = self._invent(self._items.name(item), outcome, runs, 1, buy, consumed)"
+       }
+      ]
+     },
+     {
+      "code": "R1",
+      "what": "case-insensitive name lookup uses a new public Catalog.names() accessor instead of private maps",
+      "evidence": [
+       {
+        "src": "diffs/checkpoint_6.patch",
+        "ck": 6,
+        "step": null,
+        "line": 106,
+        "quote": "+            for known in self._items.names():"
+       }
+      ]
+     }
+    ]
+   },
+   "V": {
+    "present": [
+     "V1",
+     "V2",
+     "V5",
+     "V7"
+    ],
+    "primary": "V2",
+    "evidence": {
+     "V1": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 5,
+       "line": null,
+       "quote": "mkdir -p /tmp/t && cd /tmp/t && cat > config.yaml <<'EOF'"
+      }
+     ],
+     "V2": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 6,
+       "line": null,
+       "quote": ".venv/bin/python -c \" import catalog, blueprints c=catalog.Catalog('sde'); i=blueprints.Industry('sde',c)"
+      }
+     ],
+     "V5": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 11,
+       "line": null,
+       "quote": "Running the spec example reproduces `jobs.csv` exactly and every row of `materials.csv` except one: the Nitrogen Fuel Block `end_amount`."
+      }
+     ],
+     "V7": [
+      {
+       "src": "trace",
+       "ck": 6,
+       "step": 10,
+       "line": null,
+       "quote": "SAME_AS_BEFORE"
+      }
+     ]
+    }
+   },
+   "summary": "Read all modules, reworked planner.plan/_build_order/_consume for stocks and targets, added stock_list.py and Catalog.names. Ran spec example (one Nitrogen end_amount mismatch left, explained as spec error) and confirmed build-all output unchanged without lists."
+  }
+ ],
+ "failures": [
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_2.py::test_invention_functionality[dual_giga-1]",
+    ".evaluation_tests/test_checkpoint_2.py::test_invention_functionality[dual_giga-5]",
+    ".evaluation_tests/test_checkpoint_2.py::test_probability_clamps_to_one"
+   ],
+   "first_ck": 2,
+   "regression": false,
+   "code": "F2",
+   "why": "Spec says 'sum of required science skill levels' without defining science; agent counted only Science-group skills, excluding Capital Ship Construction (Production group). Test expects 3 science skills, so probabilities (and the clamp to 100) come out low.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_2.md",
+     "ck": 2,
+     "step": null,
+     "line": 82,
+     "quote": "* (1 + (sum of required science skill levels)/30 + encryption skill / 40)"
+    },
+    {
+     "src": "code/checkpoint_2/invention.py",
+     "ck": 2,
+     "step": null,
+     "line": 142,
+     "quote": "return self._catalog.group_name(skill) == _SCIENCE_GROUP and not self._is_encryption(skill)"
+    },
+    {
+     "src": "trace",
+     "ck": 2,
+     "step": 13,
+     "line": null,
+     "quote": "('Production', 'Capital Ship Construction') 54"
+    },
+    {
+     "src": "tests/cases/checkpoint_2/dual_giga.json",
+     "ck": 2,
+     "step": null,
+     "line": 8,
+     "quote": "\"num_science_skills\": 3,"
+    },
+    {
+     "src": "results/checkpoint_2.md",
+     "ck": 2,
+     "step": null,
+     "line": 75,
+     "quote": "E       assert 94.21 == 100.0"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_3.py::test_proteus_me5_waste",
+    ".evaluation_tests/test_checkpoint_3.py::test_ark_me5_waste",
+    ".evaluation_tests/test_checkpoint_3.py::test_me10_with_display_waste"
+   ],
+   "first_ck": 3,
+   "regression": false,
+   "code": "F1",
+   "why": "Spec defines waste as 'due to ME not being max' (i.e. relative to ME=10); code computes waste relative to ME=0, so ME=10 shows nonzero waste and small-quantity items show 0 instead of 1.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_3.md",
+     "ck": 3,
+     "step": null,
+     "line": 7,
+     "quote": "* `--display-waste`/`-waste`: Bool flag to enable displaying the waste due to ME not being max."
+    },
+    {
+     "src": "code/checkpoint_3/industry.py",
+     "ck": 3,
+     "step": null,
+     "line": 43,
+     "quote": "waste = blueprints.material_amount(qty, 0) - needed"
+    },
+    {
+     "src": "results/checkpoint_3.md",
+     "ck": 3,
+     "step": null,
+     "line": 119,
+     "quote": "E           assert 2600 == 0"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[kronos_invent]",
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[revelation_10_3d]",
+    ".evaluation_tests/test_checkpoint_5.py::test_build_all_functionality[loki_l1_1d]"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F2",
+   "why": "Spec text ('> split days', floor formula) conflicts with its own example (3.0-day job split at split_days 3). Agent chose strict-under max runs (ceil-1); tests follow the floor formula, so jobs exactly at the limit get split differently.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": 5,
+     "step": null,
+     "line": 18,
+     "quote": "* If the real time (time less TE) for a job takes > **`min(30,split_days)` days**, then you will need to split the job up into multiple jobs"
+    },
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": 5,
+     "step": null,
+     "line": 115,
+     "quote": "Fernite Carbide Reaction Formula,15,1.5,2"
+    },
+    {
+     "src": "code/checkpoint_5/planner.py",
+     "ck": 5,
+     "step": null,
+     "line": 135,
+     "quote": "return math.ceil(self._split_days / per_run) - 1"
+    },
+    {
+     "src": "trace",
+     "ck": 5,
+     "step": 13,
+     "line": null,
+     "quote": "jobs must finish strictly under split_days (spec text says \">\" but examples require it)"
+    },
+    {
+     "src": "results/checkpoint_5.md",
+     "ck": 5,
+     "step": null,
+     "line": 65,
+     "quote": "E       AssertionError: Jobs mismatch for kronos_invent"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_5.py::test_split_days_over_thirty_fails"
+   ],
+   "first_ck": 5,
+   "regression": false,
+   "code": "F2",
+   "why": "Spec lists split_days as '<float <= 30>' but also uses min(30,split_days), implying larger values are allowed; agent clamped 31 to 30 instead of erroring. Defensible reading of an ambiguous spec.",
+   "evidence": [
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": 5,
+     "step": null,
+     "line": 9,
+     "quote": "split_days: 3.0 # <float <= 30, default is 3>"
+    },
+    {
+     "src": "code/checkpoint_5/planner.py",
+     "ck": 5,
+     "step": null,
+     "line": 63,
+     "quote": "return min(Fraction(repr(float(value))), Fraction(_MAX_SPLIT_DAYS))"
+    },
+    {
+     "src": "results/checkpoint_5.md",
+     "ck": 5,
+     "step": null,
+     "line": 136,
+     "quote": "E       AssertionError: Expected error for split_days=31"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_build_all_with_stocks_functionality[kronos]"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "Same split-boundary choice carried from ck5: Photonic Metamaterials job split into 8x262 runs (strictly under 30 days) where the test expects 299/300-run jobs reaching exactly 30.0 days.",
+   "evidence": [
+    {
+     "src": "code/checkpoint_6/planner.py",
+     "ck": 6,
+     "step": null,
+     "line": 148,
+     "quote": "return math.ceil(self._split_days / per_run) - 1"
+    },
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 73,
+     "quote": "E       AssertionError: Jobs mismatch for kronos"
+    },
+    {
+     "src": "spec/checkpoint_5.md",
+     "ck": 6,
+     "step": null,
+     "line": 25,
+     "quote": "max_runs = floor(split_days / days_per_run)"
+    }
+   ]
+  },
+  {
+   "tests": [
+    ".evaluation_tests/test_checkpoint_6.py::test_build_all_with_stocks_functionality[ion_siege_real]"
+   ],
+   "first_ck": 6,
+   "regression": false,
+   "code": "F2",
+   "why": "Stocked datacores: agent consumes only the invention attempts' 24 units (end 1006); the test expects end_amount 0. The ck6 spec says nothing about how stocked invention inputs are drawn down; cause of the reference value not determinable.",
+   "evidence": [
+    {
+     "src": "results/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 125,
+     "quote": "E         Diff: {'values_changed': {\"root['Datacore - Plasma Physics']['end_amount']\": {'new_value': 0, 'old_value': 1006}"
+    },
+    {
+     "src": "spec/checkpoint_6.md",
+     "ck": 6,
+     "step": null,
+     "line": 21,
+     "quote": "Outputs from stock targets show up in the `materials.csv` with whatever start amount they had if stockpile is present with the appropriate end amount based on the target quantity. "
+    },
+    {
+     "src": "diffs/checkpoint_6.patch",
+     "ck": 6,
+     "step": null,
+     "line": 188,
+     "quote": "+            consumed[material] = consumed.get(material, 0) + quantity * attempts"
+    }
+   ]
+  }
+ ],
+ "observations": "In this run we observed the agent read the whole program at the start of every later session (ck2 step 2.2, ck4 steps 4.2-4.3, ck5 steps 5.2-5.3, ck6 steps 6.3-6.4) before editing, and add new modules for new commands (invention.py ck2, planner.py/build_string.py ck4, stock_list.py ck6). It refactored within planner.py twice: extracting _consume/_job_rows (ck5 diff line 213) and _invent (ck6 diff line 165). One copy appeared: invention_report.py repeats report.py's header lines (ck2). Verification was mainly running the CLI on spec examples (ck2 step 2.20 'ALL MATCH', ck5 step 5.8) plus regression spot-checks (ck3 step 3.6, ck6 step 6.10). In ck2 it fitted the probability formula to the spec numbers with /tmp scripts (steps 2.6-2.9). Most failures trace to spec readings: 'science' skills limited to the Science group (ck2 step 2.13), waste measured from ME 0 (ck3), and a strict split boundary the agent chose from conflicting spec text and examples, which it recorded in a memory note (ck5 step 5.13); that note was gone in ck6 (step 6.2 ERROR). In ck6 the agent reported a spec-example mismatch (Nitrogen Fuel Block 34 vs 35) and left it (step 6.11)."
+}

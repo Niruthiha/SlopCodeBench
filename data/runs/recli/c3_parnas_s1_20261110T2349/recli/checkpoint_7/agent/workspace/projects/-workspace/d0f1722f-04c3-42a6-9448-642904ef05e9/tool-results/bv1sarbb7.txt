@@ -1,0 +1,864 @@
+"""Containers, compose projects, volumes and networks.
+
+Secret: which container runtime binary is driven and with which arguments,
+how compose files are discovered and merged, how project-scoped resource
+names are derived, which labels mark resources as belonging to appctl, and
+how volumes are linked into the host filesystem on each platform.
+"""
+
+import glob
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+
+from . import messages as _messages
+from . import process, yaml_lite
+from .errors import CliError
+from .output import Output
+
+RUNTIME = "docker"
+RUNNING = "running"
+EXITED = "exited"
+VENDOR_LABEL = "org.label-schema.vendor=AppCtl"
+PROJECT_LABEL = "io.appctl.project"
+DEFAULT_ROOT_DIR = "/var/lib/docker"
+
+# Base compose file names, in order of preference.
+BASE_COMPOSE_FILES = ("compose.yaml", "compose.yml",
+                      "docker-compose.yaml", "docker-compose.yml")
+# Optional overrides discovered in a project directory, in order of application.
+OVERRIDE_COMPOSE_FILES = ("compose.override.yaml", "compose.override.yml",
+                          "docker-compose.override.yaml", "docker-compose.override.yml",
+                          "docker-compose-custom.yaml", "docker-compose-custom.yml")
+OVERRIDE_COMPOSE_DIR = "user-docker-compose"
+_COMPOSE_EXTENSIONS = (".yml", ".yaml")
+# Service keys whose sequence value is replaced, not extended, by an override.
+_REPLACED_KEYS = {"command", "entrypoint", "test", "dns", "dns_search"}
+_FALSE_WORDS = {"", "0", "false", "no", "off", "none", "null"}
+
+
+# --- naming -------------------------------------------------------------------
+
+def project_prefix(project):
+    """Deterministic, runtime-safe prefix for resources of ``project``."""
+    return re.sub(r"[^a-z0-9]", "", str(project).lower())
+
+
+def volume_name(project, volume):
+    """Name of the persistent volume ``volume`` (a spec or a name) of ``project``."""
+    name = volume["name"] if isinstance(volume, dict) else volume
+    return f"{project_prefix(project)}_{name}"
+
+
+def project_labels(project):
+    return [VENDOR_LABEL, f"{PROJECT_LABEL}={project}"]
+
+
+def is_truthy(value):
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSE_WORDS
+    return bool(value)
+
+
+def is_darwin(platform=None):
+    return (platform or sys.platform) == "darwin"
+
+
+# --- compose files ------------------------------------------------------------
+
+def is_compose_file(path):
+    return os.path.isfile(path) and path.lower().endswith(_COMPOSE_EXTENSIONS)
+
+
+def base_compose_file(project_dir):
+    for name in BASE_COMPOSE_FILES:
+        candidate = os.path.join(project_dir, name)
+        if is_compose_file(candidate):
+            return candidate
+    return None
+
+
+def discovered_overrides(project_dir):
+    """Optional override files found in ``project_dir``, in application order."""
+    found = [os.path.join(project_dir, name) for name in OVERRIDE_COMPOSE_FILES]
+    found = [path for path in found if is_compose_file(path)]
+    pattern = os.path.join(glob.escape(os.path.join(project_dir, OVERRIDE_COMPOSE_DIR)), "*")
+    found += sorted(path for path in glob.glob(pattern) if is_compose_file(path))
+    return found
+
+
+def _resolve_custom(custom, cwd, project_dir):
+    path = os.path.expanduser(str(custom))
+    if os.path.isabs(path):
+        return path
+    for base in (cwd, project_dir):
+        candidate = os.path.join(base, path)
+        if os.path.exists(candidate):
+            return os.path.normpath(candidate)
+    return os.path.normpath(os.path.join(cwd, path))
+
+
+def compose_files(project_dir, custom=None, cwd=None, out=None):
+    """The compose files of a project: the base file, then the overrides.
+
+    A non-empty ``custom`` path is applied after the base file; otherwise
+    overrides are discovered in the project directory. A missing custom file
+    is reported as a warning and skipped.
+    """
+    project_dir = os.path.abspath(project_dir)
+    files = []
+    base = base_compose_file(project_dir)
+    if base:
+        files.append(base)
+    if custom not in (None, "") and str(custom).strip():
+        path = _resolve_custom(custom, cwd or project_dir, project_dir)
+        if not os.path.isfile(path):
+            (out or _default_output()).warning(_messages.custom_compose_missing(custom))
+        elif is_compose_file(path) and path not in files:
+            files.append(path)
+    else:
+        files += [path for path in discovered_overrides(project_dir) if path not in files]
+    return files
+
+
+def _merge_sequence(old, new):
+    merged = list(old)
+    for item in new:
+        if item not in merged:
+            merged.append(item)
+    return merged
+
+
+def merge_compose(base, override, key=None):
+    """Merge one compose definition into another, as compose does."""
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+        for name, value in override.items():
+            merged[name] = (merge_compose(merged[name], value, name)
+                            if name in merged else value)
+        return merged
+    if (isinstance(base, list) and isinstance(override, list)
+            and key not in _REPLACED_KEYS):
+        return _merge_sequence(base, override)
+    return override
+
+
+def load_compose(files):
+    """Merged compose definition of ``files``."""
+    merged = {}
+    for path in files:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = yaml_lite.load(handle.read())
+        except OSError as exc:
+            raise CliError(_messages.compose_unparsable(path, exc)) from None
+        except yaml_lite.YamlError as exc:
+            raise CliError(_messages.compose_unparsable(path, exc)) from None
+        if isinstance(data, dict):
+            merged = merge_compose(merged, data)
+    return merged
+
+
+def service_names(definition):
+    services = definition.get("services") if isinstance(definition, dict) else None
+    return [str(name) for name in services] if isinstance(services, dict) else []
+
+
+# --- runtime ------------------------------------------------------------------
+
+def _default_output():
+    return Output(sys.stdout, sys.stderr)
+
+
+def _fileno(stream):
+    try:
+        return stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+class Runtime:
+    """Drives the container runtime on behalf of one invocation.
+
+    ``config`` is anything with a ``get(name, default)`` method (e.g. the
+    effective runtime configuration); ``custom-compose`` and ``skip-tty`` are
+    read from it.
+    """
+
+    def __init__(self, out=None, env=None, cwd=None, config=None, platform=None,
+                 stdout=None, stderr=None):
+        self.out = out or _default_output()
+        self.env = dict(env) if env is not None else dict(os.environ)
+        self.cwd = cwd or os.getcwd()
+        self.config = config if config is not None else {}
+        self.platform = platform
+        self.stdout = stdout
+        self.stderr = stderr
+
+    # --- plumbing -----------------------------------------------------------
+
+    def _setting(self, name):
+        return self.config.get(name, None)
+
+    def is_installed(self):
+        return shutil.which(RUNTIME, path=self.env.get("PATH")) is not None
+
+    def ensure_installed(self):
+        if not self.is_installed():
+            raise CliError(_messages.container_runtime_missing())
+
+    def run(self, args, cwd=None):
+        """Run the runtime with ``args``; return the ``ProcessRun``."""
+        self.ensure_installed()
+        return process.run([RUNTIME] + [str(a) for a in args], cwd=cwd or self.cwd,
+                           env=self.env, out=self.out)
+
+    def check(self, args, cwd=None):
+        return self.run(args, cwd=cwd).succeeded
+
+    def passthrough(self, args, cwd=None):
+        """Run the runtime attached to the terminal; return its exit code."""
+        self.ensure_installed()
+        argv = [RUNTIME] + [str(a) for a in args]
+        self.out.debug(f"Running command: {process.command_text(argv)}", group="process")
+        stdout = self.stdout if self.stdout is not None else self.out.stdout
+        stderr = self.stderr if self.stderr is not None else self.out.stderr
+        for stream in (stdout, stderr):
+            if hasattr(stream, "flush"):
+                stream.flush()
+        out_fd, err_fd = _fileno(stdout), _fileno(stderr)
+        try:
+            proc = subprocess.run(
+                argv, cwd=cwd or self.cwd, env=self.env,
+                stdout=out_fd if out_fd is not None else subprocess.PIPE,
+                stderr=err_fd if err_fd is not None else subprocess.PIPE)
+        except OSError as exc:
+            stderr.write(f"{getattr(exc, 'strerror', None) or exc}\n")
+            return 127
+        if out_fd is None and proc.stdout:
+            stdout.write(proc.stdout.decode(errors="replace"))
+        if err_fd is None and proc.stderr:
+            stderr.write(proc.stderr.decode(errors="replace"))
+        return proc.returncode
+
+    # --- containers ---------------------------------------------------------
+
+    def container_status(self, container):
+        """``"running"``, ``"exited"`` or ``None`` when there is no such container."""
+        result = self.run(["inspect", "--type=container", "-f", "{{.State.Running}}",
+                           container])
+        if not result.succeeded:
+            return None
+        return RUNNING if result.stdout.strip().lower() == "true" else EXITED
+
+    def start_container(self, container):
+        return self.check(["start", container])
+
+    def stop_container(self, container):
+        return self.check(["stop", container])
+
+    def restart_container(self, container):
+        return self.check(["restart", container])
+
+    def boot_container(self, container, create=None):
+        """Make sure ``container`` runs: start it if exited, create it if
+        missing. ``create`` is a callable, a runtime argument list, or a shell
+        command string."""
+        status = self.container_status(container)
+        if status == EXITED:
+            return self.start_container(container)
+        if status == RUNNING:
+            return True
+        if create is None:
+            return False
+        if callable(create):
+            return bool(create())
+        if isinstance(create, str):
+            return process.run(create, cwd=self.cwd, env=self.env, out=self.out).succeeded
+        return self.check(create)
+
+    # --- compose ------------------------------------------------------------
+
+    def compose_files(self, project_dir):
+        return compose_files(project_dir, self._setting("custom-compose"),
+                             cwd=self.cwd, out=self.out)
+
+    def compose_args(self, project_dir, files=None):
+        """Runtime arguments selecting the merged compose project."""
+        project_dir = os.path.abspath(project_dir)
+        if files is None:
+            files = self.compose_files(project_dir)
+        args = ["compose"]
+        prefix = project_prefix(os.path.basename(project_dir))
+        if prefix:
+            args += ["-p", prefix]
+        for path in files:
+            args += ["-f", path]
+        return args
+
+    def compose_definition(self, project_dir):
+        files = self.compose_files(project_dir)
+        if not files:
+            raise CliError(_messages.no_compose_file(os.path.abspath(project_dir)))
+        return load_compose(files)
+
+    def services(self, project_dir):
+        """Service names, in the order they appear in the merged configuration."""
+        return service_names(self.compose_definition(project_dir))
+
+    def service_exists(self, project_dir, service):
+        try:
+            return str(service) in self.services(project_dir)
+        except CliError:
+            return False
+
+    def compose_up(self, project_dir, services=()):
+        args = self.compose_args(project_dir) + ["up", "-d"] + [str(s) for s in services or ()]
+        return self.run(args, cwd=os.path.abspath(project_dir))
+
+    def compose_down(self, project_dir):
+        args = self.compose_args(project_dir) + ["down", "--volumes", "--remove-orphans"]
+        return self.run(args, cwd=os.path.abspath(project_dir))
+
+    def exec_args(self, project_dir, service, command, user=None, shell="sh",
+                  shell_wrapper=False):
+        args = self.compose_args(project_dir) + ["exec"]
+        if is_truthy(self._setting("skip-tty")):
+            args.append("-T")
+        if user:
+            args.append(f"--user={user}")
+        args.append(str(service))
+        if shell_wrapper:
+            text = command if isinstance(command, str) else process.command_text(command)
+            return args + [shell or "sh", "-c", text]
+        if isinstance(command, str):
+            return args + shlex.split(command)
+        return args + [str(part) for part in command]
+
+    def compose_exec(self, project_dir, service, command, user=None, shell="sh",
+                     shell_wrapper=False, interactive=False):
+        """Run ``command`` in the container of ``service``. Returns the exit
+        code when ``interactive`` (attached to the terminal), otherwise the
+        ``ProcessRun``."""
+        args = self.exec_args(project_dir, service, command, user=user, shell=shell,
+                              shell_wrapper=shell_wrapper)
+        cwd = os.path.abspath(project_dir)
+        if interactive:
+            return self.passthrough(args, cwd=cwd)
+        return self.run(args, cwd=cwd)
+
+    # --- volumes ------------------------------------------------------------
+
+    def root_dir(self):
+        result = self.run(["info", "--format", "{{.DockerRootDir}}"])
+        root = result.stdout.strip() if result.succeeded else ""
+        return root or DEFAULT_ROOT_DIR
+
+    def volume_exists(self, name):
+        return self.check(["volume", "inspect", name])
+
+    def create_volumes(self, project, volumes):
+        """Create the persistent volumes of ``project``; return the names of
+        the volumes that were created."""
+        created = []
+        darwin = is_darwin(self.platform)
+        root = None
+        for volume in volumes or ():
+            if volume.get("skip_volume") is True:
+                continue
+            name = volume_name(project, volume)
+            if self.volume_exists(name):
+                continue
+            labels = []
+            for label in project_labels(project):
+                labels += ["--label", label]
+            result = self.run(["volume", "create"] + labels + [name])
+            if not result.succeeded:
+                raise CliError(result.stderr.strip() or f"Unable to create volume '{name}'.")
+            created.append(name)
+            link = volume.get("path_to_symlink")
+            if not link:
+                continue
+            if darwin:
+                if not volume.get("skip_darwin"):
+                    os.makedirs(link, exist_ok=True)
+            elif not volume.get("skip_linux"):
+                if root is None:
+                    root = self.root_dir()
+                parent = os.path.dirname(link)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                if not os.path.lexists(link):
+                    os.symlink(os.path.join(root, "volumes", name, "_data"), link)
+        return created
+
+    def mounting_volumes(self, volumes):
+        return mounting_volumes(volumes, self.platform)
+
+    # --- networks -----------------------------------------------------------
+
+    def create_network(self, project, name=None):
+        args = ["network", "create"]
+        for label in project_labels(project):
+            args += ["--label", label]
+        return self.check(args + [name or project])
+
+    def connect_network(self, network, container):
+        if not self.check(["network", "connect", network, container]):
+            raise CliError(_messages.network_connect_failed(container))
+        self.out.success(_messages.network_connected(container))
+        return True
+
+    def disconnect_network(self, network, container):
+        if self.check(["network", "disconnect", network, container]):
+            self.out.log(_messages.network_disconnected(network, container))
+            return True
+        self.out.warning(_messages.network_disconnect_failed(container))
+        return False
+
+    def remove_network(self, name):
+        return self.check(["network", "rm", name])
+
+    def network_exists(self, name):
+        return self.check(["network", "inspect", name])
+
+
+def mounting_volumes(volumes, platform=None):
+    """Compose mount entries (``source:container_path``) for ``volumes`` on
+    the current platform, omitting volumes skipped for it."""
+    darwin = is_darwin(platform)
+    mounts = []
+    for volume in volumes or ():
+        if darwin and volume.get("skip_darwin"):
+            continue
+        if not darwin and volume.get("skip_linux"):
+            continue
+        source = volume["name"]
+        if darwin and volume.get("path_to_symlink"):
+            source = volume["path_to_symlink"]
+        mounts.append(f"{source}:{volume['container_path']}")
+    return mounts
+"""Container, compose project and network commands.
+
+Secret: which project directory a command operates on, how command options
+override configuration, and how runtime outcomes map to output and exit
+codes.
+"""
+
+import os
+
+from . import containers, yaml_lite
+from .errors import CliError
+
+_COMPOSE = "[--custom-compose=<file>]"
+
+
+class _Settings:
+    """Effective configuration with command options layered on top."""
+
+    def __init__(self, config, overrides):
+        self._config = config
+        self._overrides = {k: v for k, v in overrides.items() if v is not None}
+
+    def get(self, name, default=None):
+        if name in self._overrides:
+            return self._overrides[name]
+        return self._config.get(name, default)
+
+
+def _runtime(ctx):
+    overrides = {"custom-compose": ctx.args.option("custom-compose")}
+    if ctx.args.option("skip-tty"):
+        overrides["skip-tty"] = True
+    return containers.Runtime(out=ctx.out, env=ctx.env, cwd=ctx.cwd,
+                              config=_Settings(ctx.config, overrides))
+
+
+def _project_dir(ctx):
+    path = ctx.config.path() or ctx.cwd
+    return os.path.join(ctx.cwd, os.path.expanduser(str(path)))
+
+
+def _relay(ctx, result):
+    if result.stdout:
+        ctx.out.line(result.stdout.rstrip("\n"))
+    if result.stderr:
+        ctx.out.write_stderr(result.stderr.rstrip("\n"))
+    return result.return_code
+
+
+# --- site -----------------------------------------------------------------------
+
+def _site_config(ctx):
+    runtime = _runtime(ctx)
+    project = _project_dir(ctx)
+    if ctx.args.option("services"):
+        for name in runtime.services(project):
+            ctx.out.line(name)
+        return 0
+    definition = runtime.compose_definition(project)
+    ctx.out.line(yaml_lite.dump(definition).rstrip("\n") if definition else "{}")
+    return 0
+
+
+def _site_has_service(ctx):
+    return 0 if _runtime(ctx).service_exists(_project_dir(ctx), ctx.args.positional(0)) else 1
+
+
+def _site_up(ctx):
+    result = _runtime(ctx).compose_up(_project_dir(ctx), ctx.args.positionals)
+    code = _relay(ctx, result)
+    if code:
+        return code
+    ctx.out.success("Services are up.")
+    return 0
+
+
+def _site_down(ctx):
+    result = _runtime(ctx).compose_down(_project_dir(ctx))
+    code = _relay(ctx, result)
+    if code:
+        return code
+    ctx.out.success("Services are down.")
+    return 0
+
+
+def _site_exec(ctx):
+    service, *command = ctx.args.positionals
+    return _runtime(ctx).compose_exec(
+        _project_dir(ctx), service, command, user=ctx.args.option("exec-user"),
+        shell=ctx.args.option("shell"), shell_wrapper=bool(ctx.args.option("shell-wrapper")),
+        interactive=True)
+
+
+# --- container ------------------------------------------------------------------
+
+def _container_status(ctx):
+    status = _runtime(ctx).container_status(ctx.args.positional(0))
+    ctx.out.line(status or "missing")
+    return 0 if status else 1
+
+
+def _container_boot(ctx):
+    runtime = _runtime(ctx)
+    service = ctx.args.option("service")
+    project = _project_dir(ctx)
+    create = lambda: runtime.compose_up(project, [service] if service else []).succeeded
+    if not runtime.boot_container(ctx.args.positional(0), create=create):
+        raise CliError(f"Unable to boot container '{ctx.args.positional(0)}'.")
+    return 0
+
+
+def _container_action(verb, method):
+    def handler(ctx):
+        name = ctx.args.positional(0)
+        if not getattr(_runtime(ctx), method)(name):
+            raise CliError(f"Unable to {verb} container '{name}'.")
+        return 0
+    return handler
+
+
+# --- network --------------------------------------------------------------------
+
+def _network_create(ctx):
+    project = ctx.args.positional(0)
+    if not _runtime(ctx).create_network(project, ctx.args.option("name")):
+        raise CliError(f"Unable to create network '{ctx.args.option('name') or project}'.")
+    return 0
+
+
+def _network_exists(ctx):
+    exists = _runtime(ctx).network_exists(ctx.args.positional(0))
+    ctx.out.line("true" if exists else "false")
+    return 0 if exists else 1
+
+
+def _network_connect(ctx):
+    network, container = ctx.args.positionals[:2]
+    _runtime(ctx).connect_network(network, container)
+    return 0
+
+
+def _network_disconnect(ctx):
+    network, container = ctx.args.positionals[:2]
+    _runtime(ctx).disconnect_network(network, container)
+    return 0
+
+
+def _network_remove(ctx):
+    name = ctx.args.positional(0)
+    if not _runtime(ctx).remove_network(name):
+        raise CliError(f"Unable to remove network '{name}'.")
+    return 0
+
+
+def register(tree):
+    r = tree.register
+
+    r("site config", _site_config, synopsis=f"[--services] {_COMPOSE}",
+      description="Shows the merged compose configuration of the project.")
+    r("site down", _site_down, synopsis=_COMPOSE,
+      description="Removes the containers, networks and volumes of the project.")
+    r("site exec", _site_exec,
+      synopsis="<service> <command>... [--exec-user=<user>] [--shell=<shell>] "
+               f"[--shell-wrapper] [--skip-tty] {_COMPOSE}",
+      description="Runs a command inside a service container.", defaults={"shell": "sh"})
+    r("site has-service", _site_has_service, synopsis=f"<service> {_COMPOSE}",
+      description="Detects if a service exists in the project.")
+    r("site up", _site_up, synopsis=f"[<service>...] {_COMPOSE}",
+      description="Starts the services of the project in the background.")
+
+    r("container", description="Inspects, boots, starts, stops and restarts containers.")
+    r("container boot", _container_boot, synopsis=f"<name> [--service=<service>] {_COMPOSE}",
+      description="Ensures a container is running, creating it when missing.")
+    r("container restart", _container_action("restart", "restart_container"),
+      synopsis="<name>", description="Restarts a container.")
+    r("container start", _container_action("start", "start_container"),
+      synopsis="<name>", description="Starts a stopped container.")
+    r("container status", _container_status, synopsis="<name>",
+      description="Prints whether a container is running, exited or missing.")
+    r("container stop", _container_action("stop", "stop_container"),
+      synopsis="<name>", description="Stops a running container.")
+
+    r("network", description="Creates, connects, disconnects and removes networks.")
+    r("network connect", _network_connect, synopsis="<network> <container>",
+      description="Connects a project network to a container.")
+    r("network create", _network_create, synopsis="<project> [--name=<name>]",
+      description="Creates the network of a project.")
+    r("network disconnect", _network_disconnect, synopsis="<network> <container>",
+      description="Disconnects a project network from a container.")
+    r("network exists", _network_exists, synopsis="<name>",
+      description="Detects if a network exists.")
+    r("network remove", _network_remove, alias="rm", synopsis="<name>",
+      description="Removes a network.")
+"""External command execution.
+
+Secret: how child processes are spawned, timed and logged, how sensitive
+substrings are hidden from debug output, the wording of the exit code -1
+warning, and how appctl re-invokes itself with the current runtime
+configuration.
+"""
+
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+
+from . import messages as _messages
+from .errors import Halt
+from .output import Output
+
+_GROUP = "process"
+_MASK = "******"
+_SIGNAL_EXIT = -1
+_ENTRY_POINT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "appctl.py")
+# Environment variables describing the runtime that a child appctl inherits.
+_CONFIG_PATH_ENV = "APPCTL_CONFIG_PATH"
+
+
+class ProcessRun:
+    """Outcome of one external command."""
+
+    def __init__(self, command, stdout, stderr, return_code, run_time, cwd=None, env=None):
+        self.command = command
+        self.stdout = stdout
+        self.stderr = stderr
+        self.return_code = return_code
+        self.run_time = run_time
+        self.cwd = cwd
+        self.env = env
+
+    @property
+    def succeeded(self):
+        return self.return_code == 0
+
+    def __repr__(self):
+        return (f"ProcessRun(command={self.command!r}, return_code={self.return_code}, "
+                f"run_time={self.run_time:.3f})")
+
+
+def _default_output():
+    return Output(sys.stdout, sys.stderr)
+
+
+def command_text(command):
+    """The command as a single shell-style string."""
+    if isinstance(command, (list, tuple)):
+        return shlex.join(str(part) for part in command)
+    return str(command)
+
+
+def obfuscate(text, secrets):
+    """Replace every listed substring of ``text`` with ``******``."""
+    text = str(text)
+    for secret in sorted({str(s) for s in secrets or () if s not in (None, "")},
+                         key=len, reverse=True):
+        text = text.replace(secret, _MASK)
+    return text
+
+
+def _decode(data):
+    if data is None:
+        return ""
+    if isinstance(data, bytes):
+        return data.decode(errors="replace")
+    return data
+
+
+def run(command, *, cwd=None, env=None, out=None, obfuscate_list=(), stdin=None):
+    """Run ``command`` and return a ``ProcessRun``.
+
+    ``command`` is either a shell command string or an argument list. The
+    command is logged at debug level before it runs (with every substring in
+    ``obfuscate_list`` masked); afterwards non-empty STDOUT and STDERR and the
+    return code are logged. The returned result always holds the real values.
+    """
+    out = out or _default_output()
+    text = command_text(command)
+
+    def debug(message):
+        out.debug(obfuscate(message, obfuscate_list), group=_GROUP)
+
+    debug(f"Running command: {text}")
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(
+            command, shell=isinstance(command, str), cwd=cwd,
+            env=dict(env) if env is not None else None,
+            input=stdin.encode() if isinstance(stdin, str) else stdin,
+            stdin=None if stdin is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr, code = _decode(proc.stdout), _decode(proc.stderr), proc.returncode
+    except OSError as exc:
+        stdout, stderr, code = "", f"{getattr(exc, 'strerror', None) or exc}\n", 127
+    result = ProcessRun(text, stdout, stderr, code, time.monotonic() - started,
+                        cwd=cwd, env=env)
+    if stdout:
+        debug(f"STDOUT: {stdout.rstrip(chr(10))}")
+    if stderr:
+        debug(f"STDERR: {stderr.rstrip(chr(10))}")
+    debug(f"Return code: {code}")
+    if code == _SIGNAL_EXIT:
+        out.warning(_messages.spawned_exit_minus_one())
+    return result
+
+
+def run_check(command, **kwargs):
+    """Run ``command`` and return whether it exited successfully."""
+    return run(command, **kwargs).succeeded
+
+
+# --- re-dispatching appctl -------------------------------------------------
+
+def _flag(name, value):
+    if value is True:
+        return f"--{name}"
+    if value is False:
+        return f"--no-{name}" if name == "color" else None
+    if value is None:
+        return None
+    return f"--{name}={value}"
+
+
+def runtime_flags(runtime_values):
+    """Global flags reproducing ``runtime_values`` on a command line."""
+    flags = []
+    for name, value in runtime_values.items():
+        flag = _flag(name, value)
+        if flag is not None:
+            flags.append(flag)
+    return flags
+
+
+def _args_list(command):
+    if isinstance(command, str):
+        return shlex.split(command)
+    return [str(part) for part in command]
+
+
+def _assoc_flags(assoc_args):
+    flags = []
+    for key, value in (assoc_args or {}).items():
+        flag = _flag(key, value)
+        if flag is not None:
+            flags.append(flag)
+    return flags
+
+
+class Launcher:
+    """Runs appctl as a child process with the current runtime configuration:
+    the same interpreter and entry point, the same global flags, config file
+    path, environment and working directory."""
+
+    def __init__(self, runtime_values, env, cwd, out, config_path=None):
+        self.runtime_values = dict(runtime_values or {})
+        self.env = dict(env or {})
+        self.cwd = cwd
+        self.out = out or _default_output()
+        self.config_path = config_path
+
+    def argv(self, command, args=(), assoc_args=None, runtime_args=None):
+        values = dict(self.runtime_values)
+        values.update(runtime_args or {})
+        return ([sys.executable, _ENTRY_POINT] + runtime_flags(values)
+                + _args_list(command) + [str(a) for a in args]
+                + _assoc_flags(assoc_args))
+
+    def environment(self):
+        env = dict(self.env)
+        if self.config_path and not env.get(_CONFIG_PATH_ENV):
+            env[_CONFIG_PATH_ENV] = self.config_path
+        return env
+
+    def launch(self, command, args=(), assoc_args=None, *, runtime_args=None,
+               obfuscate_list=(), stdin=None):
+        """Run appctl ``command`` and return the ``ProcessRun``."""
+        return run(self.argv(command, args, assoc_args, runtime_args),
+                   cwd=self.cwd, env=self.environment(), out=self.out,
+                   obfuscate_list=obfuscate_list, stdin=stdin)
+
+    def launch_self(self, command, args=(), assoc_args=None, *, exit_on_error=True,
+                    return_detailed=False, runtime_args=None, obfuscate_list=()):
+        """Run appctl ``command``; return the ``ProcessRun`` when
+        ``return_detailed`` or else its return code. A failure halts the
+        current invocation with the same code when ``exit_on_error``."""
+        result = self.launch(command, args, assoc_args, runtime_args=runtime_args,
+                             obfuscate_list=obfuscate_list)
+        if return_detailed:
+            return result
+        if result.return_code and exit_on_error:
+            raise Halt(result.return_code)
+        return result.return_code
+
+    def runcommand(self, command, *, return_="stdout", parse=None, exit_error=True,
+                   obfuscate_list=(), stdin=None):
+        """Run appctl ``command`` and return part of its outcome.
+
+        ``return_`` is ``"stdout"``, ``"stderr"``, ``"return_code"`` or
+        ``"all"``; with ``parse="json"`` STDOUT is decoded as JSON (``None``
+        when it is not valid JSON).
+        """
+        result = self.launch(command, obfuscate_list=obfuscate_list, stdin=stdin)
+        if result.return_code and exit_error:
+            if result.stderr:
+                self.out.write_stderr(result.stderr)
+            raise Halt(result.return_code)
+        if return_ == "all":
+            return result
+        if return_ == "return_code":
+            return result.return_code
+        if return_ == "stderr":
+            return result.stderr.rstrip("\r\n")
+        stdout = result.stdout.rstrip("\r\n")
+        if parse == "json":
+            try:
+                return json.loads(stdout)
+            except ValueError:
+                return None
+        return stdout

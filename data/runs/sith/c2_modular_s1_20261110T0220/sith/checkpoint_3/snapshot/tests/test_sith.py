@@ -1,0 +1,628 @@
+"""End-to-end tests for `sith.py complete`, `infer` and `goto`."""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+SITH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sith.py")
+
+
+def dedent(source):
+    """Like textwrap.dedent, but keeps the indentation of whitespace-only lines."""
+    lines = source.split("\n")
+    indents = [len(l) - len(l.lstrip()) for l in lines if l.strip()]
+    margin = min(indents) if indents else 0
+    return "\n".join(l[min(margin, len(l) - len(l.lstrip())):] for l in lines)
+
+
+class SithTestCase(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = self._tmp.name
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def write(self, name, source):
+        path = os.path.join(self.dir, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(dedent(source))
+        return path
+
+    def run_sith(self, *args, command="complete"):
+        return subprocess.run([sys.executable, SITH, command, *map(str, args)],
+                              capture_output=True, text=True)
+
+    def complete(self, source, line, col, *flags, name="main.py"):
+        path = self.write(name, source)
+        result = self.run_sith(path, line, col, *flags)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.endswith("\n"))
+        self.assertNotIn(" ", result.stdout.split('"description"')[0].replace('" ', ""))
+        return json.loads(result.stdout)["completions"]
+
+    @staticmethod
+    def by_name(completions):
+        return {c["name"]: c for c in completions}
+
+    @staticmethod
+    def names(completions, include_keywords=True):
+        return [c["name"] for c in completions if include_keywords or c["type"] != "keyword"]
+
+
+class NameCompletionTests(SithTestCase):
+    def test_builtin_prefix(self):
+        result = self.by_name(self.complete("pr", 1, 2))
+        self.assertEqual(result["print"], {"name": "print", "complete": "int", "type": "function",
+                                           "description": "def print(...)"})
+        self.assertEqual(result["property"]["description"], "class property")
+        self.assertEqual(result["property"]["complete"], "operty")
+
+    def test_case_insensitive_complete_by_length(self):
+        result = self.by_name(self.complete("PRI", 1, 3))
+        self.assertEqual(result["print"]["complete"], "nt")
+
+    def test_scopes_and_visibility(self):
+        source = "\n".join([
+            "import os",
+            "GLOBAL = 1",
+            "def outer(p, q=3):",
+            "    local = [1]",
+            "    def inner():",
+            "        z = 1",
+            "        ",
+            "    return inner",
+            "LATER = 2",
+        ])
+        result = self.by_name(self.complete(source, 7, 8))
+        for name in ("z", "local", "p", "q", "inner", "outer", "GLOBAL", "os", "print"):
+            self.assertIn(name, result)
+        self.assertNotIn("LATER", result)
+        self.assertEqual(result["p"]["type"], "param")
+        self.assertEqual(result["os"]["description"], "module os")
+        self.assertEqual(result["local"]["description"], "instance of list")
+
+    def test_not_visible_before_definition(self):
+        source = "a = 1\n\nb = 2\n"
+        names = self.names(self.complete(source, 2, 0))
+        self.assertIn("a", names)
+        self.assertNotIn("b", names)
+
+    def test_ordering(self):
+        source = "_priv = 1\n__dund__ = 2\nZeta = 3\nalpha = 4\n\n"
+        completions = self.complete(source, 5, 0)
+        names = self.names(completions)
+        self.assertLess(names.index("alpha"), names.index("Zeta"))
+        self.assertLess(names.index("Zeta"), names.index("_priv"))
+        self.assertLess(names.index("_priv"), names.index("__dund__"))
+        first_keyword = next(i for i, c in enumerate(completions) if c["type"] == "keyword")
+        self.assertTrue(all(c["type"] == "keyword" for c in completions[first_keyword:]))
+        keywords = names[first_keyword:]
+        self.assertEqual(keywords, sorted(keywords, key=str.lower))
+
+    def test_keywords_included(self):
+        result = self.by_name(self.complete("wh", 1, 2))
+        self.assertEqual(result["while"], {"name": "while", "complete": "ile", "type": "keyword",
+                                           "description": "while"})
+
+    def test_fuzzy(self):
+        names = self.names(self.complete("isins", 1, 5))
+        self.assertIn("isinstance", names)
+        names = self.names(self.complete("isnc", 1, 4, "--fuzzy"))
+        self.assertIn("isinstance", names)
+        completion = self.by_name(self.complete("isnc", 1, 4, "--fuzzy"))["isinstance"]
+        self.assertEqual(completion["complete"], "stance")
+
+    def test_star_import_local_module(self):
+        self.write("helper.py", "def helper_fn(): pass\nVALUE = 3\n_hidden = 1\n")
+        result = self.by_name(self.complete("from helper import *\n", 2, 0))
+        self.assertEqual(result["helper_fn"]["type"], "function")
+        self.assertEqual(result["VALUE"]["description"], "instance of int")
+        self.assertNotIn("_hidden", result)
+
+    def test_star_import_installed(self):
+        result = self.by_name(self.complete("from os import *\ngetc", 2, 4))
+        self.assertIn("getcwd", result)
+
+    def test_from_import_types(self):
+        source = "from os.path import join\nfrom os import path\nfrom collections import OrderedDict\n"
+        result = self.by_name(self.complete(source, 4, 0))
+        self.assertEqual(result["join"]["type"], "function")
+        self.assertEqual(result["path"]["type"], "module")
+        self.assertEqual(result["OrderedDict"]["type"], "class")
+
+    def test_class_body_scope(self):
+        source = "class A:\n    x = 1\n    \n"
+        self.assertIn("x", self.names(self.complete(source, 3, 4)))
+        source = "class A:\n    x = 1\n    def m(self):\n        \n"
+        names = self.names(self.complete(source, 4, 8))
+        self.assertNotIn("x", names)
+        self.assertIn("self", names)
+
+
+class AttributeCompletionTests(SithTestCase):
+    SOURCE = """\
+        import os
+        class Base:
+            attr = []
+            def base_method(self):
+                pass
+
+        class Child(Base):
+            def __init__(self, x):
+                self.x = x
+                self.items = {}
+
+            def method(self):
+                return Child(1)
+
+        c = Child(2)
+        """
+
+    def test_instance(self):
+        source = self.SOURCE + "c.\n"
+        result = self.by_name(self.complete(source, 16, 2))
+        self.assertEqual(set(result), {"attr", "base_method", "method", "x", "items", "__init__"})
+        self.assertEqual(result["items"]["description"], "instance of dict")
+        self.assertTrue(all(c["type"] != "keyword" for c in result.values()))
+
+    def test_class(self):
+        source = self.SOURCE + "Child.\n"
+        names = self.names(self.complete(source, 16, 6))
+        self.assertEqual(names, ["attr", "base_method", "method", "__init__"])
+
+    def test_method_return(self):
+        source = self.SOURCE + "c.method().ite\n"
+        self.assertEqual(self.names(self.complete(source, 16, 14)), ["items"])
+
+    def test_self(self):
+        source = "class A:\n    def __init__(self):\n        self.v = 1\n    def m(self):\n        self.\n"
+        self.assertEqual(self.names(self.complete(source, 5, 13)), ["m", "v", "__init__"])
+
+    def test_module(self):
+        source = self.SOURCE + "os.pat\n"
+        names = self.names(self.complete(source, 16, 6))
+        self.assertIn("path", names)
+        self.assertTrue(all(not n.startswith("_") for n in self.names(
+            self.complete(self.SOURCE + "os.\n", 16, 3))))
+
+    def test_literals(self):
+        self.assertIn("upper", self.names(self.complete('"abc".up', 1, 8)))
+        self.assertIn("append", self.names(self.complete("[1, 2].", 1, 7)))
+        self.assertIn("keys", self.names(self.complete("{}.", 1, 3)))
+        self.assertIn("add", self.names(self.complete("{1}.", 1, 4)))
+
+    def test_unknown_receiver(self):
+        self.assertEqual(self.complete("unknown_thing.", 1, 14), [])
+
+
+class ToleranceAndErrorTests(SithTestCase):
+    def test_syntax_errors(self):
+        source = """\
+            import os
+            def broken(:
+                pass
+            value = 1
+            def f():
+                print(os.path.join(
+            va
+            """
+        self.assertIn("value", self.names(self.complete(source, 7, 2)))
+
+    def test_incomplete_block_at_eof(self):
+        source = "def f(arg):\n    "
+        self.assertIn("arg", self.names(self.complete(source, 2, 4)))
+
+    def test_position_errors(self):
+        path = self.write("main.py", "x = 1\n")
+        self.assertEqual(self.run_sith(path, 10, 0).returncode, 1)
+        self.assertEqual(self.run_sith(path, 1, 6).returncode, 1)
+        self.assertEqual(self.run_sith(path, 0, 0).returncode, 1)
+        self.assertEqual(self.run_sith(path, 1, 5).returncode, 0)
+
+    def test_file_errors(self):
+        result = self.run_sith(os.path.join(self.dir, "missing.py"), 1, 0)
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.stderr)
+        self.assertEqual(self.run_sith(self.dir, 1, 0).returncode, 1)
+        bad = os.path.join(self.dir, "bad.py")
+        with open(bad, "wb") as handle:
+            handle.write(b"\xff\xfe\x00")
+        self.assertEqual(self.run_sith(bad, 1, 0).returncode, 1)
+
+    def test_zero_completions_exit_zero(self):
+        self.assertEqual(self.complete("zzzzqqq", 1, 7), [])
+
+
+class NavigationTestCase(SithTestCase):
+    def navigate(self, command, source, line, col, name="main.py"):
+        path = self.write(name, source)
+        result = self.run_sith(path, line, col, command=command)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.endswith("\n"))
+        definitions = json.loads(result.stdout)["definitions"]
+        keys = [(d["module_path"], d["line"], d["column"]) for d in definitions]
+        self.assertEqual(keys, sorted(keys))
+        return definitions
+
+    def infer(self, source, line, col, name="main.py"):
+        return self.navigate("infer", source, line, col, name)
+
+    def goto(self, source, line, col, name="main.py"):
+        return self.navigate("goto", source, line, col, name)
+
+    @staticmethod
+    def summary(definitions):
+        return [(d["name"], d["type"]) for d in definitions]
+
+
+class InferTests(NavigationTestCase):
+    SOURCE = """\
+        class Calculator:
+            \"\"\"Adds things.\"\"\"
+
+            def __init__(self, value=0):
+                self.value = value
+                self.history = []
+
+            def add(self, a, b):
+                \"\"\"Add two numbers.\"\"\"
+                return a + b
+
+            def me(self):
+                return self
+
+
+        def make(flag):
+            if flag:
+                return Calculator()
+            return "text"
+
+
+        def nothing():
+            pass
+
+
+        calc = Calculator()
+        other = calc
+        """
+
+    def test_class_instantiation(self):
+        source = dedent(self.SOURCE) + "calc\n"
+        self.assertEqual(self.infer(source, 28, 0), [{
+            "name": "Calculator", "type": "instance", "full_name": "main.Calculator",
+            "module_path": "main.py", "line": 1, "column": 6,
+            "description": "instance of Calculator", "docstring": "Adds things."}])
+
+    def test_class_and_function_names(self):
+        source = dedent(self.SOURCE) + "Calculator\nmake\n"
+        self.assertEqual(self.infer(source, 28, 0)[0]["type"], "class")
+        self.assertEqual(self.infer(source, 28, 0)[0]["description"], "class Calculator")
+        [function] = self.infer(source, 29, 0)
+        self.assertEqual((function["type"], function["line"], function["column"]),
+                         ("function", 16, 4))
+        self.assertEqual(function["description"], "def make(flag)")
+        self.assertEqual(function, self.goto(source, 29, 0)[0])
+
+    def test_literals_and_builtins(self):
+        source = "x = 5\ny = 'a'\nz = None\nx\ny\nz\n"
+        self.assertEqual(self.infer(source, 4, 0), [{
+            "name": "int", "type": "instance", "full_name": "builtins.int", "module_path": "",
+            "line": 0, "column": 0, "description": "instance of int", "docstring": ""}])
+        self.assertEqual(self.infer(source, 5, 0)[0]["full_name"], "builtins.str")
+        self.assertEqual(self.infer(source, 6, 0)[0]["full_name"], "builtins.NoneType")
+
+    def test_assignment_chain_and_method_calls(self):
+        source = dedent(self.SOURCE) + "other\ncalc.add(1, 2)\ncalc.me().history\ncalc.value\n"
+        self.assertEqual(self.summary(self.infer(source, 28, 0)), [("Calculator", "instance")])
+        self.assertEqual(self.summary(self.infer(source, 29, 5)), [("add", "function")])
+        self.assertEqual(self.summary(self.infer(source, 30, 12)), [("list", "instance")])
+        self.assertEqual(self.summary(self.infer(source, 31, 6)), [("int", "instance")])
+
+    def test_return_types(self):
+        source = dedent(self.SOURCE) + "r = calc.add(1, 2)\nm = make(1)\nn = nothing()\nr\nm\nn\n"
+        self.assertEqual(self.summary(self.infer(source, 31, 0)), [("int", "instance")])
+        self.assertEqual(self.summary(self.infer(source, 32, 0)),
+                         [("str", "instance"), ("Calculator", "instance")])
+        self.assertEqual(self.summary(self.infer(source, 33, 0)), [("NoneType", "instance")])
+
+    def test_constructor_arguments_flow_into_attributes(self):
+        source = dedent(self.SOURCE) + "Calculator('s').value\n"
+        self.assertEqual(self.summary(self.infer(source, 28, 17)), [("str", "instance")])
+
+    def test_conditional_assignment(self):
+        source = "import os\nif os.sep:\n    v = 1\nelse:\n    v = 'x'\nv\n"
+        self.assertEqual(self.summary(self.infer(source, 6, 0)),
+                         [("int", "instance"), ("str", "instance")])
+        definitions = self.goto(source, 6, 0)
+        self.assertEqual([(d["line"], d["column"], d["type"]) for d in definitions],
+                         [(3, 4, "statement"), (5, 4, "statement")])
+
+    def test_dataclass_fields(self):
+        for header in ("import dataclasses\n@dataclasses.dataclass\n",
+                       "from dataclasses import dataclass\n@dataclass(frozen=True)\n",
+                       "from dataclasses import dataclass as dc\n@dc\n"):
+            source = header + "class P:\n    x: int\n    y: list = None\np = P(1)\np.x\np.\n"
+            self.assertEqual(self.summary(self.infer(source, 7, 2)), [("int", "instance")])
+            completions = self.complete(source, 8, 2)
+            self.assertEqual(self.names(completions), ["x", "y"])
+            self.assertEqual(self.by_name(completions)["y"]["description"], "instance of list")
+
+    def test_cross_module(self):
+        self.write("pkg/__init__.py", "")
+        self.write("pkg/shapes.py", "class Shape:\n    def area(self):\n        return 1.0\n")
+        source = "from pkg.shapes import Shape\nimport pkg.shapes\ns = Shape()\ns.area()\ns\n"
+        [area] = self.infer(source, 4, 3)
+        self.assertEqual((area["full_name"], area["module_path"], area["line"], area["column"]),
+                         ("pkg.shapes.Shape.area", os.path.join("pkg", "shapes.py"), 2, 8))
+        self.assertEqual(self.summary(self.infer(source, 5, 0)), [("Shape", "instance")])
+        [module] = self.infer(source, 2, 12)
+        self.assertEqual((module["name"], module["type"], module["full_name"]),
+                         ("shapes", "module", "pkg.shapes"))
+
+    def test_unresolved_and_errors(self):
+        self.assertEqual(self.infer("unknown_name\n", 1, 0), [])
+        path = self.write("main.py", "x = 1  # note\ns = 'text'\n")
+        for line, col in ((1, 2), (1, 3), (1, 4), (1, 10), (2, 6)):
+            self.assertEqual(self.run_sith(path, line, col, command="infer").returncode, 1)
+            self.assertEqual(self.run_sith(path, line, col, command="goto").returncode, 1)
+        self.assertEqual(self.run_sith(path, 9, 0, command="infer").returncode, 1)
+        self.assertEqual(self.run_sith(path, 1, 0, command="goto").returncode, 0)
+        # A cursor just after an identifier is still on it.
+        self.assertEqual(self.run_sith(path, 1, 1, command="infer").returncode, 0)
+
+
+class NarrowingTests(NavigationTestCase):
+    SOURCE = """\
+        class Dog:
+            def bark(self):
+                pass
+
+
+        class Cat:
+            def meow(self):
+                pass
+
+
+        def maybe(flag):
+            if flag:
+                return Dog()
+            return None
+
+
+        pet = Dog() if maybe(1) else Cat()
+        """
+
+    def test_isinstance(self):
+        source = dedent(self.SOURCE) + "if isinstance(pet, Dog):\n    pet\nelse:\n    pet\npet\n"
+        self.assertEqual(self.summary(self.infer(source, 19, 4)), [("Dog", "instance")])
+        self.assertEqual(self.summary(self.infer(source, 21, 4)), [("Cat", "instance")])
+        self.assertEqual(self.summary(self.infer(source, 22, 0)),
+                         [("Dog", "instance"), ("Cat", "instance")])
+
+    def test_isinstance_of_unknown_value(self):
+        source = dedent(self.SOURCE) + "def f(x):\n    if isinstance(x, (Cat, int)):\n        x\n"
+        self.assertEqual(self.summary(self.infer(source, 20, 8)),
+                         [("int", "instance"), ("Cat", "instance")])
+
+    def test_is_none(self):
+        source = dedent(self.SOURCE) + (
+            "x = maybe(0)\nif x is None:\n    x\nelse:\n    x\n"
+            "def f():\n    if x is None:\n        return\n    x\n")
+        self.assertEqual(self.summary(self.infer(source, 20, 4)), [("NoneType", "instance")])
+        self.assertEqual(self.summary(self.infer(source, 22, 4)), [("Dog", "instance")])
+        self.assertEqual(self.summary(self.infer(source, 26, 4)), [("Dog", "instance")])
+
+    def test_completion(self):
+        source = dedent(self.SOURCE) + "pet.\nif isinstance(pet, Cat):\n    pet.\n"
+        self.assertEqual(self.names(self.complete(source, 18, 4)), ["bark", "meow"])
+        self.assertEqual(self.names(self.complete(source, 20, 8)), ["meow"])
+
+
+class GotoTests(NavigationTestCase):
+    SOURCE = """\
+        import os
+        from os import path as p
+
+
+        class Base:
+            def __init__(self, x):
+                self.x = x
+
+            def run(self, count):
+                return count
+
+
+        b = Base(1)
+        b.run(2)
+        """
+
+    def test_definitions(self):
+        source = dedent(self.SOURCE) + "b\nBase\nb.x\nos\np\n"
+        self.assertEqual(self.goto(source, 15, 0), [{
+            "name": "b", "type": "statement", "full_name": "main.b", "module_path": "main.py",
+            "line": 13, "column": 0, "description": "Base(1)", "docstring": ""}])
+        self.assertEqual(self.goto(source, 16, 0)[0]["description"], "class Base")
+        [attribute] = self.goto(source, 17, 2)
+        self.assertEqual((attribute["line"], attribute["column"], attribute["full_name"]),
+                         (7, 13, "main.Base.x"))
+        [module] = self.goto(source, 18, 0)
+        self.assertEqual((module["type"], module["line"], module["description"]),
+                         ("module", 1, "import os"))
+        [alias] = self.goto(source, 19, 0)
+        self.assertEqual((alias["line"], alias["column"], alias["description"]),
+                         (2, 23, "from os import path as p"))
+
+    def test_methods_and_parameters(self):
+        source = dedent(self.SOURCE) + "b.run(count=3)\n"
+        [method] = self.goto(source, 14, 3)
+        self.assertEqual((method["line"], method["column"], method["description"]),
+                         (9, 8, "def run(self, count)"))
+        [param] = self.goto(source, 10, 15)
+        self.assertEqual((param["type"], param["line"], param["column"], param["full_name"]),
+                         ("param", 9, 18, "main.Base.run.count"))
+        self.assertEqual(self.goto(source, 15, 7), [param])
+
+    def test_properties_and_dataclass_keywords(self):
+        source = ("from dataclasses import dataclass\n@dataclass\nclass P:\n    x: int\n"
+                  "    @property\n    def double(self):\n        return [self.x]\n"
+                  "p = P(x=1)\np.double\n")
+        self.assertEqual(self.summary(self.infer(source, 9, 3)), [("list", "instance")])
+        [method] = self.goto(source, 9, 3)
+        self.assertEqual((method["line"], method["column"]), (6, 8))
+        [field] = self.goto(source, 8, 6)
+        self.assertEqual((field["line"], field["column"], field["description"]), (4, 4, "x: int"))
+
+    def test_project_root(self):
+        self.write("lib/tools.py", "def tool():\n    return 1\n")
+        path = self.write("app/main.py", "from lib.tools import tool\ntool()\n")
+        result = self.run_sith(path, 2, 0, "--project", self.dir, command="infer")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        [tool] = json.loads(result.stdout)["definitions"]
+        self.assertEqual((tool["full_name"], tool["module_path"]),
+                         ("lib.tools.tool", os.path.join("lib", "tools.py")))
+        result = self.run_sith(path, 2, 0, "--project", self.dir, command="goto")
+        [binding] = json.loads(result.stdout)["definitions"]
+        self.assertEqual((binding["full_name"], binding["module_path"], binding["column"]),
+                         ("app.main.tool", os.path.join("app", "main.py"), 22))
+
+    def test_definition_name_itself(self):
+        source = "def foo():\n    pass\n\nfoo = foo\n"
+        [function] = self.goto(source, 1, 5)
+        self.assertEqual((function["line"], function["column"]), (1, 4))
+        [assignment] = self.goto(source, 4, 0)
+        self.assertEqual((assignment["line"], assignment["description"]), (4, "foo"))
+        self.assertEqual(self.goto(source, 4, 7), [function])
+
+
+class ImportTests(NavigationTestCase):
+    def setUp(self):
+        super().setUp()
+        self.write("pkg/__init__.py", """\
+            from .core import Engine
+            __all__ = ["Engine", "helper", "_secret"]
+            def helper(): pass
+            _secret = 1
+            other = 2
+            """)
+        self.write("pkg/core.py", """\
+            import os
+            from .util import tool as tool_alias
+
+            class Engine:
+                def start(self):
+                    return 1
+
+            def _private(): pass
+            CONST = "x"
+            """)
+        self.write("pkg/util.py", "def tool(x):\n    return [x]\n")
+        self.write("pkg/sub/__init__.py", "")
+        self.write("pkg/sub/deep.py", "VAL = 3\n")
+        self.write("ns/inner/mod.py", "def nsfunc():\n    return 1\n")
+
+    def run_json(self, command, path, line, col, *flags):
+        result = self.run_sith(path, line, col, *flags, command=command)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        key = "completions" if command == "complete" else "definitions"
+        return json.loads(result.stdout)[key]
+
+    def test_goto_follow_imports(self):
+        source = "from pkg import Engine\nfrom pkg.core import tool_alias\nEngine\ntool_alias\n"
+        [site] = self.goto(source, 3, 0)
+        self.assertEqual((site["module_path"], site["line"], site["column"], site["description"]),
+                         ("main.py", 1, 16, "from pkg import Engine"))
+        path = os.path.join(self.dir, "main.py")
+        [engine] = self.run_json("goto", path, 3, 0, "--follow-imports")
+        self.assertEqual((engine["full_name"], engine["module_path"], engine["line"], engine["column"]),
+                         ("pkg.core.Engine", "pkg/core.py", 4, 6))
+        [tool] = self.run_json("goto", path, 4, 0, "--follow-imports")
+        self.assertEqual((tool["full_name"], tool["module_path"], tool["line"]),
+                         ("pkg.util.tool", "pkg/util.py", 1))
+        [module] = self.run_json("goto", path, 1, 6, "--follow-imports")
+        self.assertEqual((module["type"], module["module_path"]), ("module", "pkg/__init__.py"))
+
+    def test_follow_imports_fallback(self):
+        self.write("helper.py", "from os.path import join\n")
+        source = "import os\nfrom helper import join\nfrom nowhere import thing\nos\njoin\nthing\n"
+        path = self.write("main.py", source)
+        for line, expected in ((4, (1, 7)), (5, (2, 19)), (6, (3, 20))):
+            [site] = self.run_json("goto", path, line, 0, "--follow-imports")
+            self.assertEqual((site["module_path"], site["line"], site["column"]),
+                             ("main.py",) + expected)
+
+    def test_infer_across_files(self):
+        source = ("import pkg.sub.deep\nfrom ns.inner.mod import nsfunc\nfrom pkg import Engine\n"
+                  "pkg.sub.deep.VAL\nnsfunc()\nEngine().start()\n")
+        self.assertEqual(self.summary(self.infer(source, 4, 13)), [("int", "instance")])
+        [nsfunc] = self.infer(source, 5, 0)
+        self.assertEqual((nsfunc["full_name"], nsfunc["module_path"]), ("ns.inner.mod.nsfunc",
+                                                                        "ns/inner/mod.py"))
+        self.assertEqual(self.summary(self.infer(source, 6, 10)), [("start", "function")])
+
+    def test_unresolvable_modules(self):
+        source = "import pip\nimport nothere\npip\nnothere.x\n"
+        self.assertEqual(self.infer(source, 3, 0), [])
+        self.assertEqual(self.infer(source, 4, 8), [])
+        self.assertEqual(self.complete(source + "nothere.\n", 5, 8), [])
+
+    def test_relative_imports(self):
+        path = self.write("pkg/rel.py", "from . import util\nfrom .. import ns\nutil.tool\nns\n")
+        [tool] = self.run_json("infer", path, 3, 6)
+        self.assertEqual(tool["module_path"], "util.py")
+        self.assertEqual(self.run_json("infer", path, 4, 0), [])
+        [tool] = self.run_json("infer", path, 3, 6, "--project", self.dir)
+        self.assertEqual((tool["full_name"], tool["module_path"]), ("pkg.util.tool", "pkg/util.py"))
+        [ns] = self.run_json("infer", path, 4, 0, "--project", self.dir)
+        self.assertEqual((ns["type"], ns["full_name"]), ("module", "ns"))
+
+    def test_star_import_all(self):
+        source = "from pkg import *\n\n"
+        names = self.names(self.complete(source, 2, 0), include_keywords=False)
+        self.assertIn("Engine", names)
+        self.assertIn("_secret", names)
+        self.assertNotIn("other", names)
+        source = "from pkg.core import *\n\n"
+        names = self.names(self.complete(source, 2, 0), include_keywords=False)
+        self.assertIn("CONST", names)
+        self.assertNotIn("_private", names)
+
+    def test_circular_imports(self):
+        self.write("a.py", "from b import *\nfrom b import bfunc\nA = 1\ndef afunc():\n    return 1\n")
+        self.write("b.py", "from a import *\nfrom a import afunc\nB = 2\ndef bfunc():\n    return afunc()\n")
+        source = "from a import *\nA\nB\nbfunc()\n"
+        self.assertEqual(self.summary(self.infer(source, 2, 0)), [("int", "instance")])
+        self.assertEqual(self.summary(self.infer(source, 3, 0)), [("int", "instance")])
+        self.assertEqual(self.summary(self.infer(source, 4, 0)), [("bfunc", "function")])
+
+    def test_import_completion(self):
+        source = "import \nimport pk\nimport pkg.\nfrom pkg import \nfrom pkg.core import _\nfrom pkg \n"
+        names = self.names(self.complete(source, 1, 7))
+        self.assertLess(names.index("pkg"), names.index("_thread"))
+        self.assertLess(names.index("_thread"), names.index("__future__"))
+        self.assertIn("ns", names)
+        self.assertIn("os", names)
+        self.assertNotIn("pip", names)
+        result = self.complete(source, 2, 9)
+        self.assertEqual(result[0], {"name": "pkg", "complete": "g", "type": "module",
+                                     "description": "module pkg"})
+        self.assertEqual(self.names(self.complete(source, 3, 11)), ["core", "sub", "util"])
+        self.assertEqual(self.names(self.complete(source, 4, 16)), ["Engine", "helper", "_secret"])
+        self.assertEqual(self.names(self.complete(source, 5, 22)), [])
+        self.assertEqual(self.names(self.complete(source, 6, 9)), ["import"])
+        names = self.names(self.complete("from pkg.core import (CONST,\n    \n", 2, 4))
+        self.assertEqual(names, ["CONST", "Engine", "os", "tool_alias"])
+        self.assertEqual(self.complete("import os as \n", 1, 13), [])
+
+    def test_cross_file_attribute_completion(self):
+        source = "import pkg\nfrom pkg import Engine\npkg.\nEngine().\n"
+        self.assertEqual(self.names(self.complete(source, 3, 4)),
+                         ["core", "Engine", "helper", "other", "sub", "util"])
+        self.assertEqual(self.names(self.complete(source, 4, 9)), ["start"])
+
+
+if __name__ == "__main__":
+    unittest.main()

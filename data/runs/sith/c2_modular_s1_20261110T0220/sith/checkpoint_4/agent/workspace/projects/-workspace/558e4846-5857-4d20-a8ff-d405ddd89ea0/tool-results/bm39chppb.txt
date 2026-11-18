@@ -1,0 +1,876 @@
+"""Attribute resolution: the members exposed by each kind of value."""
+import ast
+
+from .entries import BindingEntry, ValueEntry
+from .scopes import Binding, walk_local
+from .values import (
+    LocalClass,
+    LocalFunction,
+    LocalInstance,
+    LocalModule,
+    RuntimeClass,
+    RuntimeFunction,
+    RuntimeInstance,
+    RuntimeModule,
+    runtime_sample,
+    unique,
+    wrap_runtime,
+)
+
+
+def _sample_function():
+    """Stand-in used to list the attributes of locally defined functions."""
+
+
+def runtime_entries(obj):
+    """Entries for `dir(obj)`, each resolving the attribute lazily."""
+    try:
+        names = dir(obj)
+    except Exception:
+        return {}
+    return {name: ValueEntry(lambda name=name: wrap_runtime(getattr(obj, name))) for name in names}
+
+
+def is_public(name):
+    return not name.startswith("_")
+
+
+class MemberResolver:
+    def __init__(self, inferrer):
+        self.inferrer = inferrer
+        self._attribute_cache = {}
+
+    def all(self, value):
+        """Every attribute entry of `value`, keyed by name (submodules included)."""
+        if isinstance(value, (LocalModule, RuntimeModule)):
+            entries = dict(self.namespace(value))
+            for name in self.inferrer.importer.submodule_names(value):
+                if name not in entries:
+                    entries[name] = ValueEntry(lambda name=name: self.member(value, name))
+            return entries
+        if isinstance(value, LocalClass):
+            return self.class_members(value)
+        if isinstance(value, LocalInstance):
+            return self.instance_members(value.cls)
+        if isinstance(value, (RuntimeClass, RuntimeFunction)):
+            return runtime_entries(value.obj)
+        if isinstance(value, RuntimeInstance):
+            return runtime_entries(runtime_sample(value.cls))
+        if isinstance(value, LocalFunction):
+            return runtime_entries(_sample_function)
+        return {}
+
+    def namespace(self, value):
+        """The names a module binds itself (no submodules that it does not import)."""
+        if isinstance(value, LocalModule):
+            return self.inferrer.scope_entries(value.context.root)
+        if isinstance(value, RuntimeModule):
+            return runtime_entries(value.obj)
+        return self.all(value)
+
+    def public(self, value):
+        return {name: entry for name, entry in self.all(value).items() if is_public(name)}
+
+    def dunder_all(self, value):
+        """The names listed in a module's `__all__`, or None when it has none."""
+        if isinstance(value, LocalModule):
+            return static_all(value.context.tree)
+        if isinstance(value, RuntimeModule):
+            names = getattr(value.obj, "__all__", None)
+            if isinstance(names, (list, tuple)) and all(isinstance(n, str) for n in names):
+                return list(names)
+        return None
+
+    def exported(self, value, submodules=False):
+        """Names a module exports: its `__all__`, else every name not starting with `_`.
+
+        Without `submodules`, only names the module binds itself count (as
+        for `from module import *`).
+        """
+        names = self.dunder_all(value)
+        entries = self.all(value) if submodules else self.namespace(value)
+        if names is None:
+            return {name: entry for name, entry in entries.items() if is_public(name)}
+        return {name: entries.get(name) or ValueEntry(lambda name=name: self.member(value, name))
+                for name in names}
+
+    def member(self, value, name):
+        """The (first) value of attribute `name` of `value`, or None."""
+        values = self.member_values(value, name)
+        return values[0] if values else None
+
+    def member_values(self, value, name):
+        """Every value attribute `name` of `value` may have."""
+        inferrer = self.inferrer
+        importer = inferrer.importer
+        if isinstance(value, LocalModule):
+            root = value.context.root
+            if inferrer.binds(root, name):
+                return inferrer.scope_values(root, name)
+            submodule = importer.local_submodule(value, name)
+            return [submodule] if submodule is not None else []
+        if isinstance(value, LocalClass):
+            for cls in self.mro(value):
+                if name in cls.scope.bindings:
+                    values = []
+                    for member in inferrer.scope_values(cls.scope, name):
+                        values += self._bind_member(member, cls, value, None)
+                    return unique(values)
+            return self._runtime_base_member(value, name)
+        if isinstance(value, LocalInstance):
+            for cls in self.mro(value.cls):
+                attributes = self.instance_attribute_bindings(cls).get(name, [])
+                if not attributes and name not in cls.scope.bindings:
+                    continue
+                values = []
+                for binding in attributes:
+                    values += self.instance_attribute_values(binding, value)
+                if name in cls.scope.bindings:
+                    for member in inferrer.scope_values(cls.scope, name):
+                        values += self._bind_member(member, cls, value.cls, value)
+                return unique(values)
+            return self._runtime_base_member(value.cls, name)
+        entry = self.namespace(value).get(name)
+        if entry is not None:
+            member = entry.value()
+            return [member] if member is not None else []
+        if isinstance(value, RuntimeModule):
+            submodule = importer.runtime_submodule(value, name)
+            return [submodule] if submodule is not None else []
+        return []
+
+    def member_definitions(self, value, name):
+        """Where attribute `name` of `value` is defined: bindings, or values for runtime objects."""
+        inferrer = self.inferrer
+        if isinstance(value, LocalModule):
+            root = value.context.root
+            if inferrer.binds(root, name):
+                return [fact.binding for fact in inferrer.scope_facts(root, name)]
+            return self.member_values(value, name)
+        if isinstance(value, (LocalClass, LocalInstance)):
+            cls_value = value if isinstance(value, LocalClass) else value.cls
+            for cls in self.mro(cls_value):
+                found = []
+                if isinstance(value, LocalInstance):
+                    found += self.instance_attribute_bindings(cls).get(name, [])
+                if name in cls.scope.bindings:
+                    found += [_property_getter(cls.scope, fact.binding)
+                              for fact in inferrer.scope_facts(cls.scope, name)]
+                if found:
+                    return found
+        return self.member_values(value, name)
+
+    def instance_attribute_values(self, binding, instance):
+        """Values of a `self.attr = ...` binding for a particular instance."""
+        method = binding.scope
+        if not instance.init_args or method.node.name != "__init__":
+            return self.inferrer.binding_values(binding)
+        return self.inferrer.in_frame(method, instance.init_args, instance,
+                                      lambda: self.inferrer.binding_values(binding))
+
+    def _bind_member(self, member, owner, cls, instance):
+        """The value of a class-body member accessed on a class (`instance` None) or instance."""
+        if not isinstance(member, LocalFunction) or member.bound is not None:
+            return [member]
+        node = member.node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or member.scope.parent is not owner.scope:
+            return [member]
+        decorators = {_decorator_name(d) for d in node.decorator_list}
+        if "staticmethod" in decorators:
+            return [member]
+        if "classmethod" in decorators:
+            return [LocalFunction(member.scope, cls)]
+        if instance is None:
+            return [member]
+        if decorators & {"setter", "deleter"}:
+            binding = owner.scope.module.binding_of(node)
+            getter = _property_getter(owner.scope, binding) if binding is not None else None
+            if getter is not None and getter is not binding:
+                scope = owner.scope.module.scope_of(getter.node)
+                if scope is not None:
+                    member, decorators = LocalFunction(scope), {"property"}
+        if decorators & {"property", "cached_property"}:
+            return self.inferrer.return_values(LocalFunction(member.scope, instance))
+        return [LocalFunction(member.scope, instance)]
+
+    def find_method(self, cls, name):
+        """The (unbound) local function `name` defined in the MRO of `cls`, or None."""
+        for current in self.mro(cls):
+            for binding in reversed(current.scope.bindings.get(name, [])):
+                if binding.kind == "def":
+                    scope = current.scope.module.scope_of(binding.node)
+                    if scope is not None:
+                        return LocalFunction(scope)
+            if name in current.scope.bindings:
+                return None
+        return None
+
+    def runtime_bases(self, cls):
+        """The runtime (installed or builtin) classes among the direct bases of `cls`."""
+        bases = []
+        for base in cls.node.bases:
+            bases += [v for v in self.inferrer.infer_values(base, cls.scope.parent)
+                      if isinstance(v, RuntimeClass)]
+        return bases
+
+    def _runtime_base_member(self, cls, name):
+        for current in self.mro(cls):
+            for base in self.runtime_bases(current):
+                if base.obj is not object and hasattr(base.obj, name):
+                    member = wrap_runtime(getattr(base.obj, name))
+                    return [member] if member is not None else []
+        return []
+
+    # -- classes -----------------------------------------------------------
+
+    def mro(self, cls):
+        """The class followed by its locally defined bases (depth first)."""
+        order = []
+
+        def visit(current):
+            if any(current.scope is seen.scope for seen in order):
+                return
+            order.append(current)
+            node = current.node
+            for base in node.bases:
+                for value in self.inferrer.infer_values(base, current.scope.parent):
+                    if isinstance(value, LocalClass):
+                        visit(value)
+
+        visit(cls)
+        return order
+
+    def class_members(self, cls):
+        members = {}
+        for current in reversed(self.mro(cls)):
+            members.update(self.inferrer.scope_entries(current.scope))
+        return members
+
+    def instance_members(self, cls):
+        mro = self.mro(cls)
+        members = {}
+        for current in reversed(mro):
+            members.update(self.inferrer.scope_entries(current.scope))
+        for current in reversed(mro):
+            for name, bindings in self.instance_attribute_bindings(current).items():
+                members[name] = BindingEntry(bindings[0], self.inferrer)
+        return members
+
+    def instance_attribute_bindings(self, cls):
+        """{name: bindings} for `self.<name> = ...` assignments in the methods of `cls`.
+
+        Assignments in `__init__` come first.
+        """
+        key = id(cls.scope)
+        if key in self._attribute_cache:
+            return self._attribute_cache[key]
+        entries = {}
+        methods = []
+        for bindings in cls.scope.bindings.values():
+            methods += [b.node for b in bindings if b.kind == "def"]
+        methods.sort(key=lambda node: (node.name != "__init__", node.lineno))
+        for method in methods:
+            decorators = {_decorator_name(d) for d in method.decorator_list}
+            method_scope = cls.scope.module.scope_of(method)
+            positional = method.args.posonlyargs + method.args.args
+            if method_scope is None or not positional or decorators & {"staticmethod", "classmethod"}:
+                continue
+            self._collect_attributes(method, method_scope, positional[0].arg, cls, entries)
+        self._attribute_cache[key] = entries
+        return entries
+
+    def _collect_attributes(self, method, method_scope, self_name, cls, entries):
+        for node in walk_local(method.body):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    for attribute, target_node, value in _self_attributes(target, node.value, self_name):
+                        binding = Binding(attribute, target_node.lineno, "assign", node, method_scope,
+                                          value, {"owner": cls.scope}, target_node)
+                        entries.setdefault(attribute, []).append(binding)
+            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+                for attribute, target_node, _ in _self_attributes(node.target, None, self_name):
+                    if isinstance(node, ast.AugAssign) and attribute in entries:
+                        continue
+                    kind = "assign" if isinstance(node, ast.AnnAssign) else "augassign"
+                    value = node.value if isinstance(node, ast.AnnAssign) else None
+                    extra = {"owner": cls.scope}
+                    if isinstance(node, ast.AnnAssign):
+                        extra["annotation"] = node.annotation
+                    binding = Binding(attribute, target_node.lineno, kind, node, method_scope, value,
+                                      extra, target_node)
+                    entries.setdefault(attribute, []).append(binding)
+
+
+def static_all(tree):
+    """The strings a module's top-level code puts in `__all__`, or None if it never assigns it."""
+    state = {"names": None}
+
+    def strings(node):
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return [e.value for e in node.elts
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return strings(node.left) + strings(node.right)
+        return []
+
+    def visit(statements):
+        for node in statements:
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if any(isinstance(t, ast.Name) and t.id == "__all__" for t in targets):
+                    state["names"] = strings(node.value) if node.value is not None else []
+            elif isinstance(node, ast.AugAssign):
+                if isinstance(node.target, ast.Name) and node.target.id == "__all__":
+                    state["names"] = (state["names"] or []) + strings(node.value)
+            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                call = node.value
+                func = call.func
+                if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+                        and func.value.id == "__all__" and len(call.args) == 1
+                        and state["names"] is not None):
+                    argument = call.args[0]
+                    if func.attr == "extend":
+                        state["names"] = state["names"] + strings(argument)
+                    elif func.attr in ("append", "remove") and isinstance(argument, ast.Constant) \
+                            and isinstance(argument.value, str):
+                        if func.attr == "append":
+                            state["names"] = state["names"] + [argument.value]
+                        elif argument.value in state["names"]:
+                            state["names"] = [n for n in state["names"] if n != argument.value]
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            else:
+                for field in ("body", "orelse", "finalbody"):
+                    visit(getattr(node, field, None) or [])
+                for handler in getattr(node, "handlers", None) or []:
+                    visit(handler.body)
+
+    visit(tree.body)
+    names = state["names"]
+    if names is None:
+        return None
+    return list(dict.fromkeys(names))
+
+
+def _property_getter(class_scope, binding):
+    """For the `@<name>.setter`/`.deleter` def `binding`, the `@property` getter; else `binding`."""
+    if binding.kind != "def":
+        return binding
+    if not {_decorator_name(d) for d in binding.node.decorator_list} & {"setter", "deleter"}:
+        return binding
+    for candidate in class_scope.bindings.get(binding.name, []):
+        if candidate.kind == "def" and "property" in {
+                _decorator_name(d) for d in candidate.node.decorator_list}:
+            return candidate
+    return binding
+
+
+def _decorator_name(node):
+    if isinstance(node, ast.Call):
+        node = node.func
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
+
+
+def _self_attributes(target, value, self_name):
+    """Yield (attribute name, target node, value) for `self.attr` targets."""
+    if isinstance(target, ast.Attribute):
+        if isinstance(target.value, ast.Name) and target.value.id == self_name:
+            yield target.attr, target, value
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        values = None
+        if isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(target.elts):
+            values = value.elts
+        for index, element in enumerate(target.elts):
+            yield from _self_attributes(element, values[index] if values else None, self_name)
+    elif isinstance(target, ast.Starred):
+        yield from _self_attributes(target.value, None, self_name)
+"""Flow-sensitive name resolution within a single scope.
+
+For one name in one scope, the analyzer walks the scope's statements in
+execution order and tracks which bindings may be in effect, as a list of
+facts.  Branches (`if`, loops, `try`, `match`) merge the facts of every path;
+`return`, `raise`, `break` and `continue` end a path.  Conditions such as
+`isinstance(x, A)` or `x is None` attach narrowings to the facts of the
+branches they guard.  Values are only inferred later, from the facts.
+"""
+import ast
+
+from .scopes import COMPREHENSION, FUNCTION, LAMBDA, walk_local
+
+_COMPOUND = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith, ast.Try, ast.Match)
+if hasattr(ast, "TryStar"):
+    _COMPOUND += (ast.TryStar,)
+# Nodes whose children are not evaluated as part of the enclosing statement's header.
+_NOT_HEADER = (ast.stmt, ast.Lambda, ast.excepthandler, ast.match_case)
+
+
+class Narrowing:
+    """A condition known to hold (`positive`) or not for a name at some point.
+
+    Kinds: "isinstance" (`node` is the class expression, evaluated in
+    `scope`), "none" (`x is None`) and "truthy" (`if x:`).
+    """
+
+    def __init__(self, kind, positive, node=None, scope=None):
+        self.kind = kind
+        self.positive = positive
+        self.node = node
+        self.scope = scope
+
+    @property
+    def key(self):
+        return (self.kind, self.positive, id(self.node))
+
+
+class Fact:
+    """One way a name may be bound at a program point.
+
+    `binding` is None when the name refers to an enclosing scope (or is not
+    yet bound here).  `prior` holds the facts an augmented assignment updates.
+    """
+
+    def __init__(self, binding, narrowings=(), prior=()):
+        self.binding = binding
+        self.narrowings = tuple(narrowings)
+        self.prior = tuple(prior)
+
+    @property
+    def key(self):
+        return (id(self.binding), tuple(n.key for n in self.narrowings),
+                tuple(p.key for p in self.prior))
+
+    def narrowed(self, narrowing):
+        return Fact(self.binding, self.narrowings + (narrowing,), self.prior)
+
+
+def merge(*states):
+    """The union of several lists of facts, without duplicates."""
+    seen = set()
+    result = []
+    for state in states:
+        for fact in state:
+            if fact.key not in seen:
+                seen.add(fact.key)
+                result.append(fact)
+    return result
+
+
+def start_of(node):
+    return (node.lineno, node.col_offset)
+
+
+def end_of(node):
+    return (node.end_lineno, node.end_col_offset)
+
+
+class _Found(Exception):
+    def __init__(self, state):
+        super().__init__()
+        self.state = state
+
+
+class _Loop:
+    def __init__(self):
+        self.breaks = []
+        self.continues = []
+
+
+class FlowAnalyzer:
+    """Computes the facts for `name` in `scope` at `target` ((line, byte col) or None for the end).
+
+    `synthetic(kind, node, name)` creates bindings that scope analysis does
+    not record: "star" for `from m import *` and "aug" for `x += ...`.
+    """
+
+    def __init__(self, scope, name, target, synthetic):
+        self.scope = scope
+        self.name = name
+        self.target = target
+        self.synthetic = synthetic
+        self.searching = target is not None
+        self.by_node = {}
+        self.seen = set()
+        self.loops = []
+        for binding in scope.bindings.get(name, []):
+            self.by_node.setdefault(id(binding.node), []).append(binding)
+        self.has_walrus = any(isinstance(b.node, ast.NamedExpr) for b in scope.bindings.get(name, []))
+
+    def run(self, initial):
+        bindings = self.scope.bindings.get(self.name, [])
+        if self.scope.kind in (LAMBDA, COMPREHENSION):
+            return [Fact(b) for b in bindings] or list(initial)
+        body = self.scope.node.body
+        # Bindings made elsewhere, by functions declaring the name `global`.
+        local = self.scope.local_node_ids
+        if local is None:
+            local = self.scope.local_node_ids = {id(node) for node in walk_local(body)}
+        foreign = [Fact(b) for b in bindings if b.kind != "param" and id(b.node) not in local]
+        try:
+            state = self.block(body, list(initial))
+        except _Found as found:
+            state = found.state
+            if not state or all(fact.binding is None for fact in state):
+                return state
+        return merge(state, foreign)
+
+    # -- statements ----------------------------------------------------------
+
+    def block(self, statements, state):
+        for statement in statements:
+            if self.searching:
+                if self.target < start_of(statement):
+                    raise _Found(state)
+                if self.target <= end_of(statement):
+                    self._enter(statement, state)
+            state = self.statement(statement, state)
+        return state
+
+    def _enter(self, statement, state):
+        """The target lies within `statement`: find the facts that reach it."""
+        first = _first_child_start(statement)
+        if first is None or self.target < first:
+            raise _Found(state)
+        raise _Found(self.statement(statement, state))
+
+    def statement(self, node, state):
+        handler = getattr(self, "_" + type(node).__name__, None)
+        if handler is not None:
+            return handler(node, state)
+        return self._bind(node, self.walrus(node, state))
+
+    def _bind(self, node, state):
+        """The state after `node` binds the name (unchanged if it does not)."""
+        bindings = self.by_node.get(id(node))
+        if not bindings:
+            return state
+        for binding in bindings:
+            self.seen.add(id(binding))
+        return [Fact(bindings[-1])]
+
+    def walrus(self, node, state):
+        """Apply `(name := value)` bindings found in the header expressions of `node`."""
+        if not self.has_walrus:
+            return state
+        stack = [c for c in ast.iter_child_nodes(node) if not isinstance(c, _NOT_HEADER)]
+        if isinstance(node, ast.expr):
+            stack = [node]
+        while stack:
+            child = stack.pop()
+            if isinstance(child, ast.NamedExpr):
+                state = self._bind(child, state)
+            stack.extend(c for c in ast.iter_child_nodes(child) if not isinstance(c, _NOT_HEADER))
+        return state
+
+    def _ImportFrom(self, node, state):
+        if any(alias.name == "*" for alias in node.names):
+            binding = self.synthetic("star", node, self.name)
+            return [Fact(binding)] if binding is not None else state
+        return self._bind(node, state)
+
+    def _AugAssign(self, node, state):
+        state = self.walrus(node.value, state)
+        if isinstance(node.target, ast.Name) and node.target.id == self.name:
+            bindings = self.by_node.get(id(node))
+            binding = bindings[-1] if bindings else self.synthetic("aug", node, self.name)
+            self.seen.add(id(binding))
+            return [Fact(binding, prior=state)]
+        return state
+
+    def _Delete(self, node, state):
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == self.name:
+                return []
+        return state
+
+    def _Return(self, node, state):
+        self.walrus(node, state)
+        return []
+
+    _Raise = _Return
+
+    def _Break(self, node, state):
+        if self.loops:
+            self.loops[-1].breaks.extend(state)
+        return []
+
+    def _Continue(self, node, state):
+        if self.loops:
+            self.loops[-1].continues.extend(state)
+        return []
+
+    def _Assert(self, node, state):
+        return self.branch(node.test, self.walrus(node, state), True)
+
+    def _If(self, node, state):
+        state = self.walrus(node.test, state)
+        body = self.block(node.body, self.branch(node.test, state, True))
+        orelse = self.block(node.orelse, self.branch(node.test, state, False))
+        return merge(body, orelse)
+
+    def _loop(self, node, state, enter):
+        """(state when the loop ends normally, states at `break`)."""
+        searching = self.searching
+        self.searching = False
+        self.loops.append(_Loop())
+        try:
+            first = self.block(node.body, enter(state))
+        finally:
+            loop = self.loops.pop()
+            self.searching = searching
+        start = merge(state, first, loop.continues)
+        self.loops.append(_Loop())
+        try:
+            end = self.block(node.body, enter(start))
+        finally:
+            loop = self.loops.pop()
+        return merge(start, end, loop.continues), loop.breaks
+
+    def _While(self, node, state):
+        state = self.walrus(node.test, state)
+        exit_state, breaks = self._loop(node, state, lambda s: self.branch(node.test, s, True))
+        if isinstance(node.test, ast.Constant) and node.test.value:
+            exit_state = []
+        else:
+            exit_state = self.branch(node.test, exit_state, False)
+        return merge(self.block(node.orelse, exit_state), breaks)
+
+    def _For(self, node, state):
+        state = self.walrus(node.iter, state)
+        bindings = self.by_node.get(id(node))
+        if bindings:
+            for binding in bindings:
+                self.seen.add(id(binding))
+            enter = lambda s: [Fact(bindings[-1])]
+        else:
+            enter = lambda s: s
+        exit_state, breaks = self._loop(node, state, enter)
+        return merge(self.block(node.orelse, exit_state), breaks)
+
+    _AsyncFor = _For
+
+    def _With(self, node, state):
+        for item in node.items:
+            state = self.walrus(item.context_expr, state)
+        return self.block(node.body, self._bind(node, state))
+
+    _AsyncWith = _With
+
+    def _Try(self, node, state):
+        body = self.block(node.body, state)
+        handler_start = merge(state, body)
+        ends = [self.block(node.orelse, body)]
+        for handler in node.handlers:
+            ends.append(self.block(handler.body, self._bind(handler, handler_start)))
+        result = merge(*ends)
+        if not node.finalbody:
+            return result
+        after = self.block(node.finalbody, merge(result, handler_start))
+        return after if result else []
+
+    _TryStar = _Try
+
+    def _Match(self, node, state):
+        state = self.walrus(node.subject, state)
+        ends = [state]
+        for case in node.cases:
+            ends.append(self.block(case.body, self._bind(case, state)))
+        return merge(*ends)
+
+    # -- conditions ------------------------------------------------------------
+
+    def branch(self, test, state, positive):
+        """The facts in the branch where `test` is true (`positive`) or false."""
+        if not state:
+            return state
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            return self.branch(test.operand, state, not positive)
+        if isinstance(test, ast.BoolOp):
+            if isinstance(test.op, ast.And) == positive:
+                for value in test.values:
+                    state = self.branch(value, state, positive)
+                return state
+            result = []
+            for value in test.values:
+                result = merge(result, self.branch(value, state, positive))
+                state = self.branch(value, state, not positive)
+            return result
+        narrowing = self._narrowing(test, positive)
+        if narrowing is None:
+            return state
+        return [fact.narrowed(narrowing) for fact in state]
+
+    def _is_subject(self, node):
+        if isinstance(node, ast.NamedExpr):
+            node = node.target
+        return isinstance(node, ast.Name) and node.id == self.name
+
+    def _narrowing(self, test, positive):
+        if self._is_subject(test):
+            return Narrowing("truthy", True) if positive else None
+        if isinstance(test, ast.Call) and isinstance(test.func, ast.Name) and len(test.args) == 2:
+            if test.func.id == "isinstance" and self._is_subject(test.args[0]):
+                return Narrowing("isinstance", positive, test.args[1], self.scope)
+            return None
+        if isinstance(test, ast.Compare) and len(test.ops) == 1:
+            left, op, right = test.left, test.ops[0], test.comparators[0]
+            if _is_none(left) and self._is_subject(right):
+                left, right = right, left
+            if self._is_subject(left) and _is_none(right):
+                if isinstance(op, (ast.Is, ast.Eq)):
+                    return Narrowing("none", positive)
+                if isinstance(op, (ast.IsNot, ast.NotEq)):
+                    return Narrowing("none", not positive)
+            if (positive and isinstance(op, (ast.Is, ast.Eq)) and isinstance(left, ast.Call)
+                    and isinstance(left.func, ast.Name) and left.func.id == "type"
+                    and len(left.args) == 1 and self._is_subject(left.args[0])):
+                return Narrowing("isinstance", True, right, self.scope)
+        return None
+
+
+def _is_none(node):
+    return isinstance(node, ast.Constant) and node.value is None
+
+
+def _first_child_start(statement):
+    """Start of the first nested statement (or case) of a compound statement."""
+    if not isinstance(statement, _COMPOUND):
+        return None
+    if isinstance(statement, ast.Match):
+        return start_of(statement.cases[0].pattern) if statement.cases else None
+    return start_of(statement.body[0]) if statement.body else None
+
+
+def initial_facts(scope, name):
+    """Facts at the start of `scope`: its parameter binding, or the enclosing scope."""
+    if scope.kind == FUNCTION:
+        params = [b for b in scope.bindings.get(name, []) if b.kind == "param"]
+        if params:
+            return [Fact(params[-1])]
+    return [Fact(None)]
+"""The completion engine: ties context, parsing, scopes and inference together."""
+import ast
+import os
+from dataclasses import asdict, dataclass
+
+from . import context as cursor_context
+from .builtin_scope import KEYWORDS
+from .describe import describe_keyword, describe_module
+from .inference import Inferrer
+from .locate import find_scope
+from .matching import make_matcher
+from .members import is_public
+from .modules import Importer, ModuleContext
+from .parsing import parse_tolerant
+from .ranking import sort_keywords, sort_names
+from .source import load_document
+from .values import MODULE
+
+
+class ModuleEntry:
+    """A module name offered inside an import statement."""
+
+    def describe(self, name):
+        return describe_module(name)
+
+
+@dataclass
+class Completion:
+    name: str
+    complete: str
+    type: str
+    description: str
+
+    def to_dict(self):
+        return asdict(self)
+
+
+def complete_file(path, line, col, fuzzy=False, project=None):
+    """Completions for the cursor at 1-based `line`, 0-based `col` of `path`."""
+    document = load_document(path)
+    document.check_position(line, col)
+    return Completer(document, line, col, fuzzy, project).run()
+
+
+class Completer:
+    def __init__(self, document, line, col, fuzzy, project=None):
+        self.document = document
+        self.line = line
+        self.col = col
+        self.fuzzy = fuzzy
+        self.project = project
+
+    def run(self):
+        text_before = self.document.text_before(self.line, self.col)
+        import_request = cursor_context.analyze_import(text_before)
+        request = import_request or cursor_context.analyze(text_before)
+        if request.kind in (cursor_context.NONE, cursor_context.IMPORT_NOTHING):
+            return []
+
+        importer = Importer(os.path.abspath(self.project or self.document.directory))
+        tree = parse_tolerant(self.document.text, cursor=(self.line, self.col))
+        module = ModuleContext(self.document.path, "__main__", tree, self.document.text)
+        importer.register(module)
+        inferrer = Inferrer(importer)
+
+        if import_request is not None:
+            entries, keywords = self._import_entries(inferrer, module, import_request)
+        elif request.kind == cursor_context.ATTRIBUTE:
+            scope = find_scope(module, self.line, self.col, self.document.lines[self.line - 1])
+            entries = self._attribute_entries(inferrer, scope, request.receiver)
+            keywords = []
+        else:
+            scope = find_scope(module, self.line, self.col, self.document.lines[self.line - 1])
+            entries = inferrer.visible_entries(scope, self.line)
+            keywords = KEYWORDS
+        return self._results(entries, keywords, request.prefix)
+
+    def _results(self, entries, keywords, prefix):
+        matches = make_matcher(prefix, self.fuzzy)
+        cut = len(prefix)
+        results = []
+        for name in sort_names(n for n in entries if matches(n)):
+            kind, description = entries[name].describe(name)
+            results.append(Completion(name, name[cut:], kind, description))
+        for name in sort_keywords(k for k in keywords if matches(k)):
+            kind, description = describe_keyword(name)
+            results.append(Completion(name, name[cut:], kind, description))
+        return results
+
+    def _import_entries(self, inferrer, context, request):
+        """(entries, keywords) for a cursor inside an import statement."""
+        importer = inferrer.importer
+        if request.kind == cursor_context.IMPORT_KEYWORD:
+            return {}, ["import"]
+        if request.kind == cursor_context.IMPORT_MODULE:
+            if request.level:
+                package = importer.import_relative(context, request.module, request.level)
+                names = importer.submodule_names(package)
+            elif request.module:
+                names = importer.submodule_names(importer.import_absolute(request.module))
+            else:
+                names = importer.top_level_names()
+            return {name: ModuleEntry() for name in names}, []
+        source = importer.import_module(context, request.module, request.level)
+        if source is None or source.kind != MODULE:
+            return {}, []
+        return inferrer.members.exported(source, submodules=True), []
+
+    def _attribute_entries(self, inferrer, scope, receiver):
+        try:
+            expression = ast.parse(receiver.strip(), mode="eval").body
+        except (SyntaxError, ValueError):
+            return {}
+        line_text = self.document.lines[self.line - 1]
+        position = (self.line, len(line_text[:self.col].encode("utf-8")))
+        entries = {}
+        for value in inferrer.infer_values(expression, scope, pos=position, strict=True):
+            members = inferrer.members.all(value)
+            if value.kind == MODULE:
+                members = {name: entry for name, entry in members.items() if is_public(name)}
+            for name, entry in members.items():
+                entries.setdefault(name, entry)
+        return entries

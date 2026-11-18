@@ -1,0 +1,259 @@
+### industry.py (modified)
+--- industry.py
++++ industry.py
+@@ -763,14 +763,13 @@
+     return f"{whole}.{frac}"
+ 
+ 
+-def invention_plan(sde, req, skill):
+-    """Return (bp ME, bp TE, max runs, {typeID: quantity}) for the invention step."""
+-    product, bp = req["product"], req["bp"]
+-    dname, mult, druns, dme, dte = req["decryptor"]
+-    if req["relic"] is not None:
+-        sources = [(src, aid) for src, aid in sde.inv_sources.get(bp, []) if src == req["relic"]]
++def invention_setup(sde, product, bp, decryptor, relic, skill):
++    """Return (bp ME, bp TE, max runs, chance, {typeID: quantity per attempt}) for inventing bp."""
++    dname, mult, druns, dme, dte = decryptor
++    if relic is not None:
++        sources = [(src, aid) for src, aid in sde.inv_sources.get(bp, []) if src == relic]
+         if not sources:
+-            raise PlanError(f"'{type_name(sde, req['relic'])}' cannot be reverse engineered into "
++            raise PlanError(f"'{type_name(sde, relic)}' cannot be reverse engineered into "
+                             f"'{type_name(sde, bp)}'")
+         primary = sources[0]
+     else:
+@@ -794,6 +793,23 @@
+     max_runs = base_runs + druns
+     if max_runs <= 0:
+         raise PlanError(f"Invented '{type_name(sde, bp)}' would have no runs")
++
++    mats = {}
++    for mid, qty in sde.inv_materials.get(primary, []):
++        mats[mid] = mats.get(mid, 0) + qty
++    if quality is not None:
++        mats[primary[0]] = mats.get(primary[0], 0) + 1
++    if dname != "None":
++        ids = sorted(sde.by_name.get(dname, []))
++        if ids:
++            mats[ids[0]] = mats.get(ids[0], 0) + 1
++    return BASE_ME + dme, BASE_TE + dte, max_runs, chance, mats
++
++
++def invention_plan(sde, req, skill):
++    """Return (bp ME, bp TE, max runs, {typeID: quantity}) for the invention step."""
++    me, te, max_runs, chance, per_attempt = invention_setup(
++        sde, req["product"], req["bp"], req["decryptor"], req["relic"], skill)
+     runs, jobs = req["runs"], req["jobs"]
+     if runs <= max_runs:
+         # One invented blueprint can be used for several jobs.
+@@ -801,17 +817,11 @@
+     else:
+         copies = jobs * math.ceil(Fraction(runs, max_runs))
+     attempts = math.ceil(copies / chance)
+-
+-    mats = {}
+-    for mid, qty in sde.inv_materials.get(primary, []):
+-        mats[mid] = mats.get(mid, 0) + qty * attempts
+-    if quality is not None:
+-        mats[primary[0]] = mats.get(primary[0], 0) + attempts
+-    if dname != "None":
+-        ids = sorted(sde.by_name.get(dname, []))
+-        if ids:
+-            mats[ids[0]] = mats.get(ids[0], 0) + attempts
+-    return BASE_ME + dme, BASE_TE + dte, max_runs, mats
++    return me, te, max_runs, {mid: qty * attempts for mid, qty in per_attempt.items()}
++
++
++def is_inventable(sde, bp):
++    return any(sde.is_published(src) for src, _ in sde.inv_sources.get(bp, []))
+ 
+ 
+ def split_runs(runs, days_per_run, split_days):
+@@ -845,19 +855,21 @@
+     return config["component_me"], config["component_te"]
+ 
+ 
+-def component_order(sde, roots, exclude):
+-    """Buildable components reachable from roots, every consumer before its inputs."""
++def component_order(sde, roots, exclude, should_build=None):
++    """Components to build reachable from roots, every consumer before its inputs."""
++    if should_build is None:
++        should_build = sde.is_buildable
+     order = []
+     state = {tid: 2 for tid in exclude}
+     for root in roots:
+-        if root in state or not sde.is_buildable(root):
++        if root in state or not should_build(root):
+             continue
+         state[root] = 1
+         stack = [(root, iter(sorted(sde.materials.get(sde.recipe_for(root), {}))))]
+         while stack:
+             tid, children = stack[-1]
+             for child in children:
+-                if child not in state and sde.is_buildable(child):
++                if child not in state and should_build(child):
+                     state[child] = 1
+                     stack.append((child, iter(sorted(sde.materials.get(sde.recipe_for(child), {})))))
+                     break
+@@ -869,8 +881,58 @@
+     return order
+ 
+ 
+-def build_plan(sde, req, config, build_all=False):
++def parse_quantity(token):
++    text = token.replace(",", "").replace("_", "")
++    if not text.isdigit() or not token[0].isdigit():
++        return None
++    return int(text)
++
++
++def load_stock_file(sde, path, label):
++    """Parse '{Item Name} {Quantity} ...' lines into {typeID: quantity}."""
++    if not os.path.isfile(path):
++        raise PlanError(f"{label} file not found: {path}")
++    lowered = {}
++    for name, ids in sde.by_name.items():
++        lowered.setdefault(name.lower(), ids)
++
++    def lookup(name):
++        ids = sde.by_name.get(name) or lowered.get(name.lower())
++        return min(ids) if ids else None
++
++    result = {}
++    with open(path, "r", encoding="utf-8-sig") as fh:
++        for lineno, raw in enumerate(fh, 1):
++            tokens = raw.split()
++            if not tokens or tokens[0].startswith("#"):
++                continue
++            found = None
++            unknown = None
++            for i in range(1, len(tokens)):
++                qty = parse_quantity(tokens[i])
++                if qty is None:
++                    continue
++                name = " ".join(tokens[:i])
++                tid = lookup(name)
++                if tid is not None:
++                    found = (tid, qty)
++                    break
++                if unknown is None:
++                    unknown = name
++            if found is None:
++                if unknown is not None:
++                    raise PlanError(f"{label} line {lineno}: No published item named '{unknown}' found in SDE")
++                raise PlanError(f"{label} line {lineno}: expected '{{Item Name}} {{Quantity}}', "
++                                f"got '{raw.strip()}'")
++            tid, qty = found
++            result[tid] = result.get(tid, 0) + qty
++    return result
++
++
++def build_plan(sde, req, config, build_all=False, stocks=None, targets=None):
+     """Return (materials rows, jobs rows) for a parsed build request."""
++    stocks = stocks or {}
++    targets = targets or {}
+     product, bp, aid = req["product"], req["bp"], req["aid"]
+     jobs = req["jobs"]
+     if jobs < 1:
+@@ -914,35 +976,59 @@
+             key = (type_name(sde, job_bp), part_runs, format_decimal(days))
+             job_counts[key] = job_counts.get(key, 0) + part_count * count
+ 
++    def add_invented_jobs(tid, inv_bp, runs):
++        """Invent (without decryptor) and build `runs` runs of an invented blueprint."""
++        inv_me, inv_te, max_runs, chance, per_attempt = invention_setup(
++            sde, tid, inv_bp, DECRYPTORS[0], None, config["invention_skill"])
++        attempts = math.ceil(math.ceil(Fraction(runs, max_runs)) / chance)
++        for mid, qty in per_attempt.items():
++            mats[mid] = mats.get(mid, 0) + qty * attempts
++        full, rest = divmod(runs, max_runs)
++        if full:
++            add_jobs(inv_bp, MANUFACTURING, max_runs, inv_me, inv_te, full)
++        if rest:
++            add_jobs(inv_bp, MANUFACTURING, rest, inv_me, inv_te, 1)
++
+     add_jobs(bp, aid, req["runs"], me, te, jobs)
+ 
+-    surplus = {}
+-    if build_all:
+-        for mid in component_order(sde, list(mats), {product}):
+-            need = mats.pop(mid, 0)
+-            if need <= 0:
+-                continue
+-            cbp, caid = sde.recipe_for(mid)
+-            out_qty = sde.output_quantity(cbp, caid, mid)
+-            runs = -(-need // out_qty)
++    def should_build(tid):
++        return (build_all or tid in targets) and sde.is_buildable(tid)
++
++    # Build each component (consumers first) for what stock does not cover.
++    produced = {}
++    exclude = set() if product in targets else {product}
++    for mid in component_order(sde, list(mats) + sorted(targets), exclude, should_build):
++        need = mats.get(mid, 0) + targets.get(mid, 0) - stocks.get(mid, 0)
++        if need <= 0:
++            continue
++        cbp, caid = sde.recipe_for(mid)
++        out_qty = sde.output_quantity(cbp, caid, mid)
++        runs = -(-need // out_qty)
++        if mid in targets and caid == MANUFACTURING and is_inventable(sde, cbp):
++            add_invented_jobs(mid, cbp, runs)
++        else:
+             cme, cte = component_efficiency(sde, mid, caid, config)
+             add_jobs(cbp, caid, runs, cme, cte, 1)
+-            surplus[mid] = surplus.get(mid, 0) + runs * out_qty - need
++        produced[mid] = runs * out_qty
+ 
+     by_name = {}
+-    for mid, qty in mats.items():
+-        name = type_name(sde, mid)
+-        vol = (sde.volume(mid) if mid in sde.types else Decimal(0)) * qty
+-        prev = by_name.get(name, (0, Decimal(0), 0))
+-        by_name[name] = (prev[0] + qty, prev[1] + vol, prev[2])
+-    for mid, extra in surplus.items():
+-        if extra <= 0:
++    for mid in set(mats) | set(targets) | set(produced):
++        start = stocks.get(mid, 0)
++        used = mats.get(mid, 0)
++        made = produced.get(mid, 0)
++        bought = 0
++        if mid not in produced:
++            bought = max(0, used + targets.get(mid, 0) - start)
++        end = start + made + bought - used
++        # Hide untouched stock and fully consumed intermediates.
++        if not (bought > 0 or end != start or (start > 0 and (used > 0 or made > 0))):
+             continue
+         name = type_name(sde, mid)
+-        prev = by_name.get(name, (0, Decimal(0), 0))
+-        by_name[name] = (prev[0], prev[1], prev[2] + extra)
+-    material_rows = [[name, qty, format_decimal(vol), 0, end]
+-                     for name, (qty, vol, end) in sorted(by_name.items())]
++        vol = (sde.volume(mid) if mid in sde.types else Decimal(0)) * bought
++        prev = by_name.get(name, (0, Decimal(0), 0, 0))
++        by_name[name] = (prev[0] + bought, prev[1] + vol, prev[2] + start, prev[3] + end)
++    material_rows = [[name, qty, format_decimal(vol), start, end]
++                     for name, (qty, vol, start, end) in sorted(by_name.items())]
+ 
+     job_rows = [[name, runs, days, count] for (name, runs, days), count in job_counts.items()]
+     job_rows.sort(key=lambda r: (r[0], r[1], r[3], Decimal(r[2])))
+@@ -987,6 +1073,8 @@
+     pp.add_argument("--output", required=True, help="Output directory")
+     pp.add_argument("--build-all", dest="build_all", action="store_true",
+                     help="Build every buildable component in the tree instead of buying it")
++    pp.add_argument("--stocks", help="Text file of items on hand: '{Item Name} {Quantity}' per line")
++    pp.add_argument("--targets", help="Text file of stock levels to maintain: '{Item Name} {Quantity}' per line")
+     args = parser.parse_args(argv)
+ 
+     if args.command == "plan":
+@@ -997,7 +1085,9 @@
+             config = load_plan_config(args.config)
+             sde = SDE(args.sde)
+             req = parse_build_string(sde, " ".join(args.build))
+-            material_rows, job_rows = build_plan(sde, req, config, args.build_all)
++            stocks = load_stock_file(sde, args.stocks, "Stocks") if args.stocks else {}
++            targets = load_stock_file(sde, args.targets, "Targets") if args.targets else {}
++            material_rows, job_rows = build_plan(sde, req, config, args.build_all, stocks, targets)
+         except (PlanError, LookupError) as exc:
+             print(f"Error: {exc}", file=sys.stderr)
+             return 1
+

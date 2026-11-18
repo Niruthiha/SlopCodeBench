@@ -1,0 +1,50 @@
+commands:
+  agent_command: python
+  command: uv run
+  entry_file: '{entry_file}.py'
+docker:
+  binary: docker
+  extra_mounts: {}
+  image: ghcr.io/astral-sh/uv:python3.12-trixie-slim
+  mount_workspace: true
+  network: scb-cellnet
+  user: null
+  workdir: /workspace
+environment:
+  env:
+    HTTPS_PROXY: http://scb-egress-agent:8888
+    HTTP_PROXY: http://scb-egress-agent:8888
+    NO_PROXY: localhost,127.0.0.1
+    PIP_CACHE_DIR: /tmp/pip-cache-dir
+    PIP_CONFIG_FILE: /tmp/pip-conf
+    UV_CACHE_DIR: /tmp/uv-cache
+    http_proxy: http://scb-egress-agent:8888
+    https_proxy: http://scb-egress-agent:8888
+    no_proxy: localhost,127.0.0.1
+  include_os_env: false
+name: python3.12
+setup:
+  commands: []
+  eval_commands:
+  - uv init
+  - uv add -r requirements.txt
+  resume_commands:
+  - python -m venv .venv || true
+  - .venv/bin/pip install -r requirements.txt 2>/dev/null || true
+snapshot:
+  archive_save_dir: null
+  compression: gz
+  ignore_globs:
+  - .evaluation_tests/*
+  - .venv/*
+  - .opencode/*
+  - .mypy_cache/*
+  - '*.pyc'
+  - node_modules/*
+  - .ruff_cache/*
+  - venv/*
+  - __pycache__/*
+  - .pytest_cache/*
+  - .claude/*
+  keep_globs: null
+type: docker

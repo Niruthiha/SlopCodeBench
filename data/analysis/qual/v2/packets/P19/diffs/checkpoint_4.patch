@@ -1,0 +1,1758 @@
+### mtl_engine/ast_nodes.py (modified)
+--- mtl_engine/ast_nodes.py
++++ mtl_engine/ast_nodes.py
+@@ -15,9 +15,12 @@
+ 
+ 
+ class ColumnRef(Expr):
+-    def __init__(self, name, line):
+-        self.name = name
+-        self.line = line
++    """A column reference; `qualifier` is the relation alias of `A.col` (None when bare)."""
++
++    def __init__(self, name, line, qualifier=None):
++        self.name = name
++        self.line = line
++        self.qualifier = qualifier
+ 
+ 
+ class Unary(Expr):
+@@ -147,6 +150,55 @@
+         self.line = line
+ 
+ 
++class SourceBinding:
++    """`name as alias` inside a `sources { ... }` block."""
++
++    def __init__(self, name, alias, line):
++        self.name = name
++        self.alias = alias
++        self.line = line
++
++
++class SourcesDecl:
++    def __init__(self, bindings, line):
++        self.bindings = bindings
++        self.line = line
++
++
++class WithBlock:
++    """`with Alias { ... }`: pre-stage calcs and filters scoped to one relation."""
++
++    def __init__(self, alias, calcs, filters, line):
++        self.alias = alias
++        self.calcs = calcs
++        self.filters = filters
++        self.line = line
++
++
++class Projection:
++    def __init__(self, expr, name, line):
++        self.expr = expr
++        self.name = name
++        self.line = line
++
++
++JOIN_TYPES = ("inner", "left", "right", "full")
++
++
++class Join:
++    """`join L with R on (...) [within D] type T project { ... } [as Alias]`."""
++
++    def __init__(self, left, right, on, within, join_type, projections, alias, line):
++        self.left = left
++        self.right = right
++        self.on = on
++        self.within = within  # seconds, or None
++        self.join_type = join_type
++        self.projections = projections
++        self.alias = alias
++        self.line = line
++
++
+ class Program:
+     """A parsed pipeline: ordered row operations plus the grouping/aggregation spec.
+ 
+@@ -156,7 +208,8 @@
+     """
+ 
+     def __init__(self, row_ops, group_by, window, aggregate, calcs=(),
+-                 params=(), schema_name=None, schemas=None, name=None):
++                 params=(), schema_name=None, schemas=None, name=None,
++                 sources=None, with_blocks=(), joins=()):
+         self.row_ops = row_ops
+         self.group_by = group_by
+         self.window = window
+@@ -166,6 +219,9 @@
+         self.schema_name = schema_name
+         self.schemas = schemas or {}
+         self.name = name
++        self.sources = sources  # SourcesDecl or None
++        self.with_blocks = list(with_blocks)
++        self.joins = list(joins)
+ 
+     @property
+     def pre_calcs(self):
+
+### mtl_engine/cli.py (modified)
+--- mtl_engine/cli.py
++++ mtl_engine/cli.py
+@@ -2,9 +2,9 @@
+ import argparse
+ import sys
+ 
+-from . import casts, inputs, loader, output, params, pipeline
++from . import casts, dtypes, ingest, inputs, joins, loader, output, params, pipeline
+ from .badrecords import BadRecordSink
+-from .errors import IOFailure, MTLError, RuntimeFailure
++from .errors import ConfigError, DSLSyntaxError, IOFailure, MTLError, RuntimeFailure, TypeCheckError
+ from .parser import parse_program
+ from .schema import resolve_all
+ from .timeutil import TimestampParser, resolve_timezone
+@@ -25,6 +25,8 @@
+                         help="input file, directory or glob (repeatable)")
+     parser.add_argument("--csv", action="append", nargs="+", default=[], help=argparse.SUPPRESS)
+     parser.add_argument("--dsl", required=True, help="path to the DSL file, or '-' for STDIN")
++    parser.add_argument("--ingest-config", dest="ingest_config", default=None,
++                        help="YAML/JSON config declaring the named input sources")
+     parser.add_argument("--out", default=None, help="output file (default: STDOUT)")
+     parser.add_argument("--tz", default="UTC", help="IANA timezone for naive timestamps")
+     parser.add_argument("--timestamp-format", dest="timestamp_format", default=None,
+@@ -49,22 +51,17 @@
+     """Execute the CLI stages and write the JSON result."""
+     args = build_arg_parser().parse_args(argv)
+     patterns = [p for group in args.input + args.csv for p in group]
+-    if not patterns:
+-        raise IOFailure("invalid arguments: --input is required")
++    if args.ingest_config is not None or not patterns:
++        return _run_ingest(args)
+     if args.dsl == "-" and inputs.STDIN in patterns:
+         raise IOFailure("--input and --dsl cannot both read from STDIN")
+-    try:
+-        tz = resolve_timezone(args.tz)
+-    except ValueError as exc:
+-        raise IOFailure(str(exc)) from exc
+-
+-    ts_parser = TimestampParser(tz, args.timestamp_format)
+-    casts.set_timestamp_parser(ts_parser)
+-    cli_params = params.parse_cli_params(item for group in args.param for item in group)
++    ts_parser, cli_params = _setup(args)
+     ctx = loader.LoadContext(ts_parser, loader.parse_null_markers(args.nulls), args.strict)
+     sink = BadRecordSink(args.strict)
+ 
+     program = parse_program(loader.read_text(args.dsl))
++    if program.sources is not None:
++        raise ConfigError("--ingest-config is required for pipelines with a sources block")
+     try:
+         if program.schema_name is None:
+             # Bare statements: the input columns are the typing environment.
+@@ -90,6 +87,112 @@
+     _write(text, args.out)
+ 
+ 
++def _setup(args):
++    try:
++        tz = resolve_timezone(args.tz)
++    except ValueError as exc:
++        raise IOFailure(str(exc)) from exc
++    ts_parser = TimestampParser(tz, args.timestamp_format)
++    casts.set_timestamp_parser(ts_parser)
++    cli_params = params.parse_cli_params(item for group in args.param for item in group)
++    return ts_parser, cli_params
++
++
++def _run_ingest(args):
++    """Multi-source mode: sources declared by --ingest-config, combined by joins."""
++    ts_parser, cli_params = _setup(args)
++    program = parse_program(loader.read_text(args.dsl))
++    if args.ingest_config is None:
++        if program.sources is not None:
++            raise ConfigError("--ingest-config is required for pipelines with a sources block")
++        raise IOFailure("invalid arguments: --input or --ingest-config is required")
++    if program.schema_name is None:
++        raise DSLSyntaxError("--ingest-config requires a pipeline block using a schema")
++    config = ingest.load_config(args.ingest_config, args.recursive, args.format)
++    cli_nulls = loader.parse_null_markers(args.nulls)
++    sink = BadRecordSink(args.strict)
++
++    params.check_provided(program.params, cli_params, args.strict)
++    schemas = resolve_all(program.schemas)
++    param_values = params.resolve(program.params, cli_params, ts_parser)
++    for resolved in schemas.values():
++        check_schema_calcs(resolved, param_values)
++    ingest.bind_schemas(config, schemas, program.schema_name, ts_parser)
++
++    if program.sources is not None:
++        alias_names = {}
++        for binding in program.sources.bindings:
++            if binding.name not in config.sources:
++                raise ConfigError(f"line {binding.line}: source '{binding.name}' is not "
++                                  "declared in the ingest config")
++            alias_names[binding.alias] = binding.name
++        alias_types = {alias: config.sources[name].resolved.types
++                       for alias, name in alias_names.items()}
++        working = joins.check(program, alias_types, param_values)
++        used = list(dict.fromkeys(alias_names.values()))
++    else:
++        working = schemas[program.schema_name].types
++        _check_union(config, working)
++        used = list(config.sources)
++    row_schema = check_program(program, working, param_values)
++
++    files = ingest.assign_files(config, set(used))
++    try:
++        loaded = {name: _load_source(config.sources[name], files[name], ts_parser, cli_nulls,
++                                     args.strict, sink) for name in used}
++        if program.sources is not None:
++            records = joins.run(program, {alias: loaded[name]
++                                          for alias, name in alias_names.items()}, sink)
++        else:
++            records = [(origin, {f: pipeline.coerce(row.get(f), t) for f, t in working.items()})
++                       for name in used for origin, row in loaded[name]]
++        buckets = pipeline.run(program, records, (), row_schema, sink)
++        text = output.serialize(output.build_document(program, buckets))
++    finally:
++        sink.write(args.bad_records_out)
++    _write(text, args.out)
++
++
++def _check_union(config, working):
++    """Without a sources block every source feeds the pipeline's schema directly."""
++    for source in config.sources.values():
++        for name, t in source.resolved.types.items():
++            want = working.get(name)
++            if want is not None and not (want == t or (want == dtypes.FLOAT and t == dtypes.INT)):
++                raise TypeCheckError(f"source '{source.name}' field '{name}' has type {t}, "
++                                     f"but the pipeline schema requires {want}")
++
++
++def _load_source(source, files, ts_parser, cli_nulls, strict, sink):
++    """Read, map and validate every file of one ingest source; returns (Origin, row) pairs
++    with the schema's calculated fields evaluated."""
++    tz = source.tz or ts_parser.default_tz
++    parser = TimestampParser(tz, source.timestamp_format or ts_parser.fmt)
++    nulls = source.nulls if source.nulls is not None else cli_nulls
++    ctx = loader.LoadContext(parser, nulls, strict)
++    resolved = source.resolved
++    mapping = source.mapping
++    fields = []
++    for name, ftype in resolved.physical.items():
++        has_default = name in source.default_values
++        fields.append(loader.FieldPlan(name, ftype, mapping.cast.get(name),
++                                       source.default_values.get(name), has_default))
++    required = list(source.required_fields)
++    if resolved.physical.get(loader.EVENT_TIME) == dtypes.TIMESTAMP \
++            and loader.EVENT_TIME not in required:
++        required.append(loader.EVENT_TIME)
++    plan = loader.SourcePlan(fields, mapping.rename, mapping.drop, required)
++
++    rows = []
++    for input_file in files:
++        opened = loader.open_source(input_file)
++        rows.extend(loader.iter_mapped_rows(opened, plan, ctx, sink))
++    calcs = [(f.name, f.expr, f.type) for f in resolved.calc_order]
++    if calcs:
++        rows = pipeline.transform_rows(rows, calcs, (), sink)
++    return rows
++
++
+ def _write(text, destination):
+     if destination is None or destination == "-":
+         sys.stdout.write(text)
+
+### mtl_engine/errors.py (modified)
+--- mtl_engine/errors.py
++++ mtl_engine/errors.py
+@@ -32,3 +32,8 @@
+ class RuntimeFailure(MTLError):
+     kind = "runtime_error"
+     exit_code = 4
++
++
++class ConfigError(MTLError):
++    kind = "config_error"
++    exit_code = 5
+
+### mtl_engine/ingest.py (created)
+--- mtl_engine/ingest.py
++++ mtl_engine/ingest.py
+@@ -0,0 +1,470 @@
++"""Declarative ingest config: named sources, file discovery/assignment and mapping rules."""
++import glob
++import json
++import math
++import os
++from datetime import date, datetime, time, timezone
++
++from . import dtypes, inputs
++from .errors import ConfigError, IOFailure
++from .loader import read_text
++from .timeutil import TimestampParser, resolve_timezone
++
++TYPE_NAMES = (dtypes.STRING, dtypes.INT, dtypes.FLOAT, dtypes.BOOL, dtypes.TIMESTAMP)
++MAPPING_KEYS = ("rename", "cast", "defaults", "drop")
++# Precedence of a source that does not declare one: lowest priority.
++DEFAULT_PRECEDENCE = math.inf
++
++
++class Mapping:
++    """Per-source conversion: drop -> rename -> cast -> defaults (keys after rename)."""
++
++    def __init__(self, rename, cast, defaults, drop):
++        self.rename = rename
++        self.cast = cast
++        self.defaults = defaults  # raw config values until bound to a schema
++        self.drop = drop
++
++
++class SourceConfig:
++    def __init__(self, name, patterns, recursive, file_format, schema, precedence, tz,
++                 nulls, timestamp_format, mapping, required):
++        self.name = name
++        self.patterns = patterns
++        self.recursive = recursive
++        self.format = file_format
++        self.schema = schema
++        self.precedence = precedence
++        self.tz = tz
++        self.nulls = nulls
++        self.timestamp_format = timestamp_format
++        self.mapping = mapping
++        self.required = required
++        # Filled in by bind_schemas().
++        self.resolved = None
++        self.default_values = {}
++        self.required_fields = []
++
++
++class IngestConfig:
++    def __init__(self, path, sources):
++        self.path = path
++        self.base_dir = os.path.dirname(os.path.abspath(path))
++        self.sources = sources  # name -> SourceConfig, in declaration order
++
++
++# --------------------------------------------------------------------------- loading
++
++
++def load_config(path, cli_recursive=False, cli_format=inputs.AUTO):
++    """Read and validate an ingest config file (YAML or JSON)."""
++    text = read_text(path)
++    data = _parse(path, text)
++    if isinstance(data, dict):
++        if "sources" not in data:
++            raise ConfigError(f"ingest config '{path}' has no 'sources' list")
++        entries = data["sources"]
++    else:
++        entries = data
++    if isinstance(entries, dict):
++        # `sources: {name: {...}, ...}` form.
++        named = []
++        for name, spec in entries.items():
++            if not isinstance(spec, dict):
++                raise ConfigError(f"source '{name}' must be a mapping")
++            if "name" in spec and spec["name"] != name:
++                raise ConfigError(f"source '{name}' declares a different name '{spec['name']}'")
++            named.append(dict(spec, name=name))
++        entries = named
++    if not isinstance(entries, list) or not entries:
++        raise ConfigError("'sources' must be a non-empty list of source declarations")
++
++    sources = {}
++    for idx, spec in enumerate(entries):
++        source = _parse_source(spec, idx, cli_recursive, cli_format)
++        if source.name in sources:
++            raise ConfigError(f"duplicate source name '{source.name}'")
++        sources[source.name] = source
++    return IngestConfig(path, sources)
++
++
++def _parse(path, text):
++    if not text.strip():
++        raise ConfigError(f"ingest config '{path}' is empty")
++    try:
++        return json.loads(text)
++    except ValueError as json_exc:
++        if path.lower().endswith(".json"):
++            raise ConfigError(f"malformed JSON in ingest config '{path}': {json_exc}")
++    try:
++        import yaml
++    except ImportError as exc:  # pragma: no cover - dependency is in requirements.txt
++        raise ConfigError(f"cannot parse YAML config '{path}': PyYAML is not installed") from exc
++    try:
++        return yaml.safe_load(text)
++    except yaml.YAMLError as exc:
++        raise ConfigError(f"malformed YAML in ingest config '{path}': {exc}") from exc
++
++
++def _parse_source(spec, idx, cli_recursive, cli_format):
++    where = f"sources[{idx}]"
++    if not isinstance(spec, dict):
++        raise ConfigError(f"{where} must be a mapping")
++    name = spec.get("name")
++    if not isinstance(name, str) or not name.strip():
++        raise ConfigError(f"{where}: 'name' must be a non-empty string")
++    name = name.strip()
++    where = f"source '{name}'"
++
++    patterns = spec.get("inputs", spec.get("input"))
++    if isinstance(patterns, str):
++        patterns = [patterns]
++    if (not isinstance(patterns, list) or not patterns
++            or not all(isinstance(p, str) and p.strip() for p in patterns)):
++        raise ConfigError(f"{where}: 'inputs' must be a non-empty list of path patterns")
++
++    recursive = spec.get("recursive")
++    if recursive is None:
++        recursive = None if not cli_recursive else True
++    elif not isinstance(recursive, bool):
++        raise ConfigError(f"{where}: 'recursive' must be true or false")
++
++    file_format = spec.get("format", cli_format)
++    if file_format is None:
++        file_format = inputs.AUTO
++    if not isinstance(file_format, str) or file_format.lower() not in inputs.FORMATS:
++        raise ConfigError(f"{where}: 'format' must be one of {', '.join(inputs.FORMATS)}")
++    file_format = file_format.lower()
++
++    schema = spec.get("schema")
++    if schema is not None and (not isinstance(schema, str) or not schema.strip()):
++        raise ConfigError(f"{where}: 'schema' must be a schema name")
++
++    precedence = spec.get("precedence", DEFAULT_PRECEDENCE)
++    if isinstance(precedence, bool) or not isinstance(precedence, (int, float)) or (
++            isinstance(precedence, float) and not precedence.is_integer()
++            and precedence != DEFAULT_PRECEDENCE):
++        raise ConfigError(f"{where}: 'precedence' must be an integer")
++
++    tz = spec.get("tz")
++    if tz is not None:
++        if not isinstance(tz, str):
++            raise ConfigError(f"{where}: 'tz' must be an IANA timezone name")
++        try:
++            tz = resolve_timezone(tz)
++        except ValueError as exc:
++            raise ConfigError(f"{where}: {exc}") from exc
++
++    nulls = spec.get("nulls")
++    if nulls is not None:
++        nulls = _parse_nulls(nulls, where)
++
++    ts_format = spec.get("timestamp_format", spec.get("timestamp-format"))
++    if ts_format is not None and not isinstance(ts_format, str):
++        raise ConfigError(f"{where}: 'timestamp_format' must be a string")
++
++    mapping = _parse_mapping(spec.get("mapping"), where)
++
++    required = spec.get("required", [])
++    if required is None:
++        required = []
++    if isinstance(required, str):
++        required = [required]
++    if not isinstance(required, list) or not all(isinstance(r, str) for r in required):
++        raise ConfigError(f"{where}: 'required' must be a list of field names")
++
++    return SourceConfig(name, [p.strip() for p in patterns], recursive, file_format,
++                        schema.strip() if schema else None, precedence, tz, nulls, ts_format,
++                        mapping, required)
++
++
++def _parse_nulls(value, where):
++    if isinstance(value, str):
++        value = value.split(",")
++    if not isinstance(value, list):
++        raise ConfigError(f"{where}: 'nulls' must be a list of strings")
++    markers = {""}
++    for item in value:
++        if item is None:
++            # An unquoted YAML null marker (null, NULL, ~).
++            markers.update(("null", "NULL", "Null", "~"))
++        elif isinstance(item, bool):
++            raise ConfigError(f"{where}: 'nulls' entries must be strings")
++        elif isinstance(item, (str, int, float)):
++            markers.add(str(item).strip())
++        else:
++            raise ConfigError(f"{where}: 'nulls' entries must be strings")
++    return frozenset(markers)
++
++
++def _parse_mapping(spec, where):
++    if spec is None:
++        return Mapping({}, {}, {}, [])
++    if not isinstance(spec, dict):
++        raise ConfigError(f"{where}: 'mapping' must be a mapping")
++    unknown = [k for k in spec if k not in MAPPING_KEYS]
++    if unknown:
++        raise ConfigError(f"{where}: unknown mapping directive(s): "
++                          f"{', '.join(str(k) for k in unknown)}")
++
++    rename = _string_map(spec.get("rename"), where, "rename")
++    targets = {}
++    for old, new in rename.items():
++        if not isinstance(new, str) or not new.strip():
++            raise ConfigError(f"{where}: rename target for '{old}' must be a column name")
++        new = new.strip()
++        if new in targets:
++            raise ConfigError(f"{where}: columns '{targets[new]}' and '{old}' are both renamed "
++                              f"to '{new}'")
++        targets[new] = old
++        rename[old] = new
++
++    cast = _string_map(spec.get("cast"), where, "cast")
++    for col, target in cast.items():
++        if not isinstance(target, str) or target.strip().lower() not in TYPE_NAMES:
++            raise ConfigError(f"{where}: cannot cast '{col}' to unknown type {target!r} "
++                              f"(expected one of {', '.join(TYPE_NAMES)})")
++        cast[col] = target.strip().lower()
++
++    defaults = _string_map(spec.get("defaults"), where, "defaults")
++    for col, value in defaults.items():
++        if isinstance(value, (list, dict)):
++            raise ConfigError(f"{where}: default for '{col}' must be a scalar value")
++
++    drop = spec.get("drop", [])
++    if drop is None:
++        drop = []
++    if isinstance(drop, str):
++        drop = [drop]
++    if not isinstance(drop, list) or not all(isinstance(d, str) for d in drop):
++        raise ConfigError(f"{where}: 'drop' must be a list of column names")
++    return Mapping(rename, cast, defaults, [d.strip() for d in drop])
++
++
++def _string_map(value, where, key):
++    if value is None:
++        return {}
++    if not isinstance(value, dict):
++        raise ConfigError(f"{where}: mapping '{key}' must be a mapping of column names")
++    result = {}
++    for k, v in value.items():
++        if not isinstance(k, str) or not k.strip():
++            raise ConfigError(f"{where}: mapping '{key}' has an invalid column name {k!r}")
++        result[k.strip()] = v
++    return result
++
++
++# --------------------------------------------------------------------------- schema binding
++
++
++def bind_schemas(config, schemas, default_schema, ts_parser):
++    """Resolve every source's schema; convert defaults and check required fields."""
++    for source in config.sources.values():
++        name = source.schema or default_schema
++        if name not in schemas:
++            raise ConfigError(f"source '{source.name}' references unknown schema '{name}'")
++        source.schema = name
++        resolved = schemas[name]
++        source.resolved = resolved
++        physical = resolved.physical
++        mapping = source.mapping
++
++        cast = {}
++        for col, target in mapping.cast.items():
++            cast[_mapped_name(col, mapping)] = target
++        mapping.cast = cast
++
++        parser = TimestampParser(source.tz or ts_parser.default_tz,
++                                 source.timestamp_format or ts_parser.fmt)
++        defaults = {}
++        for col, value in mapping.defaults.items():
++            col = _mapped_name(col, mapping)
++            if col not in physical or value is None:
++                continue
++            defaults[col] = _convert_default(value, physical[col], source.name, col, parser)
++        source.default_values = defaults
++
++        required = []
++        for col in source.required:
++            col = _mapped_name(col.strip(), mapping)
++            if col not in physical:
++                raise ConfigError(f"source '{source.name}': required field '{col}' is not a "
++                                  f"field of schema '{name}'")
++            if col not in required:
++                required.append(col)
++        source.required_fields = required
++
++
++def _mapped_name(col, mapping):
++    """A cast/defaults/required key; a pre-rename column name is accepted too."""
++    targets = set(mapping.rename.values())
++    if col in mapping.rename and col not in targets:
++        return mapping.rename[col]
++    return col
++
++
++def _convert_default(value, ftype, source, col, parser):
++    def fail():
++        raise ConfigError(f"source '{source}': default {value!r} for '{col}' is not a valid "
++                          f"{ftype}")
++
++    if ftype == dtypes.STRING:
++        if isinstance(value, bool):
++            return "true" if value else "false"
++        if isinstance(value, (datetime, date)):
++            return value.isoformat()
++        return str(value)
++    if ftype == dtypes.TIMESTAMP:
++        if isinstance(value, datetime):
++            if value.tzinfo is None:
++                value = value.replace(tzinfo=parser.default_tz)
++            return value.astimezone(timezone.utc)
++        if isinstance(value, date):
++            return datetime.combine(value, time()).replace(
++                tzinfo=parser.default_tz).astimezone(timezone.utc)
++        if isinstance(value, str):
++            try:
++                return parser.parse(value)
++            except (ValueError, OverflowError):
++                fail()
++        fail()
++    if ftype == dtypes.BOOL:
++        if isinstance(value, bool):
++            return value
++        if isinstance(value, str) and dtypes.looks_like(value.strip(), dtypes.BOOL):
++            return dtypes.parse_text(value.strip(), dtypes.BOOL)
++        fail()
++    if isinstance(value, bool):
++        fail()
++    if ftype == dtypes.INT:
++        if isinstance(value, int):
++            return value
++        if isinstance(value, float) and value.is_integer():
++            return int(value)
++    elif isinstance(value, (int, float)):
++        if math.isfinite(value):
++            return float(value)
++        fail()
++    if isinstance(value, str):
++        try:
++            return dtypes.parse_text(value.strip(), ftype)
++        except ValueError:
++            fail()
++    fail()
++
++
++# --------------------------------------------------------------------------- files
++
++
++def assign_files(config, used):
++    """Expand every source's patterns and assign each file to the matching source with
++    the lowest precedence. Returns name -> [InputFile] sorted by absolute path for the
++    `used` source names."""
++    _check_pattern_overlap(config)
++    claims = {}  # absolute path -> [(precedence, order, source name, display path)]
++    for order, source in enumerate(config.sources.values()):
++        seen = set()
++        for pattern in source.patterns:
++            matches = _expand(pattern, source, config.base_dir, source.name in used)
++            for display in matches:
++                key = os.path.realpath(display)
++                if key in seen:
++                    continue
++                seen.add(key)
++                claims.setdefault(key, []).append((source.precedence, order, source.name,
++                                                   display))
++        if source.name in used and not seen:
++            raise IOFailure(f"source '{source.name}': no input files matched "
++                            + ", ".join(source.patterns))
++
++    assigned = {name: [] for name in used}
++    for key, owners in claims.items():
++        owners.sort(key=lambda o: (o[0], o[1]))
++        best = owners[0]
++        tied = [o for o in owners[1:] if o[0] == best[0]]
++        if tied:
++            names = ", ".join(f"'{o[2]}'" for o in [best] + tied)
++            raise ConfigError(f"file '{best[3]}' matches sources {names} with equal "
++                              f"precedence {_show_precedence(best[0])}")
++        if best[2] in assigned:
++            assigned[best[2]].append((key, best[3]))
++
++    result = {}
++    for name, files in assigned.items():
++        source = config.sources[name]
++        result[name] = [_input_file(display, source)
++                        for _, display in sorted(files, key=lambda f: os.path.abspath(f[0]))]
++    return result
++
++
++def _show_precedence(value):
++    return "(default)" if value == DEFAULT_PRECEDENCE else str(int(value))
++
++
++def _check_pattern_overlap(config):
++    """Identical patterns declared by sources of equal precedence can never be resolved."""
++    owners = {}
++    for source in config.sources.values():
++        for pattern in source.patterns:
++            key = (os.path.normpath(os.path.abspath(pattern)), source.precedence)
++            other = owners.setdefault(key, source.name)
++            if other != source.name:
++                raise ConfigError(f"sources '{other}' and '{source.name}' declare the same "
++                                  f"pattern '{pattern}' with equal precedence "
++                                  f"{_show_precedence(source.precedence)}")
++
++
++def _input_file(display, source):
++    if source.format != inputs.AUTO:
++        return inputs.InputFile(display, source.format)
++    return inputs.InputFile(display, inputs.format_from_name(os.path.basename(display)))
++
++
++def _expand(pattern, source, base_dir, must_exist):
++    """Files matched by one pattern; relative patterns fall back to the config's directory."""
++    expanded = os.path.expanduser(pattern)
++    found = _expand_one(expanded, source)
++    if found is None and not os.path.isabs(expanded):
++        alt = os.path.join(base_dir, expanded)
++        if os.path.normpath(alt) != os.path.normpath(os.path.abspath(expanded)):
++            found = _expand_one(alt, source)
++    if found is None:
++        if must_exist and not glob.has_magic(expanded):
++            raise IOFailure(f"source '{source.name}': input '{pattern}' does not exist")
++        return []
++    return found
++
++
++def _expand_one(pattern, source):
++    """Matches of `pattern`, or None when it matches nothing at all."""
++    recursive = source.recursive
++    if recursive is None:
++        recursive = "**" in pattern
++    if os.path.isdir(pattern):
++        return [p for p in _scan(pattern, recursive) if _usable(p, source)]
++    if os.path.isfile(pattern):
++        return [pattern]
++    if os.path.exists(pattern):
++        raise IOFailure(f"source '{source.name}': input '{pattern}' is not a regular file")
++    if not glob.has_magic(pattern):
++        return None
++    result = []
++    for match in sorted(glob.glob(pattern, recursive=recursive)):
++        if os.path.isdir(match):
++            result.extend(p for p in _scan(match, recursive) if _usable(p, source))
++        elif os.path.isfile(match) and _usable(match, source, explicit=True):
++            result.append(match)
++    return result or None
++
++
++def _usable(path, source, explicit=False):
++    name = os.path.basename(path)
++    if name.startswith("."):
++        return False
++    if explicit and source.format != inputs.AUTO:
++        return True
++    return inputs.format_from_name(name) is not None or not inputs._has_extension(name)
++
++
++def _scan(directory, recursive):
++    return inputs._scan(directory, recursive)
+
+### mtl_engine/joins.py (created)
+--- mtl_engine/joins.py
++++ mtl_engine/joins.py
+@@ -0,0 +1,354 @@
++"""Multi-source pipelines: typing and execution of alias-scoped with blocks and joins.
++
++Inside a join, every column reference is resolved to one side and renamed to
++"L\\x1f<col>" or "R\\x1f<col>"; expressions are then evaluated against a
++PairRow, which looks the name up in the left or right row.
++"""
++from datetime import timedelta
++
++from . import badrecords as br
++from . import dtypes
++from .ast_nodes import Binary, ColumnRef, Projection
++from .badrecords import BadRecord
++from .errors import DSLSyntaxError, RuntimeFailure, TypeCheckError
++from .evaluator import evaluate
++from .parser import CURRENT_RELATION
++from .pipeline import coerce, transform_rows
++from .timeutil import format_utc
++from .typecheck import check_declared, check_names, infer, walk
++
++LEFT = "L"
++RIGHT = "R"
++_SEP = "\x1f"
++EVENT_TIME = "timestamp"
++
++
++class Relation:
++    """Static view of a relation: the qualifiers naming it, its column types and the
++    source aliases it was built from."""
++
++    def __init__(self, names, types, members):
++        self.names = set(names)
++        self.types = dict(types)
++        self.members = set(members)
++
++
++class _Side:
++    def __init__(self, tag, relation, qualifiers):
++        self.tag = tag
++        self.relation = relation
++        self.qualifiers = qualifiers
++
++
++class PairRow:
++    """Row view over a (left, right) pair; a missing side reads as all-null."""
++
++    __slots__ = ("left", "right")
++
++    def __init__(self, left, right):
++        self.left = left
++        self.right = right
++
++    def __getitem__(self, key):
++        row = self.left if key[0] == LEFT else self.right
++        return None if row is None else row[key[2:]]
++
++
++# --------------------------------------------------------------------------- typing
++
++
++def check(program, alias_types, params):
++    """Type the with blocks and joins; returns the working schema after the final join.
++
++    `alias_types` maps each source alias to the typed environment of its source.
++    """
++    relations = {alias: Relation({alias}, types, {alias}) for alias, types in alias_types.items()}
++    blocks = {}
++    for block in program.with_blocks:
++        blocks.setdefault(block.alias, []).append(block)
++    for alias in alias_types:
++        for block in blocks.get(alias, ()):
++            _check_block(block, relations[alias], params)
++
++    previous = None
++    for join in program.joins:
++        left = _side(LEFT, join.left, relations, previous)
++        right = _side(RIGHT, join.right, relations, previous)
++        types = _check_join(join, left, right, params)
++        names = {CURRENT_RELATION} | ({join.alias} if join.alias else set())
++        result = Relation(names, types, left.relation.members | right.relation.members)
++        if join.alias is not None:
++            relations[join.alias] = result
++            for block in blocks.get(join.alias, ()):
++                _check_block(block, result, params)
++        previous = result
++    return previous.types
++
++
++def _side(tag, name, relations, previous):
++    if name == CURRENT_RELATION:
++        return _Side(tag, previous, previous.names)
++    relation = relations[name]
++    return _Side(tag, relation, {name})
++
++
++def _check_block(block, relation, params):
++    types = relation.types
++    for expr, line in [(c.expr, c.line) for c in block.calcs] + \
++            [(f.predicate, f.line) for f in block.filters]:
++        for node in walk(expr):
++            if isinstance(node, ColumnRef) and node.qualifier is not None:
++                if node.qualifier not in relation.names:
++                    raise DSLSyntaxError(f"line {line}: '{node.qualifier}.{node.name}' is out "
++                                         f"of scope in with block '{block.alias}'")
++                node.qualifier = None
++    for idx, calc in enumerate(block.calcs):
++        if calc.name in types:
++            raise DSLSyntaxError(f"line {calc.line}: calc '{calc.name}' collides with an "
++                                 f"existing field of '{block.alias}'")
++        check_names(calc.expr, types, params, line=calc.line,
++                    later={c.name for c in block.calcs[idx + 1:]})
++        check_declared(calc.name, calc.declared_type, infer(calc.expr, types, params), calc.line)
++        types[calc.name] = calc.declared_type
++    for flt in block.filters:
++        check_names(flt.predicate, types, params, line=flt.line)
++        t = infer(flt.predicate, types, params)
++        if t != dtypes.BOOL:
++            raise TypeCheckError(f"line {flt.line}: filter predicate must be boolean, got {t}")
++
++
++def _check_join(join, left, right, params):
++    sides = (left, right)
++    env = {}
++    for side in sides:
++        for col, t in side.relation.types.items():
++            env[side.tag + _SEP + col] = t
++
++    _resolve(join.on, sides, join.line)
++    check_names(join.on, env, params, line=join.line)
++    t = infer(join.on, env, params)
++    if t != dtypes.BOOL:
++        raise TypeCheckError(f"line {join.line}: join condition must be boolean, got {t}")
++    join.keys = _equi_keys(join.on)
++
++    if join.within is not None:
++        for side in sides:
++            if side.relation.types.get(EVENT_TIME) != dtypes.TIMESTAMP:
++                raise DSLSyntaxError(f"line {join.line}: 'within' requires a timestamp column "
++                                     f"on both sides of the join")
++
++    types = {}
++    for proj in join.projections:
++        _resolve(proj.expr, sides, proj.line)
++        check_names(proj.expr, env, params, line=proj.line)
++        proj.type = infer(proj.expr, env, params)
++        types[proj.name] = proj.type
++
++    if EVENT_TIME not in types:
++        has_left = EVENT_TIME in left.relation.types
++        has_right = EVENT_TIME in right.relation.types
++        if has_left and has_right:
++            raise TypeCheckError(f"line {join.line}: ambiguous timestamp: both sides of the join "
++                                 "have 'timestamp'; project one of them as timestamp")
++        if not has_left:
++            raise TypeCheckError(f"line {join.line}: join result has no 'timestamp' column")
++        ref = ColumnRef(LEFT + _SEP + EVENT_TIME, join.line)
++        ref.type = left.relation.types[EVENT_TIME]
++        proj = Projection(ref, EVENT_TIME, join.line)
++        proj.type = ref.type
++        join.projections.append(proj)
++        types[EVENT_TIME] = proj.type
++    if types[EVENT_TIME] != dtypes.TIMESTAMP:
++        raise TypeCheckError(f"line {join.line}: projected 'timestamp' must be of type "
++                             f"timestamp, got {types[EVENT_TIME]}")
++    return types
++
++
++def _resolve(expr, sides, line):
++    """Bind each column reference to one join side, renaming it to its pair-row key."""
++    for node in walk(expr):
++        if not isinstance(node, ColumnRef):
++            continue
++        if node.qualifier is not None:
++            matches = [s for s in sides if node.qualifier in s.qualifiers]
++            if not matches:
++                matches = [s for s in sides if node.qualifier in s.relation.members]
++            if not matches:
++                raise DSLSyntaxError(f"line {line}: unknown alias '{node.qualifier}' in "
++                                     f"'{node.qualifier}.{node.name}'")
++            if len(matches) > 1:
++                raise DSLSyntaxError(f"line {line}: alias '{node.qualifier}' is ambiguous in "
++                                     "this join")
++            side = matches[0]
++            if node.name not in side.relation.types:
++                raise TypeCheckError(f"line {line}: unknown column "
++                                     f"'{node.qualifier}.{node.name}'")
++        else:
++            matches = [s for s in sides if node.name in s.relation.types]
++            if not matches:
++                raise TypeCheckError(f"line {line}: unknown column '{node.name}'")
++            if len(matches) > 1:
++                raise DSLSyntaxError(f"line {line}: column '{node.name}' exists on both sides "
++                                     "of the join; qualify it with an alias")
++            side = matches[0]
++        node.name = side.tag + _SEP + node.name
++        node.qualifier = None
++
++
++def _equi_keys(on):
++    """(left_expr, right_expr) pairs of top-level `==` conjuncts usable as hash keys."""
++    conjuncts = []
++    stack = [on]
++    while stack:
++        node = stack.pop()
++        if isinstance(node, Binary) and node.op == "&":
++            stack.extend((node.right, node.left))
++        else:
++            conjuncts.append(node)
++    keys = []
++    for node in conjuncts:
++        if not (isinstance(node, Binary) and node.op == "=="):
++            continue
++        a, b = _sides_of(node.left), _sides_of(node.right)
++        if a == {LEFT} and b == {RIGHT}:
++            keys.append((node.left, node.right))
++        elif a == {RIGHT} and b == {LEFT}:
++            keys.append((node.right, node.left))
++    return keys
++
++
++def _sides_of(expr):
++    return {n.name[0] for n in walk(expr) if isinstance(n, ColumnRef)}
++
++
++# --------------------------------------------------------------------------- execution
++
++
++def run(program, source_rows, sink):
++    """Apply with blocks and joins to the per-alias (Origin, row) lists; returns the
++    final relation's (Origin, row) pairs."""
++    blocks = {}
++    for block in program.with_blocks:
++        blocks.setdefault(block.alias, []).append(block)
++    relations = {}
++    for alias, rows in source_rows.items():
++        relations[alias] = _apply_blocks(rows, blocks.get(alias, ()), sink)
++
++    previous = None
++    for join in program.joins:
++        left = previous if join.left == CURRENT_RELATION else relations[join.left]
++        right = previous if join.right == CURRENT_RELATION else relations[join.right]
++        result = _join(join, left, right, sink)
++        if join.alias is not None:
++            result = _apply_blocks(result, blocks.get(join.alias, ()), sink)
++            relations[join.alias] = result
++        previous = result
++
++    final = []
++    for origin, row in previous:
++        if row.get(EVENT_TIME) is None:
++            sink.reject(BadRecord(origin, br.MISSING_REQUIRED_FIELD,
++                                  "required field 'timestamp' is null after join projection",
++                                  {"record": _show_row(row)}))
++            continue
++        final.append((origin, row))
++    return final
++
++
++def _apply_blocks(rows, blocks, sink):
++    for block in blocks:
++        calcs = [(c.name, c.expr, c.declared_type) for c in block.calcs]
++        rows = transform_rows(rows, calcs, block.filters, sink)
++    return rows
++
++
++_ROW_ERRORS = (RuntimeFailure, ArithmeticError, ValueError, TypeError, RecursionError)
++
++
++def _join(join, left_rows, right_rows, sink):
++    within = timedelta(seconds=join.within) if join.within is not None else None
++    keyed = bool(join.keys)
++    index = {}
++    if keyed:
++        for j, (origin, row) in enumerate(right_rows):
++            key = _key([k[1] for k in join.keys], PairRow(None, row), origin, sink)
++            if key is not None:
++                index.setdefault(key, []).append(j)
++    everything = range(len(right_rows))
++    matched_right = [False] * len(right_rows)
++    keep_left = join.join_type in ("left", "full")
++    keep_right = join.join_type in ("right", "full")
++
++    out = []
++    for origin, lrow in left_rows:
++        if keyed:
++            key = _key([k[0] for k in join.keys], PairRow(lrow, None), origin, sink)
++            candidates = () if key is None else index.get(key, ())
++        else:
++            candidates = everything
++        found = False
++        for j in candidates:
++            rrow = right_rows[j][1]
++            if within is not None and not _within(lrow, rrow, within):
++                continue
++            try:
++                ok = evaluate(join.on, PairRow(lrow, rrow)) is True
++            except _ROW_ERRORS as exc:
++                _reject(sink, origin, exc, lrow)
++                continue
++            if ok:
++                found = True
++                matched_right[j] = True
++                _emit(out, join, origin, lrow, rrow, sink)
++        if not found and keep_left:
++            _emit(out, join, origin, lrow, None, sink)
++    if keep_right:
++        for j, (origin, rrow) in enumerate(right_rows):
++            if not matched_right[j]:
++                _emit(out, join, origin, None, rrow, sink)
++    return out
++
++
++def _key(exprs, pair, origin, sink):
++    try:
++        values = tuple(evaluate(e, pair) for e in exprs)
++    except _ROW_ERRORS as exc:
++        _reject(sink, origin, exc, pair.left if pair.left is not None else pair.right)
++        return None
++    if any(v is None for v in values):
++        return None
++    return values
++
++
++def _within(lrow, rrow, delta):
++    lt = lrow.get(EVENT_TIME)
++    rt = rrow.get(EVENT_TIME)
++    if lt is None or rt is None:
++        return False
++    return abs(lt - rt) <= delta
++
++
++def _emit(out, join, origin, lrow, rrow, sink):
++    pair = PairRow(lrow, rrow)
++    try:
++        row = {p.name: coerce(evaluate(p.expr, pair), p.type) for p in join.projections}
++    except _ROW_ERRORS as exc:
++        _reject(sink, origin, exc, lrow if lrow is not None else rrow)
++        return
++    out.append((origin, row))
++
++
++def _reject(sink, origin, exc, row):
++    if isinstance(exc, TypeError):
++        error_type, error_class = br.TYPE_ERROR, TypeCheckError
++    else:
++        error_type, error_class = br.RUNTIME_ERROR, RuntimeFailure
++    message = exc.message if isinstance(exc, RuntimeFailure) else (str(exc) or type(exc).__name__)
++    if isinstance(exc, RecursionError):
++        message = "expression nesting too deep"
++    sink.reject(BadRecord(origin, error_type, message, {"record": _show_row(row or {})},
++                          error_class))
++
++
++def _show_row(row):
++    return {k: format_utc(v) if hasattr(v, "astimezone") else v for k, v in row.items()}
+
+### mtl_engine/lexer.py (modified)
+--- mtl_engine/lexer.py
++++ mtl_engine/lexer.py
+@@ -17,8 +17,10 @@
+ _SUFFIX_RE = re.compile(r"[A-Za-z0-9_]+")
+ _OPERATORS = ("<=", ">=", "==", "!=", "<", ">", "&", "|", "!",
+               "(", ")", "[", "]", ",", "*", "+", "-", "/", "%",
+-              "{", "}", ":", "=", "@")
+-DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400}
++              "{", "}", ":", "=", "@", ".")
++DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
++# Units a window() duration may use (seconds are only allowed for join bands).
++WINDOW_UNITS = ("m", "h", "d")
+ 
+ 
+ class Token:
+
+### mtl_engine/loader.py (modified)
+--- mtl_engine/loader.py
++++ mtl_engine/loader.py
+@@ -510,3 +510,196 @@
+         bad = _Bad(br.TIMESTAMP_PARSE_ERROR, f"date value {value} is out of range")
+         bad.raw = str(value)
+         return bad
++
++
++# --------------------------------------------------------------------------- mapped sources
++
++
++class FieldPlan:
++    """How one schema field of an ingest source is produced from a file's columns."""
++
++    def __init__(self, name, ftype, cast=None, default=None, has_default=False):
++        self.name = name
++        self.type = ftype
++        self.cast = cast
++        self.default = default
++        self.has_default = has_default
++
++
++class SourcePlan:
++    """Mapping rules of one ingest source: drop -> rename -> cast -> defaults -> required."""
++
++    def __init__(self, fields, rename, drop, required):
++        self.fields = fields
++        self.rename = rename
++        self.drop = frozenset(drop)
++        self.required = required
++
++    def column_map(self, columns):
++        """Mapped field name -> raw column name for a file's columns."""
++        mapped = {}
++        for col in columns:
++            if col not in self.drop and col not in self.rename:
++                mapped[col] = col
++        for col in columns:
++            if col not in self.drop and col in self.rename:
++                mapped[self.rename[col]] = col
++        return mapped
++
++
++def iter_mapped_rows(source, plan, ctx, sink):
++    """Yield (Origin, row) for the loadable rows of one file of an ingest source."""
++    columns = plan.column_map(source.columns)
++    absent = [f.name for f in plan.fields if f.name not in columns and not f.has_default]
++    if absent and ctx.strict:
++        raise TypeCheckError(f"'{source.path}' is missing column(s): {', '.join(absent)}")
++    if source.kind == "text":
++        rows = _mapped_text_rows(source, plan, columns, ctx, sink)
++    else:
++        rows = _mapped_parquet_rows(source, plan, columns, ctx, sink)
++    for origin, row, context in rows:
++        missing = [name for name in plan.required if row[name] is None]
++        if missing:
++            sink.reject(BadRecord(origin, br.MISSING_REQUIRED_FIELD,
++                                  f"required field(s) {', '.join(missing)} null after mapping",
++                                  {"fields": missing, "record": context}))
++            continue
++        yield origin, row
++
++
++def _finish(value, spec):
++    """Conform a (cast) value to the schema type, then apply the default."""
++    if value is not None and spec.cast is not None and spec.cast != spec.type:
++        if spec.cast == dtypes.INT and spec.type == dtypes.FLOAT:
++            value = float(value)
++        else:
++            raise _Bad(br.TYPE_ERROR, f"value cast to {spec.cast} does not conform to schema "
++                                      f"type {spec.type}")
++    if value is None and spec.has_default:
++        return spec.default
++    return value
++
++
++def _mapped_text_rows(source, plan, columns, ctx, sink):
++    width = len(source.header)
++    loaded = [(spec, source.index.get(columns[spec.name]) if spec.name in columns else None)
++              for spec in plan.fields]
++    for line, record, error in source.records:
++        origin = Origin(source.path, line=line)
++        if record is None:
++            sink.reject(BadRecord(origin, br.PARSE_TYPE_MISMATCH, f"malformed record: {error}",
++                                  {"delimiter": _delimiter_name(source)}, IOFailure))
++            continue
++        if len(record) != width:
++            error_type = br.MISSING_REQUIRED_FIELD if len(record) < width \
++                else br.PARSE_TYPE_MISMATCH
++            sink.reject(BadRecord(origin, error_type,
++                                  f"record has {len(record)} fields, expected {width}",
++                                  {"fields": record, "header": source.header}, IOFailure))
++            continue
++        context = dict(zip(source.header, record))
++        row = {}
++        for spec, idx in loaded:
++            raw = None if idx is None else record[idx]
++            try:
++                value = None if raw is None else _convert_text(raw, spec.cast or spec.type, ctx)
++                row[spec.name] = _finish(value, spec)
++            except _Bad as bad:
++                sink.reject(BadRecord(origin, bad.error_type,
++                                      f"field '{spec.name}': {bad.message}",
++                                      {"column": spec.name, "value": raw,
++                                       "expected_type": spec.cast or spec.type,
++                                       "record": context}))
++                break
++        else:
++            yield origin, row, context
++
++
++def _mapped_parquet_rows(source, plan, columns, ctx, sink):
++    table = source.table
++    values = {}
++    for spec in plan.fields:
++        if spec.name in columns:
++            column = table.column(columns[spec.name])
++            if spec.cast is not None:
++                values[spec.name] = _parquet_cast_column(column, spec.cast, ctx)
++            else:
++                values[spec.name] = _parquet_column(column, spec.type, ctx, False)
++    for idx in range(table.num_rows):
++        origin = Origin(source.path, row_index=idx)
++        row = {}
++        for spec in plan.fields:
++            column_values = values.get(spec.name)
++            value = None if column_values is None else column_values[idx]
++            try:
++                if isinstance(value, _Bad):
++                    raise value
++                row[spec.name] = _finish(value, spec)
++            except _Bad as bad:
++                raw = columns.get(spec.name)
++                sink.reject(BadRecord(origin, bad.error_type,
++                                      f"field '{spec.name}': {bad.message}",
++                                      {"column": spec.name, "value": getattr(bad, "raw", None),
++                                       "expected_type": spec.cast or spec.type,
++                                       "parquet_type": str(table.schema.field(raw).type)
++                                       if raw is not None else None}))
++                break
++        else:
++            yield origin, row, {k: _context_value(v) for k, v in row.items()}
++
++
++def _context_value(value):
++    if isinstance(value, datetime):
++        from .timeutil import format_utc
++        return format_utc(value)
++    return value
++
++
++def _parquet_cast_column(column, target, ctx):
++    """Arrow column -> Python values converted to `target` with cast() semantics."""
++    import pyarrow.types as pat
++
++    from . import casts
++    from .errors import RuntimeFailure
++
++    arrow_type = column.type
++    if pat.is_dictionary(arrow_type):
++        column = column.cast(arrow_type.value_type)
++        arrow_type = arrow_type.value_type
++    kind = _arrow_kind(arrow_type)
++    if kind == "null":
++        return [None] * len(column)
++    natural = _ARROW_TO_DSL.get(kind)
++    if natural is None:
++        return [None if v is None else _mismatch(v, arrow_type, target)
++                for v in column.to_pylist()]
++    if natural == target or (natural == dtypes.INT and target == dtypes.FLOAT):
++        return _parquet_column(column, target, ctx, False)
++    result = []
++    for value in _pylist(column, kind, ctx):
++        if value is None or isinstance(value, _Bad):
++            result.append(value)
++            continue
++        if kind == "decimal":
++            value = float(value)
++        if isinstance(value, float) and value != value:
++            result.append(None)
++            continue
++        if natural == dtypes.STRING and ctx.is_null_text(value):
++            result.append(None)
++            continue
++        try:
++            if natural == dtypes.STRING and target == dtypes.TIMESTAMP:
++                result.append(ctx.ts_parser.parse(value))
++            elif not casts.allowed(natural, target):
++                raise ValueError(f"cannot cast {natural} to {target}")
++            else:
++                result.append(casts.convert(value, natural, target, 0))
++        except (ValueError, OverflowError, RuntimeFailure) as exc:
++            error_type = br.TIMESTAMP_PARSE_ERROR if target == dtypes.TIMESTAMP \
++                else br.PARSE_TYPE_MISMATCH
++            bad = _Bad(error_type, f"cannot cast {value!r} from {natural} to {target}: "
++                                   f"{getattr(exc, 'message', exc)}")
++            bad.raw = value if isinstance(value, (str, int, float, bool)) else str(value)
++            result.append(bad)
++    return result
+
+### mtl_engine/parser.py (modified)
+--- mtl_engine/parser.py
++++ mtl_engine/parser.py
+@@ -1,11 +1,12 @@
+ """Recursive-descent parser turning DSL source into a Program."""
+ from . import dtypes
+-from .ast_nodes import (POST_AGG, PRE, AggItem, Aggregate, Apply, Binary, Calc, Call, Cast,
+-                        ColumnRef, FieldDecl, Filter, GroupBy, InExpr, Literal, ParamDecl,
+-                        Program, SchemaDecl, Unary, Window)
+-from .errors import DSLSyntaxError
++from .ast_nodes import (JOIN_TYPES, POST_AGG, PRE, AggItem, Aggregate, Apply, Binary, Calc,
++                        Call, Cast, ColumnRef, FieldDecl, Filter, GroupBy, InExpr, Join, Literal,
++                        ParamDecl, Program, Projection, SchemaDecl, SourceBinding, SourcesDecl,
++                        Unary, Window, WithBlock)
++from .errors import DSLSyntaxError, TypeCheckError
+ from .functions import ARITY, STRING_PREDICATES, WINDOW_FUNCTIONS
+-from .lexer import DURATION, DURATION_UNITS, EOF, IDENT, NUMBER, STRING, Token
++from .lexer import DURATION, DURATION_UNITS, EOF, IDENT, NUMBER, OP, STRING, WINDOW_UNITS, Token
+ from .lexer import split_statements, tokenize
+ 
+ AGG_FUNCTIONS = ("average", "median", "sum", "count", "std", "var", "min", "max")
+@@ -13,6 +14,10 @@
+ RESERVED = ("true", "false", "in")
+ TYPE_NAMES = (dtypes.STRING, dtypes.INT, dtypes.FLOAT, dtypes.BOOL, dtypes.TIMESTAMP)
+ STAGES = (PRE, POST_AGG)
++# Clause keywords that continue a `join` statement over several lines.
++JOIN_CLAUSES = ("on", "within", "type", "project")
++# The working relation produced by the previous join.
++CURRENT_RELATION = "_"
+ 
+ 
+ def parse_program(source):
+@@ -22,8 +27,20 @@
+ 
+ def _build_program(statements, **extra):
+     row_ops, calcs, group_by, window, aggregate = [], [], None, None, None
+-    for stmt in statements:
+-        if isinstance(stmt, (Filter, Apply)):
++    sources, with_blocks, joins = None, [], []
++    for idx, stmt in enumerate(statements):
++        if isinstance(stmt, SourcesDecl):
++            if sources is not None:
++                raise DSLSyntaxError(f"line {stmt.line}: sources may appear at most once")
++            if idx > 0:
++                raise DSLSyntaxError(f"line {stmt.line}: sources {{ ... }} must appear before "
++                                     "any other statement")
++            sources = stmt
++        elif isinstance(stmt, WithBlock):
++            with_blocks.append(stmt)
++        elif isinstance(stmt, Join):
++            joins.append(stmt)
++        elif isinstance(stmt, (Filter, Apply)):
+             row_ops.append(stmt)
+         elif isinstance(stmt, Calc):
+             calcs.append(stmt)
+@@ -43,7 +60,51 @@
+         raise DSLSyntaxError("missing required aggregate statement")
+ 
+     _check_output_names(group_by, aggregate, window, calcs)
+-    return Program(row_ops, group_by, window, aggregate, calcs=calcs, **extra)
++    _check_relations(sources, with_blocks, joins)
++    return Program(row_ops, group_by, window, aggregate, calcs=calcs, sources=sources,
++                   with_blocks=with_blocks, joins=joins, **extra)
++
++
++def _check_relations(sources, with_blocks, joins):
++    """Structural checks of the multi-source part: aliases, with-block scopes, join sides."""
++    if sources is None:
++        if joins:
++            raise DSLSyntaxError(f"line {joins[0].line}: join requires a sources {{ ... }} block")
++        if with_blocks:
++            raise DSLSyntaxError(f"line {with_blocks[0].line}: with blocks require a "
++                                 "sources { ... } block")
++        return
++    if not joins:
++        raise DSLSyntaxError(f"line {sources.line}: multi-source pipelines must combine their "
++                             "sources with join")
++    aliases = set()
++    for binding in sources.bindings:
++        if binding.alias in aliases or binding.alias == CURRENT_RELATION:
++            raise DSLSyntaxError(f"line {binding.line}: duplicate or invalid source alias "
++                                 f"'{binding.alias}'")
++        aliases.add(binding.alias)
++    relations = set(aliases)
++    for idx, join in enumerate(joins):
++        for side in (join.left, join.right):
++            if side == CURRENT_RELATION:
++                if idx == 0:
++                    raise DSLSyntaxError(f"line {join.line}: '_' refers to the previous join "
++                                         "result, but this is the first join")
++            elif side not in relations:
++                raise DSLSyntaxError(f"line {join.line}: join references unknown relation "
++                                     f"'{side}'")
++        if join.left == join.right:
++            raise DSLSyntaxError(f"line {join.line}: cannot join '{join.left}' with itself; "
++                                 "bind the source under two aliases")
++        if join.alias is not None:
++            if join.alias in relations or join.alias == CURRENT_RELATION:
++                raise DSLSyntaxError(f"line {join.line}: join alias '{join.alias}' is already "
++                                     "in use")
++            relations.add(join.alias)
++    for block in with_blocks:
++        if block.alias not in relations:
++            raise DSLSyntaxError(f"line {block.line}: with block references unknown alias "
++                                 f"'{block.alias}'")
+ 
+ 
+ def _check_output_names(group_by, aggregate, window, calcs):
+@@ -180,6 +241,12 @@
+                 if params is not None:
+                     raise DSLSyntaxError(f"line {first.line}: params may appear at most once")
+                 params = self._parse_params(body_stmt)
++            elif first.is_ident("sources"):
++                body.append(self._parse_sources(body_stmt))
++            elif first.is_ident("with"):
++                body.append(self._parse_with(body_stmt))
++            elif first.is_ident("join"):
++                body.append(self._parse_join(body_stmt))
+             elif first.is_ident("schema", "pipeline"):
+                 raise DSLSyntaxError(f"line {first.line}: '{first.value}' blocks cannot be nested")
+             elif first.is_op("{", "}") or body_stmt[-1].is_op("{"):
+@@ -187,6 +254,82 @@
+             else:
+                 body.append(_StatementParser(body_stmt).parse_statement())
+         return name, schema_name, params or [], body
++
++    def _parse_sources(self, stmt):
++        head = stmt[0]
++        p = _StatementParser(self._header(stmt))
++        p.advance()
++        p.expect_end()
++        bindings = []
++        for entry_stmt in self._block(head):
++            p = _StatementParser(entry_stmt)
++            while p.tok.kind != EOF:
++                tok = p.tok
++                name = p.expect_ident("a source name")
++                alias = name
++                if p.tok.is_ident("as"):
++                    p.advance()
++                    alias = p.expect_ident("a source alias")
++                bindings.append(SourceBinding(name, alias, tok.line))
++                if p.tok.is_op(","):
++                    p.advance()
++                else:
++                    p.expect_end()
++        if not bindings:
++            raise DSLSyntaxError(f"line {head.line}: sources block must bind at least one source")
++        return SourcesDecl(bindings, head.line)
++
++    def _parse_with(self, stmt):
++        head = stmt[0]
++        p = _StatementParser(self._header(stmt))
++        p.advance()
++        alias = p.expect_ident("a source alias")
++        p.expect_end()
++        calcs, filters = [], []
++        for inner in self._block(head):
++            if inner[0].is_op("{", "}") or inner[-1].is_op("{"):
++                _unexpected(inner[-1] if not inner[0].is_op("{", "}") else inner[0])
++            for op in _StatementParser(inner).parse_statements():
++                if isinstance(op, Calc):
++                    if op.stage != PRE:
++                        raise TypeCheckError(f"line {op.line}: calc '{op.name}' in with block "
++                                             f"'{alias}' must be @stage(pre)")
++                    calcs.append(op)
++                elif isinstance(op, Filter):
++                    filters.append(op)
++                else:
++                    raise DSLSyntaxError(f"line {op.line}: only pre-stage calcs and filters are "
++                                         f"allowed inside with block '{alias}'")
++        names = set()
++        for calc in calcs:
++            if calc.name in names:
++                raise DSLSyntaxError(f"line {calc.line}: duplicate calc '{calc.name}' in with "
++                                     f"block '{alias}'")
++            names.add(calc.name)
++        return WithBlock(alias, calcs, filters, head.line)
++
++    def _parse_join(self, stmt):
++        """Gather a join's clause lines (through its project block and optional alias)."""
++        tokens = list(stmt)
++        depth = _brace_delta(stmt)
++        opened = depth > 0
++        while not (opened and depth == 0) and self.pos < len(self.statements):
++            nxt = self.statements[self.pos]
++            if depth == 0 and not (nxt[0].is_op("{") or nxt[0].is_ident(*JOIN_CLAUSES)):
++                break
++            if depth > 0 and not tokens[-1].is_op("{", ",") and not nxt[0].is_op("}", ","):
++                # Entries on separate lines without a trailing comma.
++                tokens.append(Token(OP, ",", tokens[-1].line, tokens[-1].col))
++            tokens.extend(nxt)
++            self.pos += 1
++            depth += _brace_delta(nxt)
++            opened = opened or depth > 0
++        if opened and depth == 0 and self.pos < len(self.statements):
++            nxt = self.statements[self.pos]
++            if nxt[0].is_ident("as"):
++                tokens.extend(nxt)
++                self.pos += 1
++        return _StatementParser(tokens).parse_join()
+ 
+     def _parse_params(self, stmt):
+         head = stmt[0]
+@@ -204,6 +347,10 @@
+         return params
+ 
+ 
++def _brace_delta(tokens):
++    return sum(1 if t.is_op("{") else -1 if t.is_op("}") else 0 for t in tokens)
++
++
+ def _unexpected(tok):
+     raise DSLSyntaxError(f"line {tok.line}:{tok.col}: unexpected {tok.describe()}")
+ 
+@@ -252,7 +399,14 @@
+             self.error(f"unexpected {self.tok.describe()}")
+ 
+     # -- statements ----------------------------------------------------
+-    def parse_statement(self):
++    def parse_statements(self):
++        """One or more statements written on the same logical line."""
++        result = [self.parse_statement(allow_more=True)]
++        while self.tok.kind != EOF:
++            result.append(self.parse_statement(allow_more=True))
++        return result
++
++    def parse_statement(self, allow_more=False):
+         head = self.tok
+         if head.kind != IDENT:
+             self.error(f"expected a statement but found {head.describe()}")
+@@ -268,7 +422,8 @@
+             self.error(f"unknown statement '{head.value}'")
+         self.advance()
+         stmt = handler(head.line)
+-        self.expect_end()
++        if not (allow_more and self.tok.kind == IDENT):
++            self.expect_end()
+         return stmt
+ 
+     def parse_type(self):
+@@ -369,7 +524,7 @@
+                 self.error("expected param(\"<name>\") or a duration literal", tok)
+             self.expect_op(")")
+             return Window(None, None, None, line, param=call.args[0].value)
+-        if tok.kind != DURATION:
++        if tok.kind != DURATION or tok.value[1] not in WINDOW_UNITS:
+             self.error(f"expected a duration literal like 10m, 1h or 7d but found {tok.describe()}")
+         self.advance()
+         amount, unit = tok.value
+@@ -377,6 +532,83 @@
+             self.error("window duration must be positive", tok)
+         self.expect_op(")")
+         return Window(amount, unit, amount * DURATION_UNITS[unit], line)
++
++    def parse_join(self):
++        """`join L with R on (expr) [within D] [type T] project { expr [as name], ... } [as A]`."""
++        head = self.advance()
++        left = self.parse_join_side()
++        if not self.tok.is_ident("with"):
++            self.error(f"expected 'with' but found {self.tok.describe()}")
++        self.advance()
++        right = self.parse_join_side()
++        if not self.tok.is_ident("on"):
++            self.error(f"expected 'on (<condition>)' but found {self.tok.describe()}")
++        self.advance()
++        on = self.parse_expr()
++        within = join_type = None
++        while self.tok.is_ident("within", "type"):
++            clause = self.advance()
++            if clause.value == "within":
++                if within is not None:
++                    self.error("duplicate 'within' clause", clause)
++                tok = self.tok
++                if tok.kind != DURATION:
++                    self.error(f"expected a duration literal like 10m after 'within' but found "
++                               f"{tok.describe()}")
++                self.advance()
++                within = tok.value[0] * DURATION_UNITS[tok.value[1]]
++            else:
++                if join_type is not None:
++                    self.error("duplicate 'type' clause", clause)
++                tok = self.tok
++                if tok.kind != IDENT or tok.value not in JOIN_TYPES:
++                    self.error(f"expected a join type ({', '.join(JOIN_TYPES)}) but found "
++                               f"{tok.describe()}")
++                self.advance()
++                join_type = tok.value
++        if not self.tok.is_ident("project"):
++            self.error(f"join must end with a project {{ ... }} block, found {self.tok.describe()}")
++        self.advance()
++        self.expect_op("{")
++        projections = []
++        names = set()
++        while not self.tok.is_op("}"):
++            if self.tok.kind == EOF:
++                self.error("unclosed project block")
++            tok = self.tok
++            expr = self.parse_expr()
++            if self.tok.is_ident("as"):
++                self.advance()
++                name = self.expect_column("a projected column name")
++            elif isinstance(expr, ColumnRef):
++                name = expr.name
++            else:
++                self.error("projected expression needs 'as <name>'", tok)
++            if name in names:
++                self.error(f"duplicate column '{name}' in project", tok)
++            names.add(name)
++            projections.append(Projection(expr, name, tok.line))
++            if self.tok.is_op(","):
++                self.advance()
++            elif not self.tok.is_op("}"):
++                self.error(f"expected ',' or '}}' but found {self.tok.describe()}")
++        self.advance()
++        if not projections:
++            self.error("project block must declare at least one column", head)
++        alias = None
++        if self.tok.is_ident("as"):
++            self.advance()
++            alias = self.expect_ident("a join alias")
++        self.expect_end()
++        return Join(left, right, on, within, join_type or "inner", projections, alias, head.line)
++
++    def parse_join_side(self):
++        if self.tok.is_op("("):
++            self.advance()
++            name = self.parse_join_side()
++            self.expect_op(")")
++            return name
++        return self.expect_ident("a source alias, join alias or '_'")
+ 
+     def parse_aggregate(self, line):
+         items = [self.parse_agg_item()]
+@@ -495,6 +727,10 @@
+             self.advance()
+             if self.tok.is_op("("):
+                 return self.parse_call(tok)
++            if self.tok.is_op("."):
++                self.advance()
++                column = self.expect_column("a column name after '.'")
++                return ColumnRef(column, tok.line, qualifier=tok.value)
+             return ColumnRef(tok.value, tok.line)
+         self.error(f"expected an expression but found {tok.describe()}")
+ 
+@@ -531,6 +767,11 @@
+     def parse_cast(self, name_tok):
+         self.expect_op("(")
+         operand = self.parse_expr()
++        if self.tok.is_op(","):
++            self.advance()
++            target = self.parse_type()
++            self.expect_op(")")
++            return Cast(operand, target, name_tok.line)
+         if not self.tok.is_ident("as"):
+             self.error(f"expected 'as <type>' in cast() but found {self.tok.describe()}")
+         self.advance()
+
+### mtl_engine/pipeline.py (modified)
+--- mtl_engine/pipeline.py
++++ mtl_engine/pipeline.py
+@@ -44,10 +44,16 @@
+     returns the rows that survive the filters."""
+     calcs = [(f.name, f.expr, f.type) for f in schema_calcs]
+     calcs += [(c.name, c.expr, c.declared_type) for c in program.pre_calcs]
++    return [row for _, row in transform_rows(records, calcs, program.row_ops, sink)]
++
++
++def transform_rows(records, calcs, row_ops, sink=None):
++    """Evaluate (name, expr, declared_type) calcs, then filter/apply statements, over
++    (Origin, row) records; returns the surviving (Origin, row) pairs."""
+     result = []
+     for origin, row in records:
+         try:
+-            row = _evaluate_row(dict(row), calcs, program.row_ops)
++            out = _evaluate_row(dict(row), calcs, row_ops)
+         except (RuntimeFailure, ArithmeticError, ValueError, RecursionError) as exc:
+             if sink is None:
+                 raise
+@@ -58,8 +64,8 @@
+                 raise
+             _reject(sink, origin, badrecords.TYPE_ERROR, exc, TypeCheckError, row)
+             continue
+-        if row is not None:
+-            result.append(row)
++        if out is not None:
++            result.append((origin, out))
+     return result
+ 
+ 
+
+### mtl_engine/typecheck.py (modified)
+--- mtl_engine/typecheck.py
++++ mtl_engine/typecheck.py
+@@ -9,7 +9,7 @@
+ from .ast_nodes import (Apply, Binary, Call, Cast, ColumnRef, Filter, InExpr, Literal,
+                         Unary)
+ from .errors import DSLSyntaxError, TypeCheckError
+-from .lexer import DURATION_UNITS
++from .lexer import DURATION_UNITS, WINDOW_UNITS
+ 
+ ARITHMETIC_OPS = ("+", "-", "*", "/", "%")
+ COMPARISON_OPS = ("<", "<=", ">", ">=", "==", "!=")
+@@ -119,7 +119,7 @@
+         raise DSLSyntaxError(f"line {window.line}: unknown parameter '{window.param}'")
+     value = param.value
+     if (param.type != dtypes.STRING or len(value) < 2 or not value[:-1].isdigit()
+-            or value[-1] not in DURATION_UNITS or int(value[:-1]) <= 0):
++            or value[-1] not in WINDOW_UNITS or int(value[:-1]) <= 0):
+         raise TypeCheckError(f"line {window.line}: window parameter '{window.param}' must be a "
+                              f"duration string like '1h', got {param.type} {value!r}")
+     window.amount = int(value[:-1])
+@@ -148,6 +148,9 @@
+ def check_names(expr, visible, params, line, aliases=(), later=(), allow_window=False):
+     """Report structural name errors; unknown plain columns are left to `infer`."""
+     for node in walk(expr):
++        if isinstance(node, ColumnRef) and node.qualifier is not None:
++            raise DSLSyntaxError(f"line {line}: qualified column '{node.qualifier}.{node.name}' "
++                                 "is only allowed inside with blocks and joins")
+         if isinstance(node, ColumnRef) and node.name not in visible:
+             if node.name in later:
+                 raise DSLSyntaxError(f"line {line}: '{node.name}' is referenced before "
+
+### requirements.txt (modified)
+--- requirements.txt
++++ requirements.txt
+@@ -1,2 +1,3 @@
+ tzdata>=2024.1
+ pyarrow>=14
++PyYAML>=6.0
+

@@ -1,0 +1,1758 @@
+### DESIGN.md (deleted)
+--- DESIGN.md
++++ DESIGN.md
+@@ -1,49 +0,0 @@
+-# MTL — design plan
+-
+-`mtl.py` is a thin entry point. The logic lives in the `mtl_engine` package,
+-where each module has one job.
+-
+-| Module | Responsibility |
+-|---|---|
+-| `errors.py` | Error hierarchy: `bad_dsl`=1, `type_error`=2, `bad_io`=3, `runtime_error`=4 |
+-| `dtypes.py` | Value types (`int`, `float`, `string`, `bool`, `timestamp`) and helpers |
+-| `timeutil.py` | Timezone resolution, timestamp parsing (ISO 8601 / strptime), UTC formatting, epoch math |
+-| `csv_loader.py` | Reads the CSV, validates the header, types each column, converts the values |
+-| `lexer.py` | Tokenises the DSL: comments, strings, numbers, durations, operators, and joining logical lines |
+-| `ast_nodes.py` | AST node classes for expressions and statements |
+-| `parser.py` | Recursive-descent parser that produces a `Program` and enforces statement cardinality |
+-| `functions.py` | Scalar transforms (`len`, `day`, `month`, `year`, `round`): signatures and implementations |
+-| `typecheck.py` | Static type checking of the whole pipeline against the CSV schema |
+-| `evaluator.py` | Evaluates expressions for each row (SQL-like null propagation, runtime errors) |
+-| `aggregates.py` | Aggregate functions (`sum`, `average`, `median`, `count`, `std`, `var`, `min`, `max`) |
+-| `pipeline.py` | Runs the program: row ops, then bucketing by window and group, then aggregation |
+-| `output.py` | Applies the normalization rules (row order, key order) and writes deterministic JSON |
+-| `cli.py` | Parses arguments and runs the stages; maps errors to `ERROR:<TYPE>:<msg>` and exit codes |
+-
+-## Flow
+-1. Parse the CLI arguments (an argument error is `bad_io`) and resolve `--tz`.
+-2. Read the DSL from a file or STDIN (`bad_io`), then lex and parse it (`bad_dsl`).
+-3. Load the CSV (`bad_io` for structure problems, `type_error` for values that don't match the column type).
+-4. Type-check the program statically. This catches errors even when the CSV has no rows.
+-5. Execute and serialize. Division by zero or NaN/Inf raises `runtime_error`.
+-
+-## Key decisions
+-- **Column types.** `timestamp` is a timestamp. `price` and `quantity` are floats. `location`, `item`, `unit`
+-  and `category` are strings. For an extra column, the type is inferred from its non-empty values, in this
+-  order: int, then float, then bool (`true`/`false`), and string otherwise. An empty numeric cell becomes null.
+-- **Expressions.** Literals, column refs, `!`, `&`, `|` (`!` > `&` > `|`), comparisons (not chainable),
+-  `'lit' in col`, arithmetic `+ - * / %` (numeric only) and transform calls. Comparisons follow
+-  the type rules: numeric with numeric, string with string, timestamp with timestamp, and bool with
+-  bool for `==`/`!=` only.
+-- **`apply`** accepts any scalar expression, so a transform call or arithmetic both work. It defines or
+-  overrides a column for the statements after it.
+-- **Statement order.** `filter` and `apply` run in file order. `group_by`, `window` and `aggregate`
+-  are declarations that are resolved against the schema after all `apply` statements.
+-- **Lines.** A statement continues onto the next line when brackets are open, the line ends with `,`,
+-  the next line starts with `,`, or the line is just the word `aggregate`.
+-- **Nulls.** Null values propagate through expressions. `filter` keeps a row only when the predicate is `true`.
+-  Aggregates ignore nulls. `count(*)` counts rows.
+-- **Windows.** Tumbling windows aligned to the epoch, computed in integer microseconds UTC. Only
+-  non-empty windows are emitted. `day`, `month` and `year` use the UTC timestamp.
+-- **`round`.** Rounds half away from zero, using `Decimal` on the shortest repr of the float.
+-- **Output.** `json.dumps(indent=2)`. Key order and row order follow the spec. Only finite numbers are emitted.
+
+### mtl_engine/ast_nodes.py (modified)
+--- mtl_engine/ast_nodes.py
++++ mtl_engine/ast_nodes.py
+@@ -51,6 +51,15 @@
+         self.line = line
+ 
+ 
++class Cast(Expr):
++    """`cast(expr as type)`: explicit conversion."""
++
++    def __init__(self, operand, target, line):
++        self.operand = operand
++        self.target = target
++        self.line = line
++
++
+ class Filter:
+     def __init__(self, predicate, line):
+         self.predicate = predicate
+@@ -71,11 +80,14 @@
+ 
+ 
+ class Window:
+-    def __init__(self, amount, unit, seconds, line):
++    """A tumbling window; `param` names a parameter supplying the duration instead."""
++
++    def __init__(self, amount, unit, seconds, line, param=None):
+         self.amount = amount
+         self.unit = unit
+         self.seconds = seconds
+         self.line = line
++        self.param = param
+ 
+ 
+ class AggItem:
+@@ -92,14 +104,76 @@
+         self.line = line
+ 
+ 
++PRE = "pre"
++POST_AGG = "post_agg"
++
++
++class Calc:
++    """`calc name = expr : type @stage(stage)`."""
++
++    def __init__(self, name, expr, declared_type, stage, line):
++        self.name = name
++        self.expr = expr
++        self.declared_type = declared_type
++        self.stage = stage
++        self.line = line
++
++
++class FieldDecl:
++    """A schema field: physical when `expr` is None, otherwise calculated (pre-stage)."""
++
++    def __init__(self, name, field_type, expr, line):
++        self.name = name
++        self.type = field_type
++        self.expr = expr
++        self.line = line
++
++
++class SchemaDecl:
++    def __init__(self, name, base, fields, line):
++        self.name = name
++        self.base = base
++        self.fields = fields
++        self.line = line
++
++
++class ParamDecl:
++    """A pipeline parameter; `type` and `default` (a Literal) are both optional."""
++
++    def __init__(self, name, param_type, default, line):
++        self.name = name
++        self.type = param_type
++        self.default = default
++        self.line = line
++
++
+ class Program:
+-    """A parsed pipeline: ordered row operations plus the grouping/aggregation spec."""
++    """A parsed pipeline: ordered row operations plus the grouping/aggregation spec.
+ 
+-    def __init__(self, row_ops, group_by, window, aggregate):
++    A program read from a bare statement file has no schema (its typing
++    environment is the CSV header); one read from a `pipeline` block names
++    the schema it uses and may declare parameters.
++    """
++
++    def __init__(self, row_ops, group_by, window, aggregate, calcs=(),
++                 params=(), schema_name=None, schemas=None, name=None):
+         self.row_ops = row_ops
+         self.group_by = group_by
+         self.window = window
+         self.aggregate = aggregate
++        self.calcs = list(calcs)
++        self.params = list(params)
++        self.schema_name = schema_name
++        self.schemas = schemas or {}
++        self.name = name
++
++    @property
++    def pre_calcs(self):
++        return [c for c in self.calcs if c.stage == PRE]
++
++    @property
++    def post_calcs(self):
++        return [c for c in self.calcs if c.stage == POST_AGG]
+ 
+     @property
+     def group_columns(self):
+
+### mtl_engine/casts.py (created)
+--- mtl_engine/casts.py
++++ mtl_engine/casts.py
+@@ -0,0 +1,74 @@
++"""Explicit `cast(expr as type)` conversions: which are legal and how values convert."""
++import math
++from datetime import timedelta, timezone
++
++from . import dtypes
++from .errors import RuntimeFailure
++from .timeutil import EPOCH, ONE_MICROSECOND, TimestampParser, format_utc
++
++_ILLEGAL = {
++    (dtypes.BOOL, dtypes.TIMESTAMP),
++    (dtypes.TIMESTAMP, dtypes.BOOL),
++}
++
++# Parser used for string -> timestamp casts; the CLI installs one honouring --tz.
++_timestamp_parser = TimestampParser(timezone.utc)
++
++
++def set_timestamp_parser(parser):
++    global _timestamp_parser
++    _timestamp_parser = parser
++
++
++def allowed(source, target):
++    return (source, target) not in _ILLEGAL
++
++
++def convert(value, source, target, line):
++    """Convert a non-null value of type `source` to `target`; failures are runtime errors."""
++    if value is None:
++        return None
++    if source == target:
++        return value
++    try:
++        result = _convert(value, source, target)
++    except (ValueError, OverflowError) as exc:
++        raise RuntimeFailure(f"line {line}: cannot cast {_show(value)} "
++                             f"from {source} to {target}: {exc}") from exc
++    if isinstance(result, float) and not math.isfinite(result):
++        raise RuntimeFailure(f"line {line}: cast produced a non-finite number")
++    return result
++
++
++def _convert(value, source, target):
++    if target == dtypes.STRING:
++        if source == dtypes.BOOL:
++            return "true" if value else "false"
++        if source == dtypes.TIMESTAMP:
++            return format_utc(value)
++        if source == dtypes.FLOAT:
++            return repr(value)
++        return str(value)
++    if source == dtypes.STRING:
++        if target == dtypes.TIMESTAMP:
++            return _timestamp_parser.parse(value)
++        return dtypes.parse_text(value.strip(), target)
++    if target == dtypes.INT:
++        if source == dtypes.TIMESTAMP:
++            return (value - EPOCH) // timedelta(seconds=1)
++        if source == dtypes.FLOAT:
++            return math.trunc(value)
++        return int(value)
++    if target == dtypes.FLOAT:
++        if source == dtypes.TIMESTAMP:
++            return ((value - EPOCH) // ONE_MICROSECOND) / 1_000_000
++        return float(value)
++    if target == dtypes.BOOL:
++        return value != 0
++    if target == dtypes.TIMESTAMP:
++        return EPOCH + timedelta(seconds=value)
++    raise AssertionError(f"unhandled cast {source} -> {target}")
++
++
++def _show(value):
++    return repr(value) if isinstance(value, str) else str(value)
+
+### mtl_engine/cli.py (modified)
+--- mtl_engine/cli.py
++++ mtl_engine/cli.py
+@@ -2,11 +2,12 @@
+ import argparse
+ import sys
+ 
+-from . import csv_loader, output, pipeline
++from . import casts, csv_loader, output, params, pipeline
+ from .errors import IOFailure, MTLError, RuntimeFailure
+ from .parser import parse_program
++from .schema import resolve_all
+ from .timeutil import TimestampParser, resolve_timezone
+-from .typecheck import check_program
++from .typecheck import check_program, check_schema_calcs
+ 
+ 
+ class _ArgumentParser(argparse.ArgumentParser):
+@@ -25,6 +26,10 @@
+     parser.add_argument("--tz", default="UTC", help="IANA timezone for naive timestamps")
+     parser.add_argument("--timestamp-format", dest="timestamp_format", default=None,
+                         help="strptime format for timestamps (default: ISO 8601)")
++    parser.add_argument("--strict", action="store_true",
++                        help="reject --param values the pipeline does not declare")
++    parser.add_argument("--param", action="append", nargs="+", default=[], metavar="KEY=VALUE",
++                        help="pipeline parameter value (repeatable; last one wins)")
+     return parser
+ 
+ 
+@@ -38,10 +43,26 @@
+     except ValueError as exc:
+         raise IOFailure(str(exc)) from exc
+ 
++    ts_parser = TimestampParser(tz, args.timestamp_format)
++    casts.set_timestamp_parser(ts_parser)
++    cli_params = params.parse_cli_params(item for group in args.param for item in group)
++
+     program = parse_program(csv_loader.read_text(args.dsl))
+-    table = csv_loader.load_csv(args.csv, TimestampParser(tz, args.timestamp_format))
+-    check_program(program, table.schema)
+-    buckets = pipeline.run(program, table.rows)
++    if program.schema_name is None:
++        # Bare statements: the CSV header is the typing environment.
++        table = csv_loader.load_csv(args.csv, ts_parser)
++        row_schema = check_program(program, table.schema)
++        buckets = pipeline.run(program, table.rows, row_schema=row_schema)
++    else:
++        params.check_provided(program.params, cli_params, args.strict)
++        schemas = resolve_all(program.schemas)
++        param_values = params.resolve(program.params, cli_params, ts_parser)
++        for resolved in schemas.values():
++            check_schema_calcs(resolved, param_values)
++        used = schemas[program.schema_name]
++        row_schema = check_program(program, used.types, param_values)
++        table = csv_loader.load_csv(args.csv, ts_parser, used.physical)
++        buckets = pipeline.run(program, table.rows, used.calc_order, row_schema)
+     text = output.serialize(output.build_document(program, buckets))
+     _write(text, args.out)
+ 
+
+### mtl_engine/csv_loader.py (modified)
+--- mtl_engine/csv_loader.py
++++ mtl_engine/csv_loader.py
+@@ -1,7 +1,6 @@
+ """Loads the events CSV into typed rows plus a column-type schema."""
+ import csv
+ import io
+-import re
+ import sys
+ 
+ from . import dtypes
+@@ -16,10 +15,6 @@
+     "unit": dtypes.STRING,
+     "category": dtypes.STRING,
+ }
+-
+-_INT_RE = re.compile(r"^[+-]?\d+$")
+-_FLOAT_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
+-_BOOLS = {"true": True, "false": False}
+ 
+ 
+ class Table:
+@@ -41,7 +36,14 @@
+         raise IOFailure(f"cannot read '{path}': {exc}") from exc
+ 
+ 
+-def load_csv(path, ts_parser):
++def load_csv(path, ts_parser, columns=None):
++    """Load the CSV into typed rows.
++
++    Without `columns` the Part 1 columns are required and extra columns get
++    inferred types. With `columns` (a schema's physical fields: name -> type)
++    exactly those are required and loaded with their declared types.
++    """
++    required = REQUIRED_COLUMNS if columns is None else columns
+     text = read_text(path)
+     if text.startswith("﻿"):
+         text = text[1:]
+@@ -53,7 +55,7 @@
+         raise IOFailure(f"CSV '{path}' has no header row")
+ 
+     header = [h.strip() for h in records[0]]
+-    _validate_header(header, path)
++    _validate_header(header, path, required)
+     body = records[1:]
+     for lineno, record in enumerate(body, start=2):
+         if len(record) != len(header):
+@@ -63,16 +65,18 @@
+ 
+     schema = {}
+     for idx, name in enumerate(header):
+-        if name in REQUIRED_COLUMNS:
+-            schema[name] = REQUIRED_COLUMNS[name]
+-        else:
++        if name in required:
++            schema[name] = required[name]
++        elif columns is None:
+             schema[name] = _infer_type(r[idx] for r in body)
+ 
+-    converters = [_converter(name, schema[name], ts_parser) for name in header]
++    loaded = [(idx, name, _converter(name, schema[name], ts_parser))
++              for idx, name in enumerate(header) if name in schema]
+     rows = []
+     for lineno, record in enumerate(body, start=2):
+         row = {}
+-        for name, convert, raw in zip(header, converters, record):
++        for idx, name, convert in loaded:
++            raw = record[idx]
+             try:
+                 row[name] = convert(raw)
+             except ValueError as exc:
+@@ -84,7 +88,7 @@
+     return Table(schema, rows)
+ 
+ 
+-def _validate_header(header, path):
++def _validate_header(header, path, required):
+     seen = set()
+     for name in header:
+         if not name:
+@@ -92,7 +96,7 @@
+         if name in seen:
+             raise IOFailure(f"CSV '{path}' has duplicate column '{name}'")
+         seen.add(name)
+-    missing = [c for c in REQUIRED_COLUMNS if c not in seen]
++    missing = [c for c in required if c not in seen]
+     if missing:
+         raise IOFailure(f"CSV '{path}' is missing required column(s): {', '.join(missing)}")
+ 
+@@ -101,26 +105,20 @@
+     present = [v.strip() for v in values if v.strip()]
+     if not present:
+         return dtypes.STRING
+-    if all(_INT_RE.match(v) for v in present):
+-        return dtypes.INT
+-    if all(_FLOAT_RE.match(v) for v in present):
+-        return dtypes.FLOAT
+-    if all(v.lower() in _BOOLS for v in present):
+-        return dtypes.BOOL
++    for t in (dtypes.INT, dtypes.FLOAT, dtypes.BOOL):
++        if all(dtypes.looks_like(v, t) for v in present):
++            return t
+     return dtypes.STRING
+ 
+ 
+ def _converter(name, col_type, ts_parser):
+     if col_type == dtypes.TIMESTAMP:
+-        return ts_parser.parse
++        # The event time itself is mandatory; other timestamp columns may be empty.
++        return ts_parser.parse if name == "timestamp" else _nullable(ts_parser.parse)
+     if col_type == dtypes.STRING:
+         return lambda raw: raw
+-    if col_type == dtypes.INT:
+-        return _nullable(int)
+-    if col_type == dtypes.FLOAT:
+-        return _nullable(_parse_float)
+-    if col_type == dtypes.BOOL:
+-        return _nullable(lambda v: _BOOLS[v.lower()])
++    if col_type in (dtypes.INT, dtypes.FLOAT, dtypes.BOOL):
++        return _nullable(lambda v: dtypes.parse_text(v, col_type))
+     raise AssertionError(f"unhandled column type {col_type} for {name}")
+ 
+ 
+@@ -131,12 +129,3 @@
+             return None
+         return parse(value)
+     return convert
+-
+-
+-def _parse_float(value):
+-    if not _FLOAT_RE.match(value):
+-        raise ValueError("not a number")
+-    result = float(value)
+-    if result != result or result in (float("inf"), float("-inf")):
+-        raise ValueError("not a finite number")
+-    return result
+
+### mtl_engine/dtypes.py (modified)
+--- mtl_engine/dtypes.py
++++ mtl_engine/dtypes.py
+@@ -1,4 +1,5 @@
+ """Value types of the MTL type system."""
++import re
+ 
+ INT = "int"
+ FLOAT = "float"
+@@ -29,3 +30,33 @@
+     if a == BOOL:
+         return op in ("==", "!=")
+     return False
++
++
++_INT_RE = re.compile(r"^[+-]?\d+$")
++_FLOAT_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
++_BOOLS = {"true": True, "false": False}
++
++
++def looks_like(text, t):
++    """Whether stripped text is a valid literal of int, float or bool type."""
++    if t == INT:
++        return bool(_INT_RE.match(text))
++    if t == FLOAT:
++        return bool(_FLOAT_RE.match(text))
++    if t == BOOL:
++        return text.lower() in _BOOLS
++    raise AssertionError(f"no text form check for {t}")
++
++
++def parse_text(text, t):
++    """Parse stripped text as an int, float or bool; raise ValueError when invalid."""
++    if not looks_like(text, t):
++        raise ValueError(f"not a valid {t}")
++    if t == INT:
++        return int(text)
++    if t == FLOAT:
++        value = float(text)
++        if value != value or value in (float("inf"), float("-inf")):
++            raise ValueError("not a finite number")
++        return value
++    return _BOOLS[text.lower()]
+
+### mtl_engine/evaluator.py (modified)
+--- mtl_engine/evaluator.py
++++ mtl_engine/evaluator.py
+@@ -1,9 +1,13 @@
+-"""Row-level evaluation of type-checked expressions (nulls propagate SQL-style)."""
++"""Row-level evaluation of type-checked expressions (nulls propagate SQL-style).
++
++Post-aggregation expressions are evaluated with a frame: the ordered list of
++output rows and the current index, which lag()/lead() navigate.
++"""
+ import math
+ import operator
+ 
+-from . import dtypes, functions
+-from .ast_nodes import Binary, Call, ColumnRef, InExpr, Literal, Unary
++from . import casts, dtypes, functions
++from .ast_nodes import Binary, Call, Cast, ColumnRef, InExpr, Literal, Unary
+ from .errors import RuntimeFailure
+ 
+ _COMPARE = {
+@@ -12,52 +16,82 @@
+ }
+ 
+ 
+-def evaluate(expr, row):
++def evaluate(expr, row, frame=None):
+     if isinstance(expr, Literal):
+         return expr.value
+     if isinstance(expr, ColumnRef):
+         return row[expr.name]
+     if isinstance(expr, Binary):
+-        return _eval_binary(expr, row)
++        return _eval_binary(expr, row, frame)
+     if isinstance(expr, Unary):
+-        value = evaluate(expr.operand, row)
++        value = evaluate(expr.operand, row, frame)
+         if value is None:
+             return None
+         if expr.op == "!":
+             return not value
+         return -value if expr.op == "-" else value
+     if isinstance(expr, InExpr):
+-        haystack = evaluate(expr.haystack, row)
++        haystack = evaluate(expr.haystack, row, frame)
+         if haystack is None:
+             return None
+-        return evaluate(expr.needle, row) in haystack
++        return evaluate(expr.needle, row, frame) in haystack
++    if isinstance(expr, Cast):
++        value = evaluate(expr.operand, row, frame)
++        return casts.convert(value, expr.operand.type, expr.target, expr.line)
+     if isinstance(expr, Call):
+-        args = [evaluate(a, row) for a in expr.args]
+-        return _check_finite(functions.call(expr.name, args), expr)
++        return _check_finite(_eval_call(expr, row, frame), expr)
+     raise AssertionError(f"unknown expression node {expr!r}")
+ 
+ 
+-def _eval_binary(expr, row):
++def _eval_call(expr, row, frame):
++    name = expr.name
++    if name == "param":
++        return expr.value
++    if name == "coalesce":
++        value = evaluate(expr.args[0], row, frame)
++        if value is None or (isinstance(value, float) and math.isnan(value)):
++            return evaluate(expr.args[1], row, frame)
++        return value
++    if name in functions.WINDOW_FUNCTIONS:
++        return _eval_offset(expr, row, frame)
++    args = [evaluate(a, row, frame) for a in expr.args]
++    return functions.call(name, args)
++
++
++def _eval_offset(expr, row, frame):
++    """lag(expr, k) / lead(expr, k): the value of expr k rows before/after this one."""
++    k = evaluate(expr.args[1], row, frame)
++    if k is None or k <= 0:
++        raise RuntimeFailure(f"line {expr.line}: {expr.name}() offset must be a positive "
++                             f"integer, got {k}")
++    rows, index = frame
++    target = index - k if expr.name == "lag" else index + k
++    if not 0 <= target < len(rows):
++        return None
++    return evaluate(expr.args[0], rows[target], (rows, target))
++
++
++def _eval_binary(expr, row, frame):
+     op = expr.op
+     if op == "&":
+-        left = evaluate(expr.left, row)
++        left = evaluate(expr.left, row, frame)
+         if left is False:
+             return False
+-        right = evaluate(expr.right, row)
++        right = evaluate(expr.right, row, frame)
+         if right is False:
+             return False
+         return None if left is None or right is None else True
+     if op == "|":
+-        left = evaluate(expr.left, row)
++        left = evaluate(expr.left, row, frame)
+         if left is True:
+             return True
+-        right = evaluate(expr.right, row)
++        right = evaluate(expr.right, row, frame)
+         if right is True:
+             return True
+         return None if left is None or right is None else False
+ 
+-    left = evaluate(expr.left, row)
+-    right = evaluate(expr.right, row)
++    left = evaluate(expr.left, row, frame)
++    right = evaluate(expr.right, row, frame)
+     if left is None or right is None:
+         return None
+     if op in _COMPARE:
+
+### mtl_engine/functions.py (modified)
+--- mtl_engine/functions.py
++++ mtl_engine/functions.py
+@@ -11,7 +11,18 @@
+     "month": (1, 1),
+     "year": (1, 1),
+     "round": (1, 2),
++    "starts_with": (2, 2),
++    "ends_with": (2, 2),
++    "contains": (2, 2),
++    "coalesce": (2, 2),
++    # Context-dependent: typed by the checker, evaluated by the evaluator.
++    "param": (1, 1),
++    "lag": (2, 2),
++    "lead": (2, 2),
+ }
++
++STRING_PREDICATES = ("starts_with", "ends_with", "contains")
++WINDOW_FUNCTIONS = ("lag", "lead")
+ 
+ 
+ def result_type(name, arg_types, line):
+@@ -34,6 +45,17 @@
+         if len(arg_types) == 2 and arg_types[1] != dtypes.INT:
+             fail("an integer number of digits")
+         return arg_types[0]
++    if name in STRING_PREDICATES:
++        if arg_types != [dtypes.STRING, dtypes.STRING]:
++            fail("two strings")
++        return dtypes.BOOL
++    if name == "coalesce":
++        a, b = arg_types
++        if a == b:
++            return a
++        if dtypes.is_numeric(a) and dtypes.is_numeric(b):
++            return dtypes.FLOAT
++        fail("two arguments of the same type")
+     raise AssertionError(f"unknown function {name}")
+ 
+ 
+@@ -52,6 +74,12 @@
+     if name == "round":
+         digits = args[1] if len(args) > 1 else 0
+         return round_half_away(args[0], digits)
++    if name == "starts_with":
++        return args[0].startswith(args[1])
++    if name == "ends_with":
++        return args[0].endswith(args[1])
++    if name == "contains":
++        return args[1] in args[0]
+     raise AssertionError(f"unknown function {name}")
+ 
+ 
+
+### mtl_engine/lexer.py (modified)
+--- mtl_engine/lexer.py
++++ mtl_engine/lexer.py
+@@ -16,7 +16,8 @@
+ _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+ _SUFFIX_RE = re.compile(r"[A-Za-z0-9_]+")
+ _OPERATORS = ("<=", ">=", "==", "!=", "<", ">", "&", "|", "!",
+-              "(", ")", "[", "]", ",", "*", "+", "-", "/", "%")
++              "(", ")", "[", "]", ",", "*", "+", "-", "/", "%",
++              "{", "}", ":", "=", "@")
+ DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400}
+ 
+ 
+@@ -71,8 +72,8 @@
+             pos += 1
+         elif ch == "#":
+             return
+-        elif ch == "'":
+-            end = line.find("'", pos + 1)
++        elif ch in "'\"":
++            end = line.find(ch, pos + 1)
+             if end < 0:
+                 raise DSLSyntaxError(f"line {lineno}:{col}: unterminated string literal")
+             value = line[pos + 1:end]
+@@ -122,7 +123,8 @@
+ 
+     A NEWLINE does not end a statement when brackets are open, when the
+     previous token is ',' or a lone leading 'aggregate', or when the next
+-    token is ','.
++    token is ','. Outside brackets, '{' ends the statement it closes (a block
++    header) and '}' always forms a statement of its own.
+     """
+     statements = []
+     current = []
+@@ -143,6 +145,17 @@
+             if not continues:
+                 statements.append(current)
+                 current = []
++            continue
++        if depth == 0 and tok.is_op("{"):
++            current.append(tok)
++            statements.append(current)
++            current = []
++            continue
++        if depth == 0 and tok.is_op("}"):
++            if current:
++                statements.append(current)
++            statements.append([tok])
++            current = []
+             continue
+         if tok.is_op("(", "["):
+             depth += 1
+
+### mtl_engine/output.py (modified)
+--- mtl_engine/output.py
++++ mtl_engine/output.py
+@@ -8,18 +8,25 @@
+ 
+ 
+ def build_document(program, buckets):
+-    """Produce the JSON-ready value according to the normalization rules."""
++    """Produce the JSON-ready value from normalized-order buckets.
++
++    Keys: window bounds, group keys, aggregate aliases (sorted), then
++    post-aggregation calcs (sorted).
++    """
+     aliases = sorted(item.alias for item in program.aggregate.items)
++    calc_names = sorted(calc.name for calc in program.post_calcs)
+     group_cols = program.group_columns
+     windowed = program.window is not None
+ 
+     if not group_cols and not windowed:
+-        values = buckets[0].values
+-        return {alias: _json_value(values[alias]) for alias in aliases}
++        bucket = buckets[0]
++        record = {alias: _json_value(bucket.values[alias]) for alias in aliases}
++        for name in calc_names:
++            record[name] = _json_value(bucket.calcs[name])
++        return record
+ 
+-    ordered = sorted(buckets, key=_bucket_sort_key)
+     records = []
+-    for bucket in ordered:
++    for bucket in buckets:
+         record = {}
+         if windowed:
+             record["window_start"] = format_utc(bucket.window_start)
+@@ -28,21 +35,10 @@
+             record[col] = _json_value(value)
+         for alias in aliases:
+             record[alias] = _json_value(bucket.values[alias])
++        for name in calc_names:
++            record[name] = _json_value(bucket.calcs[name])
+         records.append(record)
+     return records
+-
+-
+-def _bucket_sort_key(bucket):
+-    start = bucket.window_start
+-    window_part = (0,) if start is None else (1, start)
+-    return (window_part, tuple(_value_sort_key(v) for v in bucket.group_key))
+-
+-
+-def _value_sort_key(value):
+-    # Nulls sort first; within a column all non-null values share one kind.
+-    if value is None:
+-        return (0, 0)
+-    return (1, value)
+ 
+ 
+ def _json_value(value):
+
+### mtl_engine/params.py (created)
+--- mtl_engine/params.py
++++ mtl_engine/params.py
+@@ -0,0 +1,82 @@
++"""Pipeline parameters: merging DSL defaults with --param values into typed constants."""
++from . import dtypes
++from .errors import DSLSyntaxError, IOFailure, TypeCheckError
++
++
++class ParamValue:
++    def __init__(self, name, param_type, value):
++        self.name = name
++        self.type = param_type
++        self.value = value
++
++
++def parse_cli_params(items):
++    """Turn ['key=value', ...] into a dict; the last duplicate wins."""
++    values = {}
++    for item in items:
++        key, sep, value = item.partition("=")
++        key = key.strip()
++        if not sep or not key:
++            raise IOFailure(f"invalid --param '{item}': expected key=value")
++        values[key] = value
++    return values
++
++
++def check_provided(decls, cli_values, strict=False):
++    """DSL errors: parameters without a default that were not supplied (and, in
++    strict mode, supplied parameters the pipeline does not declare)."""
++    missing = [d.name for d in decls if d.default is None and d.name not in cli_values]
++    if missing:
++        raise DSLSyntaxError(f"missing value for parameter(s) without default: "
++                             f"{', '.join(missing)}")
++    if strict:
++        declared = {d.name for d in decls}
++        unknown = sorted(k for k in cli_values if k not in declared)
++        if unknown:
++            raise DSLSyntaxError(f"undeclared parameter(s) supplied: {', '.join(unknown)}")
++
++
++def resolve(decls, cli_values, ts_parser):
++    """Return name -> ParamValue; values that do not fit their type are type errors."""
++    resolved = {}
++    for decl in decls:
++        param_type = decl.type
++        if param_type is None:
++            param_type = decl.default.type if decl.default is not None else dtypes.STRING
++        default = None
++        if decl.default is not None:
++            default = _from_literal(decl, param_type, ts_parser)
++        if decl.name in cli_values:
++            value = _from_text(decl.name, param_type, cli_values[decl.name], ts_parser)
++        else:
++            value = default
++        resolved[decl.name] = ParamValue(decl.name, param_type, value)
++    return resolved
++
++
++def _from_literal(decl, param_type, ts_parser):
++    lit = decl.default
++    if lit.type == param_type:
++        return lit.value
++    if param_type == dtypes.FLOAT and lit.type == dtypes.INT:
++        return float(lit.value)
++    if param_type == dtypes.TIMESTAMP and lit.type == dtypes.STRING:
++        try:
++            return ts_parser.parse(lit.value)
++        except ValueError as exc:
++            raise TypeCheckError(f"line {decl.line}: default of parameter '{decl.name}' is not "
++                                 f"a valid timestamp: {exc}") from exc
++    raise TypeCheckError(f"line {decl.line}: default of parameter '{decl.name}' has type "
++                         f"{lit.type}, expected {param_type}")
++
++
++def _from_text(name, param_type, text, ts_parser):
++    if param_type == dtypes.STRING:
++        return text
++    try:
++        if param_type == dtypes.TIMESTAMP:
++            return ts_parser.parse(text)
++        return dtypes.parse_text(text.strip(), param_type)
++    except ValueError as exc:
++        raise TypeCheckError(f"--param {name}={text!r} is not a valid {param_type}: "
++                             f"{exc}") from exc
+
+### mtl_engine/parser.py (modified)
+--- mtl_engine/parser.py
++++ mtl_engine/parser.py
+@@ -1,26 +1,32 @@
+ """Recursive-descent parser turning DSL source into a Program."""
+ from . import dtypes
+-from .ast_nodes import (AggItem, Aggregate, Apply, Binary, Call, ColumnRef, Filter,
+-                        GroupBy, InExpr, Literal, Program, Unary, Window)
++from .ast_nodes import (POST_AGG, PRE, AggItem, Aggregate, Apply, Binary, Calc, Call, Cast,
++                        ColumnRef, FieldDecl, Filter, GroupBy, InExpr, Literal, ParamDecl,
++                        Program, SchemaDecl, Unary, Window)
+ from .errors import DSLSyntaxError
+-from .functions import ARITY
++from .functions import ARITY, STRING_PREDICATES, WINDOW_FUNCTIONS
+ from .lexer import DURATION, DURATION_UNITS, EOF, IDENT, NUMBER, STRING, Token
+ from .lexer import split_statements, tokenize
+ 
+ AGG_FUNCTIONS = ("average", "median", "sum", "count", "std", "var", "min", "max")
+ COMPARISON_OPS = ("<", "<=", ">", ">=", "==", "!=")
+ RESERVED = ("true", "false", "in")
++TYPE_NAMES = (dtypes.STRING, dtypes.INT, dtypes.FLOAT, dtypes.BOOL, dtypes.TIMESTAMP)
++STAGES = (PRE, POST_AGG)
+ 
+ 
+ def parse_program(source):
+-    statements = []
+-    for stmt_tokens in split_statements(tokenize(source)):
+-        statements.append(_StatementParser(stmt_tokens).parse_statement())
+-
+-    row_ops, group_by, window, aggregate = [], None, None, None
++    """Parse a DSL file: either bare Part 1 statements or schema/pipeline blocks."""
++    return _DocumentParser(split_statements(tokenize(source))).parse()
++
++
++def _build_program(statements, **extra):
++    row_ops, calcs, group_by, window, aggregate = [], [], None, None, None
+     for stmt in statements:
+         if isinstance(stmt, (Filter, Apply)):
+             row_ops.append(stmt)
++        elif isinstance(stmt, Calc):
++            calcs.append(stmt)
+         elif isinstance(stmt, GroupBy):
+             if group_by is not None:
+                 raise DSLSyntaxError(f"line {stmt.line}: group_by may appear at most once")
+@@ -36,11 +42,11 @@
+     if aggregate is None:
+         raise DSLSyntaxError("missing required aggregate statement")
+ 
+-    _check_output_names(group_by, aggregate, window)
+-    return Program(row_ops, group_by, window, aggregate)
+-
+-
+-def _check_output_names(group_by, aggregate, window):
++    _check_output_names(group_by, aggregate, window, calcs)
++    return Program(row_ops, group_by, window, aggregate, calcs=calcs, **extra)
++
++
++def _check_output_names(group_by, aggregate, window, calcs):
+     reserved = {"window_start", "window_end"} if window else set()
+     taken = set()
+     if group_by:
+@@ -54,6 +60,153 @@
+             raise DSLSyntaxError(f"line {item.line}: output name '{item.alias}' is not unique")
+         taken.add(item.alias)
+ 
++    calc_names = set()
++    for calc in calcs:
++        if calc.name in calc_names:
++            raise DSLSyntaxError(f"line {calc.line}: duplicate calc '{calc.name}'")
++        calc_names.add(calc.name)
++        if calc.stage == POST_AGG and (calc.name in taken or calc.name in reserved):
++            raise DSLSyntaxError(f"line {calc.line}: calc '{calc.name}' collides with an "
++                                 "existing output field")
++
++
++class _DocumentParser:
++    """Splits logical statements into schema blocks, one pipeline block, or bare statements."""
++
++    def __init__(self, statements):
++        self.statements = statements
++        self.pos = 0
++
++    def parse(self):
++        schemas = {}
++        pipeline = None
++        loose = []
++        while self.pos < len(self.statements):
++            stmt = self._next()
++            head = stmt[0]
++            if head.is_ident("schema"):
++                decl = self._parse_schema(stmt)
++                if decl.name in schemas:
++                    raise DSLSyntaxError(f"line {head.line}: duplicate schema '{decl.name}'")
++                schemas[decl.name] = decl
++            elif head.is_ident("pipeline"):
++                if pipeline is not None:
++                    raise DSLSyntaxError(f"line {head.line}: only one pipeline block is allowed")
++                pipeline = self._parse_pipeline(stmt)
++            elif head.is_op("{", "}"):
++                _unexpected(head)
++            else:
++                loose.append(stmt)
++
++        if not schemas and pipeline is None:
++            return _build_program([_StatementParser(s).parse_statement() for s in loose])
++        if loose:
++            raise DSLSyntaxError(f"line {loose[0][0].line}: statements must appear inside "
++                                 "the pipeline block")
++        if pipeline is None:
++            raise DSLSyntaxError("missing pipeline block")
++        name, schema_name, params, body = pipeline
++        if schema_name not in schemas:
++            raise DSLSyntaxError(f"pipeline '{name}' uses unknown schema '{schema_name}'")
++        return _build_program(body, params=params, schema_name=schema_name,
++                              schemas=schemas, name=name)
++
++    def _next(self):
++        stmt = self.statements[self.pos]
++        self.pos += 1
++        return stmt
++
++    def _header(self, stmt):
++        """Return a block header's tokens without its opening '{'."""
++        if stmt[-1].is_op("{"):
++            return stmt[:-1]
++        if self.pos < len(self.statements):
++            nxt = self.statements[self.pos]
++            if len(nxt) == 1 and nxt[0].is_op("{"):
++                self.pos += 1
++                return stmt
++        last = stmt[-1]
++        raise DSLSyntaxError(f"line {last.line}: expected '{{' after '{stmt[0].value}' header")
++
++    def _block(self, opener):
++        """Yield the statements of a block up to (and consuming) its closing '}'."""
++        while self.pos < len(self.statements):
++            stmt = self._next()
++            if len(stmt) == 1 and stmt[0].is_op("}"):
++                return
++            yield stmt
++        raise DSLSyntaxError(f"line {opener.line}: unclosed '{opener.value}' block")
++
++    def _parse_schema(self, stmt):
++        head = stmt[0]
++        p = _StatementParser(self._header(stmt))
++        p.advance()
++        name = p.expect_ident("a schema name")
++        base = None
++        if p.tok.is_ident("extends"):
++            p.advance()
++            base = p.expect_ident("a base schema name")
++            if p.tok.is_op(","):
++                p.error("multiple inheritance is not allowed")
++        p.expect_end()
++
++        fields = []
++        seen = set()
++        for field_stmt in self._block(head):
++            field = _StatementParser(field_stmt).parse_field()
++            if field.name in seen:
++                raise DSLSyntaxError(f"line {field.line}: duplicate field '{field.name}' "
++                                     f"in schema '{name}'")
++            seen.add(field.name)
++            fields.append(field)
++        return SchemaDecl(name, base, fields, head.line)
++
++    def _parse_pipeline(self, stmt):
++        head = stmt[0]
++        p = _StatementParser(self._header(stmt))
++        p.advance()
++        name = p.expect_ident("a pipeline name")
++        if not p.tok.is_ident("using"):
++            p.error(f"expected 'using <SchemaName>' but found {p.tok.describe()}")
++        p.advance()
++        schema_name = p.expect_ident("a schema name")
++        p.expect_end()
++
++        params = None
++        body = []
++        for body_stmt in self._block(head):
++            first = body_stmt[0]
++            if first.is_ident("params") and (body_stmt[-1].is_op("{") or len(body_stmt) == 1):
++                if params is not None:
++                    raise DSLSyntaxError(f"line {first.line}: params may appear at most once")
++                params = self._parse_params(body_stmt)
++            elif first.is_ident("schema", "pipeline"):
++                raise DSLSyntaxError(f"line {first.line}: '{first.value}' blocks cannot be nested")
++            elif first.is_op("{", "}") or body_stmt[-1].is_op("{"):
++                _unexpected(body_stmt[-1] if not first.is_op("{", "}") else first)
++            else:
++                body.append(_StatementParser(body_stmt).parse_statement())
++        return name, schema_name, params or [], body
++
++    def _parse_params(self, stmt):
++        head = stmt[0]
++        p = _StatementParser(self._header(stmt))
++        p.advance()
++        p.expect_end()
++        params = []
++        seen = set()
++        for param_stmt in self._block(head):
++            decl = _StatementParser(param_stmt).parse_param_decl()
++            if decl.name in seen:
++                raise DSLSyntaxError(f"line {decl.line}: duplicate parameter '{decl.name}'")
++            seen.add(decl.name)
++            params.append(decl)
++        return params
++
++
++def _unexpected(tok):
++    raise DSLSyntaxError(f"line {tok.line}:{tok.col}: unexpected {tok.describe()}")
++
+ 
+ class _StatementParser:
+     """Parses the tokens of one logical statement."""
+@@ -87,6 +240,12 @@
+         if tok.kind != IDENT or tok.value in RESERVED:
+             self.error(f"expected {what} but found {tok.describe()}")
+         return self.advance().value
++
++    def expect_column(self, what="a column name"):
++        """A column name, written bare or as a string literal."""
++        if self.tok.kind == STRING:
++            return self.advance().value
++        return self.expect_ident(what)
+ 
+     def expect_end(self):
+         if self.tok.kind != EOF:
+@@ -103,6 +262,7 @@
+             "group_by": self.parse_group_by,
+             "window": self.parse_window,
+             "aggregate": self.parse_aggregate,
++            "calc": self.parse_calc,
+         }.get(head.value)
+         if handler is None:
+             self.error(f"unknown statement '{head.value}'")
+@@ -111,6 +271,65 @@
+         self.expect_end()
+         return stmt
+ 
++    def parse_type(self):
++        tok = self.tok
++        if tok.kind != IDENT or tok.value not in TYPE_NAMES:
++            self.error(f"expected a type ({', '.join(TYPE_NAMES)}) but found {tok.describe()}")
++        self.advance()
++        return tok.value
++
++    def parse_field(self):
++        """`name: type [= expr]` inside a schema block."""
++        tok = self.tok
++        name = self.expect_ident("a field name")
++        self.expect_op(":")
++        field_type = self.parse_type()
++        expr = None
++        if self.tok.is_op("="):
++            self.advance()
++            expr = self.parse_expr()
++        self.expect_end()
++        return FieldDecl(name, field_type, expr, tok.line)
++
++    def parse_param_decl(self):
++        """`name [: type] [= literal]` inside a params block."""
++        tok = self.tok
++        name = self.expect_ident("a parameter name")
++        param_type = None
++        default = None
++        if self.tok.is_op(":"):
++            self.advance()
++            param_type = self.parse_type()
++        if self.tok.is_op("="):
++            self.advance()
++            lit_tok = self.tok
++            default = self.parse_unary()
++            if not isinstance(default, Literal):
++                self.error("parameter default must be a literal", lit_tok)
++        self.expect_end()
++        return ParamDecl(name, param_type, default, tok.line)
++
++    def parse_calc(self, line):
++        name = self.expect_ident("a calc name")
++        self.expect_op("=")
++        expr = self.parse_expr()
++        self.expect_op(":")
++        declared = self.parse_type()
++        stage = PRE
++        if self.tok.is_op("@"):
++            self.advance()
++            if not self.tok.is_ident("stage"):
++                self.error(f"expected 'stage' after '@' but found {self.tok.describe()}")
++            self.advance()
++            self.expect_op("(")
++            tok = self.tok
++            if tok.kind != IDENT or tok.value not in STAGES:
++                self.error(f"expected a stage (pre or post_agg) but found {tok.describe()}")
++            self.advance()
++            stage = tok.value
++            self.expect_op(")")
++        return Calc(name, expr, declared, stage, line)
++
+     def parse_filter(self, line):
+         self.expect_op("(")
+         expr = self.parse_expr()
+@@ -129,13 +348,13 @@
+         self.expect_op("(")
+         if self.tok.is_op("["):
+             self.advance()
+-            columns = [self.expect_ident("a column name")]
++            columns = [self.expect_column()]
+             while self.tok.is_op(","):
+                 self.advance()
+-                columns.append(self.expect_ident("a column name"))
++                columns.append(self.expect_column())
+             self.expect_op("]")
+         else:
+-            columns = [self.expect_ident("a column name")]
++            columns = [self.expect_column()]
+         self.expect_op(")")
+         if len(set(columns)) != len(columns):
+             raise DSLSyntaxError(f"line {line}: duplicate column in group_by")
+@@ -144,6 +363,12 @@
+     def parse_window(self, line):
+         self.expect_op("(")
+         tok = self.tok
++        if tok.is_ident("param"):
++            call = self.parse_primary()
++            if not isinstance(call, Call):
++                self.error("expected param(\"<name>\") or a duration literal", tok)
++            self.expect_op(")")
++            return Window(None, None, None, line, param=call.args[0].value)
+         if tok.kind != DURATION:
+             self.error(f"expected a duration literal like 10m, 1h or 7d but found {tok.describe()}")
+         self.advance()
+@@ -172,7 +397,7 @@
+             self.advance()
+             column = None
+         else:
+-            column = self.expect_ident("a column name or '*'")
++            column = self.expect_column("a column name or '*'")
+         self.expect_op(")")
+         if not self.tok.is_ident("as"):
+             self.error(f"expected 'as <alias>' but found {self.tok.describe()}")
+@@ -213,10 +438,14 @@
+         elif tok.is_ident("in"):
+             self.advance()
+             node = InExpr(left, self.parse_additive(), tok.line)
++        elif tok.is_ident(*STRING_PREDICATES):
++            self.advance()
++            node = Call(tok.value, [left, self.parse_additive()], tok.line)
+         else:
+             return left
+         nxt = self.tok
+-        if (nxt.kind == "OP" and nxt.value in COMPARISON_OPS) or nxt.is_ident("in"):
++        if ((nxt.kind == "OP" and nxt.value in COMPARISON_OPS)
++                or nxt.is_ident("in", *STRING_PREDICATES)):
+             self.error("comparisons cannot be chained; use parentheses and '&'")
+         return node
+ 
+@@ -271,6 +500,8 @@
+ 
+     def parse_call(self, name_tok):
+         name = name_tok.value
++        if name == "cast":
++            return self.parse_cast(name_tok)
+         if name not in ARITY:
+             self.error(f"unknown function '{name}'", name_tok)
+         self.expect_op("(")
+@@ -285,4 +516,24 @@
+         if not lo <= len(args) <= hi:
+             expected = str(lo) if lo == hi else f"{lo} to {hi}"
+             self.error(f"{name}() takes {expected} argument(s), got {len(args)}", name_tok)
++        if name == "param":
++            if not (isinstance(args[0], Literal) and args[0].type == dtypes.STRING):
++                self.error("param() expects a parameter name as a string literal", name_tok)
++        elif name in WINDOW_FUNCTIONS:
++            k = args[1]
++            is_param = isinstance(k, Call) and k.name == "param"
++            is_positive_int = (isinstance(k, Literal) and k.type == dtypes.INT and k.value > 0)
++            if not (is_param or is_positive_int):
++                self.error(f"{name}() offset must be a positive integer literal "
++                           "or an int param()", name_tok)
+         return Call(name, args, name_tok.line)
++
++    def parse_cast(self, name_tok):
++        self.expect_op("(")
++        operand = self.parse_expr()
++        if not self.tok.is_ident("as"):
++            self.error(f"expected 'as <type>' in cast() but found {self.tok.describe()}")
++        self.advance()
++        target = self.parse_type()
++        self.expect_op(")")
++        return Cast(operand, target, name_tok.line)
+
+### mtl_engine/pipeline.py (modified)
+--- mtl_engine/pipeline.py
++++ mtl_engine/pipeline.py
+@@ -1,25 +1,73 @@
+-"""Executes a type-checked Program over typed rows, producing aggregated buckets."""
++"""Executes a type-checked Program over typed rows, producing ordered aggregated buckets."""
++from . import dtypes
+ from .ast_nodes import Apply, Filter
+ from .aggregates import compute
+ from .evaluator import evaluate
+ from .timeutil import epoch_micros, from_epoch_micros
++from .typecheck import output_schema
+ 
+ _MICROS_PER_SECOND = 1_000_000
+ 
+ 
+ class Bucket:
+-    """One output record before formatting: window bounds, group key and aggregate values."""
++    """One output record before formatting: window bounds, group key, aggregate values
++    and post-aggregation calc values."""
+ 
+     def __init__(self, window_start, window_end, group_key, values):
+         self.window_start = window_start
+         self.window_end = window_end
+         self.group_key = group_key
+         self.values = values
++        self.calcs = {}
+ 
+ 
+-def run(program, rows):
+-    """Return a list of Buckets (unordered)."""
++def run(program, rows, schema_calcs=(), row_schema=None):
++    """Return the Buckets in normalized order, with post-agg calcs evaluated.
++
++    `schema_calcs` are the using-schema's calculated fields in evaluation
++    order; `row_schema` is the checked row typing (needed for post-agg calcs).
++    """
++    rows = materialize_calcs(program, schema_calcs, rows)
+     rows = apply_row_ops(program.row_ops, rows)
++    buckets = sorted(_bucketize(program, rows), key=bucket_sort_key)
++    if program.post_calcs:
++        _post_aggregate(program, buckets, row_schema or {})
++    return buckets
++
++
++def materialize_calcs(program, schema_calcs, rows):
++    """Add schema-level then pipeline pre-stage calculated fields to copies of the rows."""
++    calcs = [(f.name, f.expr, f.type) for f in schema_calcs]
++    calcs += [(c.name, c.expr, c.declared_type) for c in program.pre_calcs]
++    result = []
++    for row in rows:
++        row = dict(row)
++        for name, expr, declared in calcs:
++            row[name] = coerce(evaluate(expr, row), declared)
++        result.append(row)
++    return result
++
++
++def apply_row_ops(row_ops, rows):
++    """Run filter/apply statements in order; returns new row dicts."""
++    current = [dict(r) for r in rows]
++    for op in row_ops:
++        if isinstance(op, Filter):
++            current = [r for r in current if evaluate(op.predicate, r) is True]
++        elif isinstance(op, Apply):
++            for r in current:
++                r[op.column] = evaluate(op.expr, r)
++    return current
++
++
++def coerce(value, declared):
++    """Widen int values of float-typed fields."""
++    if declared == dtypes.FLOAT and isinstance(value, int) and not isinstance(value, bool):
++        return float(value)
++    return value
++
++
++def _bucketize(program, rows):
+     group_cols = program.group_columns
+     window = program.window
+ 
+@@ -45,17 +93,39 @@
+     return result
+ 
+ 
+-def apply_row_ops(row_ops, rows):
+-    """Run filter/apply statements in order; returns new row dicts."""
+-    current = [dict(r) for r in rows]
+-    for op in row_ops:
+-        if isinstance(op, Filter):
+-            current = [r for r in current if evaluate(op.predicate, r) is True]
+-        elif isinstance(op, Apply):
+-            for r in current:
+-                r[op.column] = evaluate(op.expr, r)
+-    return current
++def _aggregate(program, rows):
++    return {item.alias: compute(item, rows) for item in program.aggregate.items}
+ 
+ 
+-def _aggregate(program, rows):
+-    return {item.alias: compute(item, rows) for item in program.aggregate.items}
++def bucket_sort_key(bucket):
++    start = bucket.window_start
++    window_part = (0,) if start is None else (1, start)
++    return (window_part, tuple(_value_sort_key(v) for v in bucket.group_key))
++
++
++def _value_sort_key(value):
++    # Nulls sort first; within a column all non-null values share one kind.
++    if value is None:
++        return (0, 0)
++    return (1, value)
++
++
++def _post_aggregate(program, buckets, row_schema):
++    """Evaluate post-agg calcs over the ordered buckets, one calc at a time."""
++    types = output_schema(program, row_schema)
++    frame_rows = []
++    for bucket in buckets:
++        row = {}
++        if program.window is not None:
++            row["window_start"] = bucket.window_start
++            row["window_end"] = bucket.window_end
++        row.update(zip(program.group_columns, bucket.group_key))
++        row.update(bucket.values)
++        frame_rows.append({name: coerce(value, types[name]) for name, value in row.items()})
++
++    for calc in program.post_calcs:
++        values = [coerce(evaluate(calc.expr, row, (frame_rows, idx)), calc.declared_type)
++                  for idx, row in enumerate(frame_rows)]
++        for row, bucket, value in zip(frame_rows, buckets, values):
++            row[calc.name] = value
++            bucket.calcs[calc.name] = value
+
+### mtl_engine/schema.py (created)
+--- mtl_engine/schema.py
++++ mtl_engine/schema.py
+@@ -0,0 +1,117 @@
++"""Resolution of schema blocks: inheritance, type overrides and calculated-field order."""
++import copy
++
++from . import dtypes
++from .ast_nodes import ColumnRef
++from .errors import DSLSyntaxError, TypeCheckError
++from .typecheck import walk
++
++
++class ResolvedField:
++    """A schema field after inheritance; `visible` are the names its expression may use."""
++
++    def __init__(self, name, field_type, expr, line, visible):
++        self.name = name
++        self.type = field_type
++        self.expr = expr
++        self.line = line
++        self.visible = visible
++
++    @property
++    def is_calculated(self):
++        return self.expr is not None
++
++
++class ResolvedSchema:
++    def __init__(self, name, fields):
++        self.name = name
++        self.fields = fields  # name -> ResolvedField, in declaration order
++        self.calc_order = _calc_order(name, fields)
++
++    @property
++    def types(self):
++        return {name: f.type for name, f in self.fields.items()}
++
++    @property
++    def physical(self):
++        return {name: f.type for name, f in self.fields.items() if not f.is_calculated}
++
++
++def override_allowed(old, new):
++    """Same type, or numeric widening int -> float."""
++    return old == new or (old == dtypes.INT and new == dtypes.FLOAT)
++
++
++def resolve_all(decls):
++    """Resolve every schema declaration; returns name -> ResolvedSchema."""
++    resolved = {}
++    for name in decls:
++        _resolve(name, decls, resolved, [])
++    return resolved
++
++
++def _resolve(name, decls, resolved, stack):
++    if name in resolved:
++        return resolved[name]
++    if name in stack:
++        chain = " -> ".join(stack[stack.index(name):] + [name])
++        raise DSLSyntaxError(f"circular schema inheritance: {chain}")
++    decl = decls[name]
++    fields = {}
++    if decl.base is not None:
++        if decl.base not in decls:
++            raise DSLSyntaxError(f"line {decl.line}: schema '{name}' extends unknown "
++                                 f"schema '{decl.base}'")
++        base = _resolve(decl.base, decls, resolved, stack + [name])
++        for fname, f in base.fields.items():
++            fields[fname] = ResolvedField(f.name, f.type, copy.deepcopy(f.expr), f.line, f.visible)
++
++    visible = set(fields)
++    for f in decl.fields:
++        if f.expr is not None:
++            _check_references(f, visible, name)
++        inherited = fields.get(f.name)
++        if inherited is not None and not override_allowed(inherited.type, f.type):
++            raise TypeCheckError(f"line {f.line}: schema '{name}' cannot override field "
++                                 f"'{f.name}' from {inherited.type} to {f.type}")
++        fields[f.name] = ResolvedField(f.name, f.type, f.expr, f.line, frozenset(visible))
++        visible.add(f.name)
++
++    result = ResolvedSchema(name, fields)
++    resolved[name] = result
++    return result
++
++
++def _check_references(field, visible, schema_name):
++    for node in walk(field.expr):
++        if isinstance(node, ColumnRef) and node.name not in visible:
++            raise DSLSyntaxError(f"line {field.line}: calculated field '{field.name}' in schema "
++                                 f"'{schema_name}' references unknown or later-declared field "
++                                 f"'{node.name}'")
++
++
++def _calc_order(schema_name, fields):
++    """Calculated fields ordered so each comes after the calculated fields it uses."""
++    order = []
++    state = {}
++
++    def visit(f):
++        mark = state.get(f.name)
++        if mark == "done":
++            return
++        if mark == "active":
++            raise DSLSyntaxError(f"line {f.line}: calculated field '{f.name}' in schema "
++                                 f"'{schema_name}' depends on itself")
++        state[f.name] = "active"
++        for node in walk(f.expr):
++            if isinstance(node, ColumnRef):
++                dep = fields.get(node.name)
++                if dep is not None and dep.is_calculated:
++                    visit(dep)
++        state[f.name] = "done"
++        order.append(f)
++
++    for f in fields.values():
++        if f.is_calculated:
++            visit(f)
++    return order
+
+### mtl_engine/typecheck.py (modified)
+--- mtl_engine/typecheck.py
++++ mtl_engine/typecheck.py
+@@ -1,29 +1,61 @@
+-"""Static type checking of a parsed Program against the CSV schema."""
+-from . import dtypes, functions
+-from .ast_nodes import Apply, Binary, Call, ColumnRef, Filter, InExpr, Literal, Unary
+-from .errors import TypeCheckError
++"""Static type checking of a parsed Program against its typing environment.
++
++Name problems that are structural (forward references, aggregate aliases in
++pre-stage calcs, undeclared parameters, lag/lead outside post-aggregation)
++are reported as DSL errors before an expression is typed; everything else
++is a type error.
++"""
++from . import casts, dtypes, functions
++from .ast_nodes import (Apply, Binary, Call, Cast, ColumnRef, Filter, InExpr, Literal,
++                        Unary)
++from .errors import DSLSyntaxError, TypeCheckError
++from .lexer import DURATION_UNITS
+ 
+ ARITHMETIC_OPS = ("+", "-", "*", "/", "%")
+ COMPARISON_OPS = ("<", "<=", ">", ">=", "==", "!=")
+ LOGICAL_OPS = ("&", "|")
+-
+-
+-def check_program(program, schema):
+-    """Annotate expression types and validate the pipeline; return the final schema."""
++WINDOW_COLUMNS = ("window_start", "window_end")
++
++_AGG_TYPES = {"count": dtypes.INT, "average": dtypes.FLOAT, "median": dtypes.FLOAT,
++              "std": dtypes.FLOAT, "var": dtypes.FLOAT}
++
++
++def check_program(program, schema, params=None):
++    """Annotate expression types and validate the pipeline; return the final row schema.
++
++    `schema` maps the input fields to their types; `params` maps declared
++    parameter names to resolved ParamValues.
++    """
++    params = params or {}
+     schema = dict(schema)
++    aliases = {item.alias for item in program.aggregate.items}
++
++    pre_calcs = program.pre_calcs
++    for idx, calc in enumerate(pre_calcs):
++        if calc.name in schema:
++            raise DSLSyntaxError(f"line {calc.line}: calc '{calc.name}' collides with an "
++                                 "existing field")
++        check_names(calc.expr, schema, params, line=calc.line,
++                    aliases=aliases, later={c.name for c in pre_calcs[idx + 1:]})
++        check_declared(calc.name, calc.declared_type, infer(calc.expr, schema, params), calc.line)
++        schema[calc.name] = calc.declared_type
++
+     for op in program.row_ops:
+         if isinstance(op, Filter):
+-            t = infer(op.predicate, schema)
++            check_names(op.predicate, schema, params, line=op.line)
++            t = infer(op.predicate, schema, params)
+             if t != dtypes.BOOL:
+                 raise TypeCheckError(f"line {op.line}: filter predicate must be boolean, got {t}")
+         elif isinstance(op, Apply):
+-            schema[op.column] = infer(op.expr, schema)
++            check_names(op.expr, schema, params, line=op.line)
++            schema[op.column] = infer(op.expr, schema, params)
+ 
+     for col in program.group_columns:
+         if col not in schema:
+             raise TypeCheckError(f"line {program.group_by.line}: unknown group_by column '{col}'")
+ 
+     if program.window is not None:
++        _resolve_window_param(program.window, params)
+         ts_type = schema.get("timestamp")
+         if ts_type != dtypes.TIMESTAMP:
+             raise TypeCheckError(f"line {program.window.line}: window requires a 'timestamp' "
+@@ -41,15 +73,102 @@
+         if not dtypes.is_numeric(col_type):
+             raise TypeCheckError(f"line {item.line}: {item.func}({item.column}) requires a numeric "
+                                  f"column, got {col_type}")
++
++    output = output_schema(program, schema)
++    post_calcs = program.post_calcs
++    for idx, calc in enumerate(post_calcs):
++        check_names(calc.expr, output, params, line=calc.line, allow_window=True,
++                    later={c.name for c in post_calcs[idx + 1:]})
++        check_declared(calc.name, calc.declared_type, infer(calc.expr, output, params), calc.line)
++        output[calc.name] = calc.declared_type
+     return schema
+ 
+ 
+-def infer(expr, schema):
+-    expr.type = _infer(expr, schema)
++def output_schema(program, schema):
++    """Types of the fields of an aggregated output row (before post-agg calcs)."""
++    output = {}
++    if program.window is not None:
++        for col in WINDOW_COLUMNS:
++            output[col] = dtypes.TIMESTAMP
++    for col in program.group_columns:
++        output[col] = schema[col]
++    for item in program.aggregate.items:
++        output[item.alias] = _AGG_TYPES.get(item.func) or schema[item.column]
++    return output
++
++
++def check_schema_calcs(resolved, params):
++    """Type the calculated fields of a resolved schema against its own fields."""
++    types = resolved.types
++    for field in resolved.calc_order:
++        check_names(field.expr, field.visible, params, line=field.line)
++        check_declared(field.name, field.type, infer(field.expr, types, params), field.line)
++
++
++def check_declared(name, declared, inferred, line):
++    if not (declared == inferred or (declared == dtypes.FLOAT and inferred == dtypes.INT)):
++        raise TypeCheckError(f"line {line}: '{name}' is declared {declared} but its "
++                             f"expression has type {inferred}")
++
++
++def _resolve_window_param(window, params):
++    if window.param is None:
++        return
++    param = params.get(window.param)
++    if param is None:
++        raise DSLSyntaxError(f"line {window.line}: unknown parameter '{window.param}'")
++    value = param.value
++    if (param.type != dtypes.STRING or len(value) < 2 or not value[:-1].isdigit()
++            or value[-1] not in DURATION_UNITS or int(value[:-1]) <= 0):
++        raise TypeCheckError(f"line {window.line}: window parameter '{window.param}' must be a "
++                             f"duration string like '1h', got {param.type} {value!r}")
++    window.amount = int(value[:-1])
++    window.unit = value[-1]
++    window.seconds = window.amount * DURATION_UNITS[window.unit]
++
++
++def walk(expr):
++    """Yield every node of an expression tree (pre-order)."""
++    stack = [expr]
++    while stack:
++        node = stack.pop()
++        yield node
++        if isinstance(node, Unary):
++            stack.append(node.operand)
++        elif isinstance(node, Binary):
++            stack.extend((node.right, node.left))
++        elif isinstance(node, InExpr):
++            stack.extend((node.haystack, node.needle))
++        elif isinstance(node, Call):
++            stack.extend(reversed(node.args))
++        elif isinstance(node, Cast):
++            stack.append(node.operand)
++
++
++def check_names(expr, visible, params, line, aliases=(), later=(), allow_window=False):
++    """Report structural name errors; unknown plain columns are left to `infer`."""
++    for node in walk(expr):
++        if isinstance(node, ColumnRef) and node.name not in visible:
++            if node.name in later:
++                raise DSLSyntaxError(f"line {line}: '{node.name}' is referenced before "
++                                     "it is declared")
++            if node.name in aliases:
++                raise DSLSyntaxError(f"line {line}: aggregate alias '{node.name}' cannot be "
++                                     "used before aggregation")
++        elif isinstance(node, Call):
++            if node.name == "param" and node.args[0].value not in params:
++                raise DSLSyntaxError(f"line {line}: unknown parameter '{node.args[0].value}'")
++            if node.name in functions.WINDOW_FUNCTIONS and not allow_window:
++                raise DSLSyntaxError(f"line {line}: {node.name}() is only allowed in "
++                                     "@stage(post_agg) calcs")
++
++
++def infer(expr, schema, params=None):
++    expr.type = _infer(expr, schema, params or {})
+     return expr.type
+ 
+ 
+-def _infer(expr, schema):
++def _infer(expr, schema, params):
+     if isinstance(expr, Literal):
+         return expr.type
+     if isinstance(expr, ColumnRef):
+@@ -57,7 +176,7 @@
+             raise TypeCheckError(f"line {expr.line}: unknown column '{expr.name}'")
+         return schema[expr.name]
+     if isinstance(expr, Unary):
+-        t = infer(expr.operand, schema)
++        t = infer(expr.operand, schema, params)
+         if expr.op == "!":
+             if t != dtypes.BOOL:
+                 raise TypeCheckError(f"line {expr.line}: '!' requires a boolean operand, got {t}")
+@@ -66,18 +185,38 @@
+             raise TypeCheckError(f"line {expr.line}: unary '{expr.op}' requires a number, got {t}")
+         return t
+     if isinstance(expr, Binary):
+-        return _infer_binary(expr, schema)
++        return _infer_binary(expr, schema, params)
+     if isinstance(expr, InExpr):
+-        return _infer_in(expr, schema)
++        return _infer_in(expr, schema, params)
++    if isinstance(expr, Cast):
++        source = infer(expr.operand, schema, params)
++        if not casts.allowed(source, expr.target):
++            raise TypeCheckError(f"line {expr.line}: cannot cast {source} to {expr.target}")
++        return expr.target
+     if isinstance(expr, Call):
+-        arg_types = [infer(a, schema) for a in expr.args]
+-        return functions.result_type(expr.name, arg_types, expr.line)
++        return _infer_call(expr, schema, params)
+     raise AssertionError(f"unknown expression node {expr!r}")
+ 
+ 
+-def _infer_binary(expr, schema):
+-    lt = infer(expr.left, schema)
+-    rt = infer(expr.right, schema)
++def _infer_call(expr, schema, params):
++    if expr.name == "param":
++        name = expr.args[0].value
++        if name not in params:
++            raise DSLSyntaxError(f"line {expr.line}: unknown parameter '{name}'")
++        expr.value = params[name].value
++        return params[name].type
++    arg_types = [infer(a, schema, params) for a in expr.args]
++    if expr.name in functions.WINDOW_FUNCTIONS:
++        if arg_types[1] != dtypes.INT:
++            raise TypeCheckError(f"line {expr.line}: {expr.name}() offset must be an int, "
++                                 f"got {arg_types[1]}")
++        return arg_types[0]
++    return functions.result_type(expr.name, arg_types, expr.line)
++
++
++def _infer_binary(expr, schema, params):
++    lt = infer(expr.left, schema, params)
++    rt = infer(expr.right, schema, params)
+     op = expr.op
+     if op in LOGICAL_OPS:
+         if lt != dtypes.BOOL or rt != dtypes.BOOL:
+@@ -98,9 +237,9 @@
+     raise AssertionError(f"unknown operator {op}")
+ 
+ 
+-def _infer_in(expr, schema):
+-    nt = infer(expr.needle, schema)
+-    ht = infer(expr.haystack, schema)
++def _infer_in(expr, schema, params):
++    nt = infer(expr.needle, schema, params)
++    ht = infer(expr.haystack, schema, params)
+     if not (isinstance(expr.needle, Literal) and nt == dtypes.STRING):
+         raise TypeCheckError(f"line {expr.line}: left side of 'in' must be a string literal")
+     if not (isinstance(expr.haystack, ColumnRef) and ht == dtypes.STRING):
+

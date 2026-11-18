@@ -1,0 +1,437 @@
+### blueprints.py (modified)
+--- blueprints.py
++++ blueprints.py
+@@ -22,11 +22,15 @@
+     output_quantity: int
+     seconds: int
+     materials: tuple  # of (material_type_id, quantity_per_run)
++    blueprint_id: int = None
+ 
+ 
+ def material_amount(quantity, me, runs=1):
+-    """Units needed: ceil(max(1, quantity * (1 - ME/100) * runs)), computed exactly."""
+-    return math.ceil(max(1, Fraction(quantity) * (100 - me) / 100 * runs))
++    """Units needed: ceil(max(runs, quantity * (1 - ME/100) * runs)), computed exactly.
++
++    Every run consumes at least one unit of each material.
++    """
++    return math.ceil(max(runs, Fraction(quantity) * (100 - me) / 100 * runs))
+ 
+ 
+ def job_seconds(seconds, te):
+@@ -98,6 +102,7 @@
+             output_quantity=quantity,
+             seconds=self._times.get(key, 0),
+             materials=tuple(self._materials.get(key, ())),
++            blueprint_id=key[0],
+         )
+ 
+     def is_buildable(self, type_id):
+
+### build_string.py (created)
+--- build_string.py
++++ build_string.py
+@@ -0,0 +1,74 @@
++"""Parsing of plan build strings.
++
++Secret: the textual grammar of a build string -- the optional "x{jobs}"
++suffix, the item/normal/invention/reverse-engineering forms, their
++defaults, and how an ambiguous string is resolved against known names.
++"""
++
++import re
++from dataclasses import dataclass
++
++_JOBS = re.compile(r"^(?P<rest>.*\S)\s+[xX](?P<jobs>\d+)$")
++_NORMAL = re.compile(r"^(?P<name>.+?)\s+(?P<runs>\d+)\s+(?P<me>\d+)\s+(?P<te>\d+)$")
++_RUNS = re.compile(r"^(?P<name>.+?)\s+(?P<runs>\d+)$")
++
++
++@dataclass(frozen=True)
++class BuildRequest:
++    name: str
++    runs: int
++    jobs: int
++    me: int = 0
++    te: int = 0
++    decryptor: str = None  # set (possibly "None") only for invention
++    relic: str = None  # set only for reverse engineering
++
++    @property
++    def invented(self):
++        return self.decryptor is not None
++
++
++def _invention_pattern(decryptors):
++    choices = "|".join(re.escape(d) for d in sorted(decryptors, key=len, reverse=True))
++    return re.compile(
++        r"^(?P<name>.+?)\s+(?P<runs>\d+)\s+(?P<dec>%s)(?:\s+(?P<relic>.+))?$" % choices,
++        re.IGNORECASE,
++    )
++
++
++def parse(text, decryptors, is_item, is_relic):
++    """Parse a build string into a BuildRequest.
++
++    decryptors: decryptor names ("None" included); is_item / is_relic:
++    predicates telling whether a name is a known product / relic.
++    """
++    text = " ".join(text.split())
++    jobs = 1
++    match = _JOBS.match(text)
++    if match:
++        text, jobs = match.group("rest"), int(match.group("jobs"))
++
++    candidates = []
++    match = _NORMAL.match(text)
++    if match:
++        candidates.append(BuildRequest(
++            match.group("name"), int(match.group("runs")), jobs,
++            me=int(match.group("me")), te=int(match.group("te")),
++        ))
++    match = _invention_pattern(decryptors).match(text)
++    if match:
++        canonical = {d.lower(): d for d in decryptors}
++        candidates.append(BuildRequest(
++            match.group("name"), int(match.group("runs")), jobs,
++            decryptor=canonical[match.group("dec").lower()],
++            relic=match.group("relic"),
++        ))
++    match = _RUNS.match(text)
++    if match:
++        candidates.append(BuildRequest(match.group("name"), int(match.group("runs")), jobs))
++    candidates.append(BuildRequest(text, 1, jobs))
++
++    for request in candidates:
++        if is_item(request.name) and (request.relic is None or is_relic(request.relic)):
++            return request
++    raise LookupError("Cannot parse build string %r" % text)
+
+### industry.py (modified)
+--- industry.py
++++ industry.py
+@@ -4,6 +4,8 @@
+   python industry.py recipe <Product or Blueprint name> --sde <SDE directory>
+       [-me <0-10>] [-te <0-20, even>] [-waste]
+   python industry.py invention <Product or Blueprint name> --sde <SDE directory> [--skill <1-5>]
++  python industry.py plan <Build string> --config <YAML file> --sde <SDE directory>
++      --output <output directory>
+ 
+ This module only parses arguments and wires the other modules together.
+ """
+@@ -11,10 +13,15 @@
+ import argparse
+ import sys
+ 
++import yaml
++
+ import blueprints
++import build_string
+ import catalog
+ import invention
+ import invention_report
++import plan_report
++import planner
+ import report
+ import volumes
+ 
+@@ -101,6 +108,22 @@
+     )
+ 
+ 
++def _build_plan(text, config_path, sde_dir, output_dir):
++    with open(config_path, encoding="utf-8") as handle:
++        config = yaml.safe_load(handle) or {}
++    if not isinstance(config, dict):
++        raise ValueError("config must be a YAML mapping")
++    builder = planner.Planner(
++        sde_dir,
++        te_bonus=config.get("te_bonus", 0),
++        invention_skill=config.get("invention_skill", 5),
++    )
++    request = build_string.parse(
++        text, invention.decryptor_names(), builder.is_item, builder.is_relic
++    )
++    plan_report.write(builder.plan(request), output_dir)
++
++
+ def _efficiency(low, high, step, label):
+     def parse(text):
+         try:
+@@ -135,14 +158,22 @@
+     invent.add_argument("--sde", required=True, help="SDE directory")
+     invent.add_argument("--skill", type=int, default=5, choices=range(1, 6), metavar="{1-5}",
+                         help="level of every relevant skill (default 5)")
++    plan = commands.add_parser("plan", help="create a build plan for a product")
++    plan.add_argument("build", nargs="+", help="build string, e.g. 'Barrage L 10 None x10'")
++    plan.add_argument("--config", required=True, help="YAML build config file")
++    plan.add_argument("--sde", required=True, help="SDE directory")
++    plan.add_argument("--output", required=True, help="output directory for the CSV files")
+     args = parser.parse_args(argv)
+ 
+     try:
++        if args.command == "plan":
++            _build_plan(" ".join(args.build), args.config, args.sde, args.output)
++            return 0
+         if args.command == "invention":
+             text = _build_invention_report(" ".join(args.name), args.sde, args.skill)
+         else:
+             text = _build_report(" ".join(args.name), args.sde, args.me, args.te, args.waste)
+-    except (LookupError, OSError) as exc:
++    except (LookupError, OSError, ValueError, yaml.YAMLError) as exc:
+         print("error: %s" % exc, file=sys.stderr)
+         return 1
+     print(text)
+
+### invention.py (modified)
+--- invention.py
++++ invention.py
+@@ -51,6 +51,8 @@
+     runs: int
+     me: int
+     te: int
++    source_id: int = None  # blueprint or relic the job consumes
++    materials: tuple = ()  # of (material_type_id, quantity_per_attempt)
+ 
+ 
+ @dataclass(frozen=True)
+@@ -63,6 +65,15 @@
+     skills: tuple  # of names
+     seconds: int
+     outcomes: tuple  # of Outcome, in display order
++
++
++def decryptor_names():
++    """Every decryptor choice, "None" included."""
++    return tuple(row[0] for row in _DECRYPTORS)
++
++
++def is_relic_name(name):
++    return _relic_rank(name) is not None
+ 
+ 
+ def _relic_rank(name):
+@@ -186,6 +197,8 @@
+                         runs=base_runs + d_runs,
+                         me=_BASE_ME + d_me,
+                         te=_BASE_TE + d_te,
++                        source_id=src,
++                        materials=tuple(self._materials.get((src, act), ())),
+                     )
+                 )
+ 
+
+### plan_report.py (created)
+--- plan_report.py
++++ plan_report.py
+@@ -0,0 +1,51 @@
++"""Canonical build plan CSV files.
++
++Secret: file names, headers, column order, row sorting, and number
++formatting of the plan outputs.
++"""
++
++import csv
++import os
++from decimal import ROUND_HALF_UP, Decimal
++
++_MATERIALS_FILE = "materials.csv"
++_JOBS_FILE = "jobs.csv"
++_MATERIALS_HEADER = ("name", "to_buy", "buy_volume", "start_amount", "end_amount")
++_JOBS_HEADER = ("name", "runs", "days", "count")
++
++
++def _days_text(days):
++    value = (Decimal(days.numerator) / Decimal(days.denominator)).quantize(
++        Decimal("0.01"), rounding=ROUND_HALF_UP
++    )
++    return repr(float(value))
++
++
++def _write(path, header, rows):
++    with open(path, "w", encoding="utf-8", newline="") as handle:
++        writer = csv.writer(handle, lineterminator="\n")
++        writer.writerow(header)
++        writer.writerows(rows)
++
++
++def write(plan, output_dir):
++    os.makedirs(output_dir, exist_ok=True)
++    materials = sorted(plan.purchases, key=lambda p: p.name)
++    _write(
++        os.path.join(output_dir, _MATERIALS_FILE),
++        _MATERIALS_HEADER,
++        [(p.name, p.quantity, repr(float(p.volume)), 0, 0) for p in materials],
++    )
++    merged = {}
++    for job in plan.jobs:
++        key = (job.name, job.runs, job.days)
++        merged[key] = merged.get(key, 0) + job.count
++    jobs = sorted(
++        ((name, runs, count, days) for (name, runs, days), count in merged.items()),
++        key=lambda j: (j[0], j[1], j[2], j[3]),
++    )
++    _write(
++        os.path.join(output_dir, _JOBS_FILE),
++        _JOBS_HEADER,
++        [(name, runs, _days_text(days), count) for name, runs, count, days in jobs],
++    )
+
+### planner.py (created)
+--- planner.py
++++ planner.py
+@@ -0,0 +1,153 @@
++"""Build plans: which jobs to run for a build request and what to buy.
++
++Secret: how a request is turned into manufacturing jobs (splitting runs
++across limited-run invented blueprints), how many invention attempts are
++expected, which inputs are consumed per job or attempt, and how time and
++material efficiency bonuses combine.
++"""
++
++import math
++from dataclasses import dataclass
++from decimal import Decimal
++from fractions import Fraction
++
++import blueprints
++import catalog
++import invention
++import volumes
++
++_SECONDS_PER_DAY = 86400
++
++
++@dataclass(frozen=True)
++class Job:
++    name: str  # blueprint name
++    runs: int
++    days: Fraction  # duration of one job
++    count: int
++
++
++@dataclass(frozen=True)
++class Purchase:
++    name: str
++    quantity: int
++    volume: Decimal  # m3 for the whole quantity
++
++
++@dataclass(frozen=True)
++class BuildPlan:
++    jobs: tuple  # of Job
++    purchases: tuple  # of Purchase
++
++
++def _check(value, low, high, label):
++    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
++        raise ValueError("%s must be an integer in [%d,%d], got %r" % (label, low, high, value))
++    return value
++
++
++class Planner:
++    def __init__(self, sde_dir, te_bonus=0, invention_skill=5):
++        self._te_bonus = _check(te_bonus, 0, 30, "te_bonus")
++        self._skill = _check(invention_skill, 1, 5, "invention_skill")
++        self._items = catalog.Catalog(sde_dir)
++        self._industry = blueprints.Industry(sde_dir, self._items)
++        self._invention = invention.Invention(sde_dir, self._items)
++        self._volumes = volumes.VolumeResolver(sde_dir, self._items)
++
++    def is_item(self, name):
++        return bool(self._items.ids_named(name))
++
++    def is_relic(self, name):
++        return any(
++            invention.is_relic_name(self._items.name(t)) for t in self._items.ids_named(name)
++        )
++
++    def _recipe(self, name):
++        candidates = self._items.ids_named(name)
++        if not candidates:
++            raise LookupError("No published item named %r" % name)
++        for type_id in candidates:
++            recipe = self._industry.recipe_for(type_id)
++            if recipe is not None:
++                return type_id, recipe
++        raise LookupError("%r cannot be manufactured or reacted" % name)
++
++    def _outcome(self, request, type_id):
++        plan = self._invention.plan(type_id, self._skill)
++        if plan is None:
++            raise LookupError("%r cannot be invented or reverse engineered" % request.name)
++        if plan.from_relics and request.relic is None:
++            raise LookupError("%r is reverse engineered; a relic is required" % request.name)
++        if not plan.from_relics and request.relic is not None:
++            raise LookupError("%r is invented, not reverse engineered" % request.name)
++        for outcome in plan.outcomes:
++            if outcome.decryptor != request.decryptor:
++                continue
++            if plan.from_relics and outcome.invented_from.lower() != request.relic.lower():
++                continue
++            return outcome
++        raise LookupError("No invention outcome for %r with %r" % (request.name, request.relic))
++
++    def _days(self, seconds, runs, te):
++        total = Fraction(seconds * runs) * (100 - te) / 100 * (100 - self._te_bonus) / 100
++        return total / _SECONDS_PER_DAY
++
++    def plan(self, request):
++        _check(request.runs, 1, 10 ** 9, "runs per job")
++        _check(request.jobs, 1, 10 ** 9, "number of jobs")
++        type_id, recipe = self._recipe(request.name)
++        buy = {}
++
++        if request.invented:
++            outcome = self._outcome(request, type_id)
++            me, te, max_runs = outcome.me, outcome.te, outcome.runs
++            full, rest = divmod(request.runs, max_runs)
++            groups = [(max_runs, full * request.jobs)] if full else []
++            copies = full * request.jobs
++            if rest:
++                groups.append((rest, request.jobs))
++                copies += math.ceil(Fraction(request.jobs, max_runs // rest))
++            chance = outcome.probability / 100
++            if chance <= 0:
++                raise LookupError("Invention of %r cannot succeed" % request.name)
++            attempts = math.ceil(round(copies / chance, 9))
++            for material, quantity in outcome.materials:
++                buy[material] = buy.get(material, 0) + quantity * attempts
++            if outcome.decryptor != "None":
++                decryptors = self._items.ids_named(outcome.decryptor)
++                if decryptors:
++                    buy[decryptors[0]] = buy.get(decryptors[0], 0) + attempts
++            if outcome.invented_from is not None:
++                buy[outcome.source_id] = buy.get(outcome.source_id, 0) + attempts
++        else:
++            me = _check(request.me, 0, 10, "material efficiency")
++            te = _check(request.te, 0, 20, "time efficiency")
++            groups = [(request.runs, request.jobs)]
++
++        if not blueprints.material_efficiency_applies(recipe.activity):
++            me = 0
++        for runs, count in groups:
++            for material, quantity in recipe.materials:
++                needed = blueprints.material_amount(quantity, me, runs) * count
++                buy[material] = buy.get(material, 0) + needed
++
++        job_name = self._items.name(recipe.blueprint_id)
++        jobs = tuple(
++            Job(job_name, runs, self._days(recipe.seconds, runs, te), count)
++            for runs, count in groups
++        )
++        return BuildPlan(jobs=jobs, purchases=self._purchases(buy))
++
++    def _purchases(self, buy):
++        totals = {}
++        for type_id, quantity in buy.items():
++            name = self._items.name(type_id) if self._items.is_valid(type_id) else str(type_id)
++            if self._items.is_valid(type_id):
++                volume, _ = self._volumes.volume(type_id)
++                unit = Decimal(repr(float(volume)))
++            else:
++                unit = Decimal(0)
++            old_quantity, old_volume = totals.get(name, (0, Decimal(0)))
++            totals[name] = (old_quantity + quantity, old_volume + unit * quantity)
++        return tuple(Purchase(name, q, v) for name, (q, v) in totals.items())
+

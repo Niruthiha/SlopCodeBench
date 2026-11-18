@@ -1,0 +1,28 @@
+From dbed42b8b4eba1181258b6034377f625032dae90 Mon Sep 17 00:00:00 2001
+From: anon <anon@example.com>
+Date: Mon, 9 Nov 2026 12:31:03 -0500
+Subject: [PATCH 2/5] Parnas: MCP isolation identical to FeatureBench/SWE-Pro
+ (--strict-mcp-config + empty --mcp-config)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ configs/agents/claude_code_parnas.yaml | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/configs/agents/claude_code_parnas.yaml b/configs/agents/claude_code_parnas.yaml
+index af9b9e5..3de633c 100644
+--- a/configs/agents/claude_code_parnas.yaml
++++ b/configs/agents/claude_code_parnas.yaml
+@@ -11,3 +11,9 @@ cost_limits:
+   cost_limit: 0
+   step_limit: 300
+   net_cost_limit: 0
++# Isolation identical to FeatureBench/SWE-Pro run_cell.sh (2026-09-03 connector-leak fix): no MCP servers at all.
++# Harness joins args with spaces unquoted, so the JSON is pre-quoted for /bin/sh.
++extra_args:
++  - --strict-mcp-config
++  - --mcp-config
++  - "'{\"mcpServers\":{}}'"
+-- 
+2.43.0
+
