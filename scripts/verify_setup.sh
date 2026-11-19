@@ -4,7 +4,7 @@
 HERE=$(realpath "$(dirname "$0")"); H="$HERE/slop-code-bench"; P="$HERE/scb-problems"; FAILED=0
 PROB=${PROB:-file_backup}
 ok(){ printf '  PASS  %s\n' "$1"; }; bad(){ printf '  FAIL  %s\n' "$1"; FAILED=1; }; skip(){ printf '  SKIP  %s\n' "$1"; }
-CREDS=/home/niruthi/.claude/.credentials.json
+CREDS=${SCB_CLAUDE_CREDS:-/home/niruthi/.claude/.credentials.json}
 cd "$H"
 echo "== S1 harness state =="
 [ "$(git status --porcelain -- src configs | wc -l)" = 0 ] && ok "harness tree clean at $(git rev-parse --short HEAD) (branch $(git branch --show-current))" || bad "uncommitted harness changes"
@@ -45,7 +45,7 @@ grep -q "AGENT_PLANTED_EVALUATION_TESTS" src/slop_code/agent_runner/runner.py &&
 echo "== S4 prompts: identical for checkpoint 2+ across conditions; ckpt-1: c1 = just-solve, others add exactly one design line, no DESIGN.md =="
 uv run --quiet python - <<'PY' && ok "continuation prompts byte-identical across c1..c4; c1_default == just-solve; c2-c4 = +1 line; no DESIGN.md" || bad "prompt rendering"
 import jinja2,glob,hashlib
-T={f.split("/")[-1]:jinja2.Template(open(f).read()) for f in sorted(glob.glob("configs/prompts/parnas/c*.jinja"))}
+T={f.split("/")[-1]:jinja2.Template(open(f).read()) for f in sorted(glob.glob("configs/prompts/parnas/c*.jinja")) if not f.endswith("_every.jinja")}
 cont={k:t.render(spec="SPEC",is_continuation=True) for k,t in T.items()}
 assert len(set(cont.values()))==1, "continuation differs"
 for bad in ("DESIGN","modular","information hiding","Parnas","speed","secret"):
@@ -58,6 +58,17 @@ base=js.splitlines()
 for k,v in first.items():
     extra=[l for l in v.splitlines() if l not in base]; assert len(v.splitlines())==len(base)+(k!="c1_default.jinja") and len(extra)==(k!="c1_default.jinja"), (k,extra)
 print("   continuation sha", hashlib.sha256(list(cont.values())[0].encode()).hexdigest()[:12])
+PY
+echo "== S4b rerun prompts (*_every): ckpt-1 byte-identical to pilot 1; ckpt 2+ = c1 continuation + the same single design line =="
+uv run --quiet python - <<'PY' && ok "c2/c3/c4 *_every: ckpt1 == pilot-1 ckpt1; every continuation == c1 continuation + identical instruction line" || bad "*_every prompt rendering"
+import jinja2,glob
+D="configs/prompts/parnas/"; R=lambda f,c: jinja2.Template(open(D+f).read()).render(spec="SPEC",is_continuation=c)
+c1cont=R("c1_default.jinja",True).splitlines(); E=sorted(glob.glob(D+"c*_every.jinja")); assert len(E)==3, E
+for f in (x.split("/")[-1] for x in E):
+    base=f.replace("_every","")
+    assert R(f,False)==R(base,False), f
+    instr=[l for l in R(base,False).splitlines() if l not in R("c1_default.jinja",False).splitlines()]; assert len(instr)==1
+    cont=R(f,True).splitlines(); assert [l for l in cont if l not in c1cont]==instr and len(cont)==len(c1cont)+1, f
 PY
 
 echo "== S5 reset (P3) on a scratch workspace =="

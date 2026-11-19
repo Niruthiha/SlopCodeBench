@@ -3,7 +3,7 @@
 # reset records are MOVED to <run>/_invalid_attempt/ first (the harness would otherwise delete them).
 set -euo pipefail
 HERE=$(realpath "$(dirname "$0")"); H="$HERE/slop-code-bench"; RUN=$(realpath "$1"); CK=$2   # e.g. checkpoint_5
-export SCB_CLAUDE_CREDS=/home/niruthi/.claude/.credentials.json     # read-only mount; never read here
+export SCB_CLAUDE_CREDS=${SCB_CLAUDE_CREDS:-/home/niruthi/.claude/.credentials.json}     # read-only mount; never read here
 export SCB_EVAL_ENV="$H/configs/environments/docker-python3.12-uv-parnas-eval.yaml"
 export SCBENCH_PROBLEMS_PATH="$HERE/scb-problems"
 export SCB_PARNAS_RESET=1
