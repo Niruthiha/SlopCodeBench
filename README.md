@@ -6,9 +6,9 @@ This repo holds everything from pilot 1 ("What would Parnas do?") on [SlopCodeBe
 
 | Path | What it is |
 |---|---|
-| `harness/patches/` | 5 commits on top of upstream SlopCodeBench `af5a9cb` (`UPSTREAM_BASE_COMMIT`): Claude Code agent config, isolation and reset patches, the Opus 5.5 model config, and the prompts |
-| `prompts/` | the 4 condition prompts (c1 default, c2 modular, c3 Parnas, c4 performance) |
-| `scripts/` | `run_cell.sh` (one problem × condition × seed), `pilot.sh`, `resume_cell.sh`, `verify_setup.sh` (pre-run isolation checks), `check_cell.py` (post-run isolation check), `failure_summary.py`, `net_up.sh` (egress), `refcheck*.sh` (reference-solution check), `instruments/` |
+| `harness/patches/` | 6 commits on top of upstream SlopCodeBench `af5a9cb` (`UPSTREAM_BASE_COMMIT`): Claude Code agent config, isolation and reset patches, the Opus 5.5 model config, and the prompts. Patch 0006 adds the rerun's `*_every` prompts |
+| `prompts/` | the 4 pilot-1 condition prompts (c1 default, c2 modular, c3 Parnas, c4 performance) and the 3 rerun prompts `c2_modular_every`, `c3_parnas_every`, `c4_performance_every` (same design line at every checkpoint) |
+| `scripts/` | `run_cell.sh` (one problem × condition × seed), `pilot.sh`, `rerun_every.sh` (rerun batch), `resume_cell.sh`, `verify_setup.sh` (pre-run isolation checks), `check_cell.py` (post-run isolation check), `failure_summary.py`, `trace_summary.py` (per-checkpoint time, cost, tokens, tool calls), `net_up.sh` (egress), `refcheck*.sh` (reference-solution check), `instruments/` |
 | `data/runs/<problem>/<cond>_s1_<ts>/` | full run output for the 4 problems: per-checkpoint agent traces, `checkpoint_results.jsonl`, `result.json`, logs |
 | `data/runs/scores_adjusted.json`, `ALWAYS_FAIL.md` | scores with the benchmark-defect tests removed (see `BENCHMARK_DEFECTS.md`) |
 | `data/analysis/` | comparison and qualitative analysis |
